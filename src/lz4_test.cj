@@ -91,7 +91,7 @@ func lz4CompressBoundExactTest(): Unit {
 *  M2 compression golden (vs upstream C, commit 0774d055)
 **************************************/
 // Embedded from corpus/block_golden_ref.txt (scripts/gen_golden.c, 256 rows;
-// mode=dest rows are Task 4's scope and omitted here => 192 rows).
+// 192 default/fast rows here + 64 dest rows in BLOCK_DEST_REF below).
 // litProba is 0.0 for every row (gen_golden.c hardcodes it).
 let BLOCK_MPS: Array<Float64> = [0.0, 0.5, 0.9, 1.0]
 
@@ -366,5 +366,369 @@ func lz4CompressGoldenTest(): Unit {
     @Assert(checked == 192)
     @Assert(fileCompared == 162)
     println("golden: ${checked}/192 rows, ${fileCompared} byte-exact artifacts")
+}
+
+/*-************************************
+*  M2 Task 4: LZ4_compress_destSize (fillOutput mode)
+**************************************/
+// dest rows of corpus/block_golden_ref.txt: target = n*3/4 (gen_golden.c),
+// extra field consumed=<k> = C's *srcSizePtr after LZ4_compress_destSize
+// (gen_golden presets consumed=n; C leaves it untouched on failure).
+// (n, mpIndex, seed, size, consumed, xxh32, xxh64, fileRowIdx), -1 = no artifact
+let BLOCK_DEST_REF: Array<(Int64, Int64, UInt32, Int32, Int32, UInt32, UInt64, Int64)> = [
+    (0, 0, 0u32, 0, 0, 0x02cc5d05u32, 0xef46db3751d8e999u64, 3),
+    (0, 0, 7u32, 0, 0, 0x02cc5d05u32, 0xef46db3751d8e999u64, 7),
+    (0, 1, 0u32, 0, 0, 0x02cc5d05u32, 0xef46db3751d8e999u64, 11),
+    (0, 1, 7u32, 0, 0, 0x02cc5d05u32, 0xef46db3751d8e999u64, 15),
+    (0, 2, 0u32, 0, 0, 0x02cc5d05u32, 0xef46db3751d8e999u64, 19),
+    (0, 2, 7u32, 0, 0, 0x02cc5d05u32, 0xef46db3751d8e999u64, 23),
+    (0, 3, 0u32, 0, 0, 0x02cc5d05u32, 0xef46db3751d8e999u64, 27),
+    (0, 3, 7u32, 0, 0, 0x02cc5d05u32, 0xef46db3751d8e999u64, 31),
+    (1, 0, 0u32, 0, 1, 0x02cc5d05u32, 0xef46db3751d8e999u64, 35),
+    (1, 0, 7u32, 0, 1, 0x02cc5d05u32, 0xef46db3751d8e999u64, 39),
+    (1, 1, 0u32, 0, 1, 0x02cc5d05u32, 0xef46db3751d8e999u64, 43),
+    (1, 1, 7u32, 0, 1, 0x02cc5d05u32, 0xef46db3751d8e999u64, 47),
+    (1, 2, 0u32, 0, 1, 0x02cc5d05u32, 0xef46db3751d8e999u64, 51),
+    (1, 2, 7u32, 0, 1, 0x02cc5d05u32, 0xef46db3751d8e999u64, 55),
+    (1, 3, 0u32, 0, 1, 0x02cc5d05u32, 0xef46db3751d8e999u64, 59),
+    (1, 3, 7u32, 0, 1, 0x02cc5d05u32, 0xef46db3751d8e999u64, 63),
+    (255, 0, 0u32, 191, 189, 0xac64f922u32, 0x18f7c571d64f08b9u64, 67),
+    (255, 0, 7u32, 191, 189, 0x83be41afu32, 0x4bb31c8082b0cba1u64, 71),
+    (255, 1, 0u32, 191, 203, 0xbf5e8316u32, 0x6e39a72f483d9a4du64, 75),
+    (255, 1, 7u32, 11, 255, 0x3b48606au32, 0x4bee6aad626bda16u64, 79),
+    (255, 2, 0u32, 11, 255, 0x387b105fu32, 0x6ade35f444efe462u64, 83),
+    (255, 2, 7u32, 11, 255, 0x8ebfdc6du32, 0xf9f9a04a61934aaau64, 87),
+    (255, 3, 0u32, 11, 255, 0x83f66756u32, 0x3ed8172ad694afa3u64, 91),
+    (255, 3, 7u32, 11, 255, 0x83f66756u32, 0x3ed8172ad694afa3u64, 95),
+    (4096, 0, 0u32, 3072, 3059, 0xf04835f6u32, 0xee4020d2c49cbf13u64, 99),
+    (4096, 0, 7u32, 3072, 3059, 0x73023f27u32, 0x8397480e5e7db40eu64, 103),
+    (4096, 1, 0u32, 2527, 4096, 0x84900dc4u32, 0xc1d36a7b7ae8ce5cu64, 107),
+    (4096, 1, 7u32, 1442, 4096, 0x9af1d84eu32, 0xe8758bb9f62bc933u64, 111),
+    (4096, 2, 0u32, 443, 4096, 0xcd28d50du32, 0x017e097f399fb1a0u64, 115),
+    (4096, 2, 7u32, 350, 4096, 0x0a37027au32, 0xb0b1b7a51c084a07u64, 119),
+    (4096, 3, 0u32, 26, 4096, 0x1fc69d86u32, 0xca765317388e8959u64, 123),
+    (4096, 3, 7u32, 26, 4096, 0x1fc69d86u32, 0xca765317388e8959u64, 127),
+    (65535, 0, 0u32, 49151, 48958, 0x69b425f0u32, 0x3b181318db8a56d9u64, 131),
+    (65535, 0, 7u32, 49151, 48958, 0xe35e4e2eu32, 0x482a267c4a002fd1u64, 135),
+    (65535, 1, 0u32, 36459, 65535, 0x2fc26585u32, 0xd8e8dcf0914b5f2au64, 139),
+    (65535, 1, 7u32, 36301, 65535, 0x46f64282u32, 0x21df072ddb19c417u64, 143),
+    (65535, 2, 0u32, 7990, 65535, 0x24f6ba6au32, 0x4ffc0e50553460cbu64, 147),
+    (65535, 2, 7u32, 6560, 65535, 0xed2eed3fu32, 0x0a21015356d924b2u64, 151),
+    (65535, 3, 0u32, 267, 65535, 0xda906640u32, 0x6e4ac478020b8d34u64, 155),
+    (65535, 3, 7u32, 267, 65535, 0xda906640u32, 0x6e4ac478020b8d34u64, 159),
+    (65536, 0, 0u32, 49152, 48959, 0x9c18b05bu32, 0x60e7c42ffb71b8b2u64, 163),
+    (65536, 0, 7u32, 49152, 48959, 0x6ff324c8u32, 0x19513834e82bd61fu64, 167),
+    (65536, 1, 0u32, 36459, 65536, 0xcee2d4bau32, 0x38152d09e4a6dc03u64, 171),
+    (65536, 1, 7u32, 36301, 65536, 0x23c335d6u32, 0x2fb95125f201e883u64, 175),
+    (65536, 2, 0u32, 7990, 65536, 0x07cf5a54u32, 0xd51a175057341acdu64, 179),
+    (65536, 2, 7u32, 6560, 65536, 0x1d22b405u32, 0x3118e96287656c84u64, 183),
+    (65536, 3, 0u32, 267, 65536, 0x277289ebu32, 0x14e218580c0f5ba9u64, 187),
+    (65536, 3, 7u32, 267, 65536, 0x277289ebu32, 0x14e218580c0f5ba9u64, 191),
+    (65537, 0, 0u32, 49152, 48959, 0x9c18b05bu32, 0x60e7c42ffb71b8b2u64, 195),
+    (65537, 0, 7u32, 49152, 48959, 0x6ff324c8u32, 0x19513834e82bd61fu64, 199),
+    (65537, 1, 0u32, 36459, 65537, 0x76045679u32, 0x1aa7283971638263u64, 203),
+    (65537, 1, 7u32, 36301, 65537, 0x2d65bd38u32, 0x56ab98ab9f496768u64, 207),
+    (65537, 2, 0u32, 7991, 65537, 0x5ced5b43u32, 0x14beb48deeb1e588u64, 211),
+    (65537, 2, 7u32, 6560, 65537, 0xe3e25513u32, 0x23389cfe80bd4402u64, 215),
+    (65537, 3, 0u32, 267, 65537, 0xc4417ed0u32, 0x5271612dbff11fb5u64, 219),
+    (65537, 3, 7u32, 267, 65537, 0xc4417ed0u32, 0x5271612dbff11fb5u64, 223),
+    (131072, 0, 0u32, 98304, 97919, 0x0809cf30u32, 0xe7192940dc962351u64, -1),
+    (131072, 0, 7u32, 98304, 97919, 0xd6f1954eu32, 0x409c43d9a4b12bb4u64, -1),
+    (131072, 1, 0u32, 76310, 131072, 0x1d8ec3c9u32, 0x495d931abaa34a6cu64, -1),
+    (131072, 1, 7u32, 76231, 131072, 0xea217222u32, 0xc865ab10f26d48bbu64, -1),
+    (131072, 2, 0u32, 24200, 131072, 0xee2f4626u32, 0x183c9f274a7c7b4bu64, 243),
+    (131072, 2, 7u32, 16789, 131072, 0xaf347eedu32, 0x2a7512c0e8542ccau64, 247),
+    (131072, 3, 0u32, 524, 131072, 0x5fb89b06u32, 0x5d85b5212525a475u64, 251),
+    (131072, 3, 7u32, 524, 131072, 0x5fb89b06u32, 0x5d85b5212525a475u64, 255),
+]
+
+@Test
+func lz4CompressDestSizeGoldenTest(): Unit {
+    var checked = 0
+    var fileCompared = 0
+    var consumedChecked = 0
+    for ((n, mpIdx, seed, wantSize, wantConsumed, want32, want64, fileRow) in BLOCK_DEST_REF) {
+        let buf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(buf, n, BLOCK_MPS[mpIdx], 0.0, seed)
+        let target = Int32(n * 3 / 4)
+        let bound = Int64(LZ4_compressBound(Int32(n)))
+        let out = Array<UInt8>(bound, {_ => 0u8})
+        let (c, consumed): (Int32, Int32) = LZ4_compress_destSize(buf, Int32(n), out, target)
+        // destSize invariants: output within target, input consumed within srcSize
+        if (c < 0 || c > target || consumed < 0 || consumed > Int32(n)) {
+            println("INVARIANT n=${n} mp=${BLOCK_MPS[mpIdx]} seed=${seed}: c=${c} target=${target} consumed=${consumed}")
+        }
+        @Assert(c >= 0 && c <= target)
+        @Assert(consumed >= 0 && consumed <= Int32(n))
+        if (c != wantSize) {
+            println("SIZE n=${n} mp=${BLOCK_MPS[mpIdx]} seed=${seed}: got ${c} want ${wantSize}")
+        }
+        @Assert(c == wantSize)
+        if (consumed != wantConsumed) {
+            println("CONSUMED n=${n} mp=${BLOCK_MPS[mpIdx]} seed=${seed}: got ${consumed} want ${wantConsumed}")
+        }
+        @Assert(consumed == wantConsumed)
+        consumedChecked += 1
+        let got32 = XXH32(out, Int64(c), 0u32)
+        let got64 = XXH64(out, Int64(c), 0u64)
+        if (got32 != want32 || got64 != want64) {
+            println("DIGEST n=${n} mp=${BLOCK_MPS[mpIdx]} seed=${seed} size=${c}: got ${blkHex32(got32)}/${blkHex64(got64)} want ${blkHex32(want32)}/${blkHex64(want64)}")
+        }
+        @Assert(got32 == want32)
+        @Assert(got64 == want64)
+        if (fileRow >= 0) {
+            // byte-exact comparison against the C-generated artifact
+            let art = readBlockArtifact(fileRow)
+            @Assert(art.size == Int64(c))
+            var eq = art.size == Int64(c)
+            for (i in 0..Int64(c)) {
+                if (UInt8(art[i]) != out[i]) { eq = false; break }
+            }
+            if (!eq) { println("BYTES differ n=${n} mp=${BLOCK_MPS[mpIdx]} seed=${seed} row=${fileRow}") }
+            @Assert(eq)
+            fileCompared += 1
+        }
+        checked += 1
+    }
+    @Assert(checked == 64)
+    @Assert(consumedChecked == 64)
+    @Assert(fileCompared == 60)
+    println("dest golden: ${checked}/64 rows, ${consumedChecked} consumed-exact, ${fileCompared} byte-exact artifacts")
+}
+
+@Test
+func lz4CompressDestSizeTest(): Unit {
+    let out = Array<UInt8>(512, {_ => 0u8})
+    // target <= 0: C returns 0 and leaves *srcSizePtr at the caller-preset
+    // value (lz4.c L994 maxOutputSize<1, L1371 dstCapacity<=0; gen_golden
+    // presets consumed=n) -> our contract (0, srcSize)
+    let src = Array<UInt8>(255, {_ => 0u8})
+    RDG_genBuffer(src, 255, 0.5, 0.0, 0u32)
+    let (c0, k0) = LZ4_compress_destSize(src, 255, out, 0)
+    @Assert(c0 == 0 && k0 == 255)
+    let (cn, kn) = LZ4_compress_destSize(src, 255, out, -3)
+    @Assert(cn == 0 && kn == 255)
+    // empty input, target >= 1: 1-byte empty block, consumed 0 (L1370-1380)
+    let empty = Array<UInt8>(0, {_ => 0u8})
+    let (ce, ke) = LZ4_compress_destSize(empty, 0, out, 16)
+    @Assert(ce == 1 && ke == 0 && out[0] == 0u8)
+    // empty input, target == 0: failure with (0, 0)
+    let (ce0, ke0) = LZ4_compress_destSize(empty, 0, out, 0)
+    @Assert(ce0 == 0 && ke0 == 0)
+    // invariants over both table types (byU16 n<65547, byU32 above)
+    let cases: Array<(Int64, Int64, UInt32)> =
+        [(255, 0, 0u32), (4096, 1, 7u32), (65536, 2, 0u32), (65537, 3, 7u32)]
+    for ((n, mpIdx, seed) in cases) {
+        let b = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(b, n, BLOCK_MPS[mpIdx], 0.0, seed)
+        let target = Int32(n * 3 / 4)
+        let o = Array<UInt8>(Int64(LZ4_compressBound(Int32(n))), {_ => 0u8})
+        let (c, k) = LZ4_compress_destSize(b, Int32(n), o, target)
+        @Assert(c >= 1 && c <= target)
+        @Assert(k >= 0 && k <= Int32(n))
+    }
+    // target >= compressBound: guaranteed-success delegation to the regular
+    // path (lz4.c L1495-1496); *srcSizePtr untouched -> consumed == srcSize,
+    // bytes identical to LZ4_compress_default
+    let bound = LZ4_compressBound(255)
+    let d1 = Array<UInt8>(Int64(bound), {_ => 0u8})
+    let d2 = Array<UInt8>(Int64(bound), {_ => 0u8})
+    let cd = LZ4_compress_default(src, 255, d1, bound)
+    @Assert(cd > 0)
+    let (ct, kt) = LZ4_compress_destSize(src, 255, d2, bound)
+    @Assert(ct == cd && kt == 255)
+    for (i in 0..Int64(ct)) {
+        @Assert(d1[i] == d2[i])
+    }
+}
+
+// Adversarial fillOutput cases from a C probe against upstream 0774d055
+// (/tmp probe: LZ4_compress_destSize on constant / periodic / LCG buffers with
+// small targets). These force the matchCode-reduction (lz4.c L1198-1216) and
+// rewind hash-clearing paths, which the n*3/4-target corpus rows never reach
+// (mp=0.0 finds no matches; mp>=0.5 compresses below target).
+// (kind, n, target, size, consumed, xxh32, xxh64)
+let DEST_REDUCTION_REF: Array<(Int64, Int64, Int32, Int32, Int32, UInt32, UInt64)> = [
+    (0, 4096, 7, 7, 6, 0x6918cab6u32, 0x9caaf84e3e0e5634u64),
+    (0, 4096, 20, 20, 2574, 0xcd62f967u32, 0x78c6d71811c93bfau64),
+    (0, 4096, 33, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 46, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 59, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 72, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 85, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 98, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 111, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 124, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 137, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 150, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 163, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 176, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 189, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 202, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 215, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 228, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 241, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 254, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 267, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 280, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (0, 4096, 293, 26, 4096, 0x561fd3bdu32, 0x9850b777a413d0d1u64),
+    (1, 1000, 7, 7, 6, 0xf063681fu32, 0x1f34c7ec4291d7e8u64),
+    (1, 1000, 14, 14, 13, 0xb9c87168u32, 0xe0bcefc03474ffdfu64),
+    (1, 1000, 21, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 28, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 35, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 42, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 49, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 56, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 63, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 70, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 77, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 84, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 91, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 98, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 105, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 112, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 119, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 126, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 133, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 140, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 147, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 154, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 161, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 168, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 175, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 182, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 189, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (1, 1000, 196, 20, 1000, 0x671c7560u32, 0xe82922249ae6d671u64),
+    (2, 300, 7, 7, 6, 0xad8c3c89u32, 0xed20308c4303c288u64),
+    (2, 300, 14, 14, 13, 0x58ceb8c3u32, 0x26ac8d2164dd28d4u64),
+    (2, 300, 21, 21, 19, 0x91f33526u32, 0x61993155faa324b1u64),
+    (2, 300, 28, 28, 26, 0x6e23372au32, 0x32f425d2cf8ac53eu64),
+    (2, 300, 35, 35, 33, 0x116b290du32, 0xcde30184aa54fc69u64),
+    (2, 300, 42, 42, 40, 0x214d3499u32, 0x86c4071c979b5670u64),
+    (2, 300, 49, 49, 47, 0x934ac3a9u32, 0x90e2344d51a5f1bbu64),
+    (2, 300, 56, 56, 54, 0xf0c3aa12u32, 0x9bab1cb8fe47f348u64),
+    (2, 300, 63, 63, 61, 0x6128400fu32, 0xe6ff96f6a7466a75u64),
+    (2, 300, 70, 70, 68, 0x106e3a0au32, 0x258fb0358540848eu64),
+    (2, 300, 77, 77, 75, 0xa481a9f3u32, 0xd9d357c2753dbcc2u64),
+    (2, 300, 84, 84, 82, 0xc559e5a6u32, 0x425a676e08158320u64),
+    (2, 300, 91, 91, 89, 0x0d184459u32, 0x66d92d44fc6770a0u64),
+    (2, 300, 98, 98, 96, 0xbf760cfau32, 0xc429f24655d1a375u64),
+    (2, 300, 105, 105, 103, 0x54c69f8eu32, 0x7e5607dbe1c23d04u64),
+    (2, 300, 112, 112, 110, 0x0ab1e1cau32, 0xeb5c9b5e12eddf29u64),
+    (2, 300, 119, 119, 117, 0x94d665eeu32, 0x933fcce04243daf3u64),
+    (3, 5000, 7, 7, 6, 0xb15d9da2u32, 0xc1e69de47dd0beacu64),
+    (3, 5000, 14, 14, 29, 0xceb3f5a1u32, 0x952d39e5308a2166u64),
+    (3, 5000, 21, 21, 37, 0x985bd464u32, 0xedb3f99afa937274u64),
+    (3, 5000, 28, 28, 59, 0xc29a59f3u32, 0x418e184ed20b465du64),
+    (3, 5000, 35, 35, 85, 0x149fe968u32, 0x5dc83f64cc44fca9u64),
+    (3, 5000, 42, 42, 98, 0x7631a96bu32, 0xe06f8757666a8baeu64),
+    (3, 5000, 49, 48, 104, 0x67ae5f57u32, 0xab0b5b42087fb3a2u64),
+    (3, 5000, 56, 56, 121, 0x7a458d24u32, 0xcc6e298d152afa37u64),
+    (3, 5000, 63, 63, 144, 0x991bb911u32, 0x24e0ff6f86b64333u64),
+    (3, 5000, 70, 70, 159, 0x9c71f249u32, 0x3995c659fa3b13fbu64),
+    (3, 5000, 77, 77, 173, 0xde83b1b1u32, 0x6140256b7750badeu64),
+    (3, 5000, 84, 84, 193, 0x5254acc4u32, 0xbbe13728d3df8c40u64),
+    (3, 5000, 91, 91, 201, 0x6ecbabcdu32, 0xbf5c807f09b133cau64),
+    (3, 5000, 98, 98, 224, 0x50060b34u32, 0x8ebdfa6c6f73d8eau64),
+    (3, 5000, 105, 105, 230, 0x9126e1a5u32, 0x6ac7830048c11ac1u64),
+    (3, 5000, 112, 112, 245, 0xdbdcfd54u32, 0xcb8089d39f480f8au64),
+    (3, 5000, 119, 119, 259, 0xd473b2d8u32, 0x178e66d5a3bf9ba6u64),
+    (3, 5000, 126, 126, 277, 0xa5302290u32, 0xa79879f8ce926c1cu64),
+    (3, 5000, 133, 133, 287, 0xf33b15bau32, 0x8aeea38978ccbc07u64),
+    (3, 5000, 140, 140, 310, 0x47c5adf3u32, 0xe62cd8803a5d2259u64),
+    (3, 5000, 147, 147, 329, 0xd534c41bu32, 0xae262a2db278937au64),
+    (3, 5000, 154, 154, 338, 0x7033de41u32, 0x8480d89ddc39f54bu64),
+    (3, 5000, 161, 161, 349, 0xb503845eu32, 0x137894a0ca6dd4cfu64),
+    (3, 5000, 168, 168, 358, 0x59791269u32, 0x23fd6a0d91ca6f7eu64),
+    (3, 5000, 175, 175, 369, 0xd1db5706u32, 0x01eed7ea2071a9beu64),
+    (3, 5000, 182, 182, 385, 0xf3124ef5u32, 0xfd9dc2fe522ba179u64),
+    (3, 5000, 189, 189, 399, 0x4a4c40e2u32, 0x149e99c3c3276b43u64),
+    (3, 5000, 196, 196, 410, 0x395bb2ccu32, 0xdfc6f26130eddb42u64),
+    (3, 5000, 203, 203, 421, 0xeb2886beu32, 0x4a264392b420af1au64),
+    (3, 5000, 210, 210, 434, 0x3de5ac6au32, 0x54a444f42e9afa4eu64),
+    (3, 5000, 217, 217, 443, 0x2b27b23eu32, 0x0aed53410c072e12u64),
+    (3, 5000, 224, 224, 456, 0x0d64e52du32, 0x8abe1371e7277133u64),
+    (3, 5000, 231, 231, 470, 0x07c3d0c9u32, 0xdcd62ccf1658bb24u64),
+    (3, 5000, 238, 238, 496, 0x99349c27u32, 0xf1d63679cd83c9afu64),
+    (3, 5000, 245, 245, 510, 0xfaefe5e9u32, 0x9475c42f1ff8cf75u64),
+    (3, 5000, 252, 252, 519, 0x1d2f5837u32, 0x981a4b683bf6251du64),
+    (3, 5000, 259, 259, 527, 0x1afe1aa3u32, 0xa2a0e0c4b5bc9ea6u64),
+    (3, 5000, 266, 266, 535, 0xdacaaf46u32, 0x1e84efb643906b0eu64),
+    (3, 5000, 273, 273, 543, 0x08a55f14u32, 0x99a28ac78e43a1ebu64),
+    (3, 5000, 280, 280, 557, 0x33a718ecu32, 0xa1c17d8972f4bbf1u64),
+    (3, 5000, 287, 287, 576, 0x4d5e962du32, 0x237f82c4749a4d47u64),
+    (3, 5000, 294, 294, 589, 0x4e497445u32, 0xa9cc418547a3e1e7u64),
+    (3, 5000, 301, 301, 597, 0xbd8dc2f7u32, 0x1bf9476caf556848u64),
+    (3, 5000, 308, 308, 603, 0x004089fcu32, 0xc5b4bb7d1cd753f9u64),
+    (3, 5000, 315, 315, 612, 0x23c7b034u32, 0x0429bbd214b91108u64),
+    (3, 5000, 322, 322, 626, 0xa1d01382u32, 0xb73fa0e5acf3177au64),
+    (3, 5000, 329, 329, 639, 0x900c785eu32, 0xf731c44a88683683u64),
+    (3, 5000, 336, 336, 649, 0x53fb8102u32, 0xb0fe9f508f998158u64),
+    (3, 5000, 343, 343, 670, 0xacca455du32, 0x864e6bb1e704e3e9u64),
+    (3, 5000, 350, 350, 678, 0x8887faf9u32, 0xa4b446c71322dd8eu64),
+    (3, 5000, 357, 357, 689, 0x716b6cffu32, 0x2de125999156ff7cu64),
+    (3, 5000, 364, 364, 701, 0x5ee2a642u32, 0x3643505f9dab9198u64),
+    (3, 5000, 371, 371, 707, 0x0e17a01eu32, 0x56735101fff00fc7u64),
+    (3, 5000, 378, 378, 732, 0x2d229c80u32, 0xe083a34417b20ef7u64),
+    (3, 5000, 385, 385, 740, 0xd070389bu32, 0x1d3041c99b757f9du64),
+    (3, 5000, 392, 392, 749, 0x9299e30au32, 0x11a749b40abc1e37u64),
+    (3, 5000, 399, 399, 774, 0x20bf7410u32, 0x20ae9132b3f0f656u64),
+]
+
+// probe input construction (must match probe.c byte-for-byte)
+private func destProbeBuffer(kind: Int64): Array<UInt8> {
+    if (kind == 0) {
+        return Array<UInt8>(4096, {_ => 65u8})                     // memset 'A'
+    }
+    if (kind == 1) {
+        return Array<UInt8>(1000, {i => UInt8(i % 7)})             // periodic
+    }
+    if (kind == 2) {
+        let b = Array<UInt8>(300, {_ => 0u8})
+        var s: UInt32 = 1u32
+        for (i in 0..300) {
+            s = s * 1103515245u32 + 12345u32
+            b[i] = UInt8(s >> 16)
+        }
+        return b
+    }
+    let b = Array<UInt8>(5000, {_ => 0u8})
+    var s: UInt32 = 42u32
+    for (i in 0..5000) {
+        s = s * 1103515245u32 + 12345u32
+        b[i] = if (((s >> 24) & 7u32) != 0u32) { 120u8 } else { UInt8(s >> 16) }
+    }
+    return b
+}
+
+@Test
+func lz4CompressDestSizeReductionTest(): Unit {
+    var checked = 0
+    var cache: Array<Array<UInt8>> = Array<Array<UInt8>>(4, {_ => Array<UInt8>(0, {_ => 0u8})})
+    for ((kind, n, target, wantSize, wantConsumed, want32, want64) in DEST_REDUCTION_REF) {
+        if (cache[kind].size == 0) {
+            cache[kind] = destProbeBuffer(kind)
+        }
+        let buf = cache[kind]
+        @Assert(buf.size == n)
+        let out = Array<UInt8>(8192, {_ => 0u8})
+        let (c, consumed): (Int32, Int32) = LZ4_compress_destSize(buf, Int32(n), out, target)
+        if (c != wantSize || consumed != wantConsumed) {
+            println("REDUCTION kind=${kind} target=${target}: got (${c}, ${consumed}) want (${wantSize}, ${wantConsumed})")
+        }
+        @Assert(c == wantSize)
+        @Assert(consumed == wantConsumed)
+        let got32 = XXH32(out, Int64(c), 0u32)
+        let got64 = XXH64(out, Int64(c), 0u64)
+        if (got32 != want32 || got64 != want64) {
+            println("DIGEST kind=${kind} target=${target} size=${c}: got ${blkHex32(got32)}/${blkHex64(got64)} want ${blkHex32(want32)}/${blkHex64(want64)}")
+        }
+        @Assert(got32 == want32)
+        @Assert(got64 == want64)
+        checked += 1
+    }
+    @Assert(checked == 125)
+    println("reduction golden: ${checked}/125 rows exact (matchCode reduction + hash clear paths)")
 }
 
