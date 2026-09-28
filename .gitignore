@@ -21,3 +21,4 @@ log
 report
 tmp
 scripts/datagen_ref
+scripts/gen_golden
