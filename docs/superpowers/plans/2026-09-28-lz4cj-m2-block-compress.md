@@ -209,7 +209,7 @@ git commit -m "M2: pointer primitives in common.cj, doc sync, xxhash small-input
 - Consumes: 无新依赖
 - Produces:
   - `public func LZ4_compressBound(inputSize: Int32): Int32`(公式:`inputSize + inputSize/255 + 16`;`inputSize < 0 || inputSize > LZ4_MAX_INPUT_SIZE` 返回 0)
-  - `public const LZ4_MAX_INPUT_SIZE: Int32 = 0x7EFFFFF`
+  - `public const LZ4_MAX_INPUT_SIZE: Int32 = 0x7E000000`(上游 lz4.h:214;原文 0x7EFFFFF 为笔误,Task 2 已按 C 侧核实修正)
   - `public const LZ4_STREAMSIZE: Int32 = 16416`(信息性,见设计 §4.4)
   - `public class LZ4_stream_t`(internal 字段:`hashTable: Array<UInt32>` 大小 16384、`currentOffset: UInt32 = 0`、`tableType: Int32 = 0`、字典字段留位 `dictCtx`/`dictionary`/`dictSize` 可先缺省)
   - `public func LZ4_sizeofState(): Int32`(返回 LZ4_STREAMSIZE)
