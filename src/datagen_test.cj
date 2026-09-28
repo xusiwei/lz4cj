@@ -211,6 +211,27 @@ let DATAGEN_REF: Array<(Int64, Int64, Int64, UInt32, UInt32, UInt64)> = [
     (1048576, 3, 1, 63104u32, 0xf045edfcu32, 0xc051df7c121f2250u64),
 ]
 
+// Failure-path diagnostics: format as fixed-width lowercase hex so the
+// printed values match their embedded 0x-prefixed literals.
+private let HEX_NIBBLES: Array<String> =
+    ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+
+private func hex32(v: UInt32): String {
+    var s = "0x"
+    for (i in 0..8) {
+        s += HEX_NIBBLES[Int64((v >> UInt32((7 - i) * 4)) & 0xFu32)]
+    }
+    return s
+}
+
+private func hex64(v: UInt64): String {
+    var s = "0x"
+    for (i in 0..16) {
+        s += HEX_NIBBLES[Int64((v >> UInt64((15 - i) * 4)) & 0xFu64)]
+    }
+    return s
+}
+
 @Test
 func datagenCrossTest(): Unit {
     var checked = 0
@@ -220,7 +241,7 @@ func datagenCrossTest(): Unit {
         let got32 = XXH32(buf, n, 0u32)
         let got64 = XXH64(buf, n, 0u64)
         if (got32 != want32 || got64 != want64) {
-            println("MISMATCH n=${n} mp=${DATAGEN_MPS[mpIdx]} lp=${DATAGEN_LPS[lpIdx]} seed=${seed}: got xxh32=0x${got32} want 0x${want32}; got xxh64=0x${got64} want 0x${want64}")
+            println("MISMATCH n=${n} mp=${DATAGEN_MPS[mpIdx]} lp=${DATAGEN_LPS[lpIdx]} seed=${seed}: got xxh32=${hex32(got32)} want ${hex32(want32)}; got xxh64=${hex64(got64)} want ${hex64(want64)}")
         }
         @Assert(got32 == want32)
         @Assert(got64 == want64)

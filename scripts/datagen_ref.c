@@ -1,6 +1,7 @@
 // C-side reference: generate datagen corpus digests for Cangjie cross-validation.
-// Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests scripts/datagen_ref.c \
-//        $HOME/lz4/tests/datagen.c $HOME/lz4/lib/xxhash.c -o scripts/datagen_ref
+// Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs \
+//        scripts/datagen_ref.c $HOME/lz4/tests/datagen.c $HOME/lz4/lib/xxhash.c \
+//        -o scripts/datagen_ref
 #include <stdio.h>
 #include <stdlib.h>
 #include "xxhash.h"

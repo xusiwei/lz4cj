@@ -5,7 +5,6 @@ package lz4
 
 private const DATAGEN_PRIME1: UInt32 = 2654435761u32
 private const DATAGEN_PRIME2: UInt32 = 2246822519u32
-private const DATAGEN_LTLOG: Int32 = 13
 private const DATAGEN_LTSIZE: Int64 = 8192
 private const DATAGEN_LTMASK: UInt32 = 8191u32
 
