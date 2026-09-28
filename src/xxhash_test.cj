@@ -104,3 +104,41 @@ func xxh64StreamingTest(): Unit {
     }
     @Assert(XXH64_digest(st) == XXH64(data, 255, 0u64))
 }
+
+@Test
+func xxhFreeStateResetTest(): Unit {
+    // freeState 语义:归零复原 —— 弄脏后所有字段(含 mem)回到构造初值
+    let data = pattern255()
+
+    let st32 = XXH32_createState()
+    @Assert(XXH32_reset(st32, 2654435761u32) == 0)
+    @Assert(XXH32_update(st32, data, 255, offset: 0) == 0)
+    @Assert(XXH32_digest(st32) != 0u32) // 确认状态已被弄脏
+    @Assert(XXH32_freeState(st32) == 0)
+    @Assert(st32.total_len == 0u32)
+    @Assert(!st32.large_len)
+    @Assert(st32.v1 == 0u32 && st32.v2 == 0u32 && st32.v3 == 0u32 && st32.v4 == 0u32)
+    @Assert(st32.memsize == 0u32)
+    for (i in 0..16) {
+        @Assert(st32.mem[i] == 0u8)
+    }
+    // 归零后可正常复用:reset + 全量数据 == one-shot
+    @Assert(XXH32_reset(st32, 2654435761u32) == 0)
+    @Assert(XXH32_update(st32, data, 255, offset: 0) == 0)
+    @Assert(XXH32_digest(st32) == XXH32(data, 255, 2654435761u32))
+
+    let st64 = XXH64_createState()
+    @Assert(XXH64_reset(st64, 11400714785074694791u64) == 0)
+    @Assert(XXH64_update(st64, data, 255, offset: 0) == 0)
+    @Assert(XXH64_digest(st64) != 0u64)
+    @Assert(XXH64_freeState(st64) == 0)
+    @Assert(st64.total_len == 0u64)
+    @Assert(st64.v1 == 0u64 && st64.v2 == 0u64 && st64.v3 == 0u64 && st64.v4 == 0u64)
+    @Assert(st64.memsize == 0u32)
+    for (i in 0..32) {
+        @Assert(st64.mem[i] == 0u8)
+    }
+    @Assert(XXH64_reset(st64, 11400714785074694791u64) == 0)
+    @Assert(XXH64_update(st64, data, 255, offset: 0) == 0)
+    @Assert(XXH64_digest(st64) == XXH64(data, 255, 11400714785074694791u64))
+}

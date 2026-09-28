@@ -92,7 +92,22 @@ internal class XXH32_state_t {
 
 internal func XXH32_createState(): XXH32_state_t { return XXH32_state_t() }
 
-internal func XXH32_freeState(state: XXH32_state_t): Int32 { return 0 } // GC 管理,API 对齐保留
+/* C 版为 XXH_free(statePtr)(释放堆内存)。仓颉由 GC 管理生命周期,
+   此处语义改为"归零复原":所有字段(含 mem 缓冲)回到构造初值,
+   对象可安全复用或交给 GC。区别于 XXH32_reset(seed 初始化 v1-v4 的复用入口)。 */
+internal func XXH32_freeState(state: XXH32_state_t): Int32 {
+    state.total_len = 0
+    state.large_len = false
+    state.v1 = 0
+    state.v2 = 0
+    state.v3 = 0
+    state.v4 = 0
+    for (i in 0..16) {
+        state.mem[i] = 0u8
+    }
+    state.memsize = 0
+    return 0
+}
 
 internal func XXH32_reset(state: XXH32_state_t, seed: UInt32): Int32 {
     state.total_len = 0
@@ -275,7 +290,19 @@ internal class XXH64_state_t {
 
 internal func XXH64_createState(): XXH64_state_t { return XXH64_state_t() }
 
-internal func XXH64_freeState(state: XXH64_state_t): Int32 { return 0 } // GC 管理,API 对齐保留
+/* 同 XXH32_freeState:归零复原语义(见其注释)。 */
+internal func XXH64_freeState(state: XXH64_state_t): Int32 {
+    state.total_len = 0
+    state.v1 = 0
+    state.v2 = 0
+    state.v3 = 0
+    state.v4 = 0
+    for (i in 0..32) {
+        state.mem[i] = 0u8
+    }
+    state.memsize = 0
+    return 0
+}
 
 internal func XXH64_reset(state: XXH64_state_t, seed: UInt64): Int32 {
     state.total_len = 0

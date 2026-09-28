@@ -164,6 +164,8 @@ C 中"用户提供裸缓冲当状态"的 API(`LZ4_compress_fast_extState(void* s
 
 **xxhash(`xxhash.h` 子集,`internal` 可见性)**:`XXH32`、`XXH32_createState`、`XXH32_freeState`、`XXH32_reset`、`XXH32_update`、`XXH32_digest`(frame 所需);`XXH64` 同族接口一并实现(结构与上游逐函数对应,见 5.6),暂不对外发布,未来如需暴露为独立改动。XXH3/XXH128 不在范围。
 
+**语义偏离登记:`XXH32_freeState` / `XXH64_freeState`**。C 版为 `XXH_free(ptr)` 释放堆内存;仓颉由 GC 管理生命周期,故实现为**归零复原**——所有字段(含 mem 缓冲)置回构造初值,返回 0。与 `reset` 的区别:`reset(state, seed)` 是复用入口(按 seed 初始化 v1-v4,不清 mem);`freeState` 是"释放"语义的仓颉等价物(状态不可再直接使用,须先 reset)。上游 `lz4frame.c` 内嵌 state 按值使用、从不调用 create/freeState,故此偏离无兼容性影响。
+
 ### 4.6 显式不移植清单(及理由)
 
 | C API | 理由 |
