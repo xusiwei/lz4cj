@@ -15,14 +15,16 @@ scripts/build_and_test.sh both # 双工具链构建 + 全量测试
 
 ## 测试
 
-共 7 项测试,覆盖版本函数、XXH32/XXH64(官方向量 + 流式)与 datagen(192 组参数组合的 C 实现交叉验证,期望值固化于 `src/datagen_test.cj` / `corpus/datagen_ref.txt`)。
+共 21 项测试:版本与 compressBound、流状态、XXH32/XXH64(官方向量 + 流式)、datagen(C 交叉验证)、一站式块压缩 golden(256 行清单 + 125 行对抗性 destSize 用例,字节级精确比对)。
 
 ## 当前进度
 
 - **M0(完成)**:cjpm 静态库工程、双工具链脚本、LICENSE、README。
 - **M1(完成)**:XXH32 / XXH64(one-shot + 流式)、datagen 及 C 交叉验证。
+- **M2(完成)**:一站式块压缩(`LZ4_compress_default` / `fast` / `fast_extState`(+fastReset)/ `destSize`)+ `compressBound` 与流状态;256 行 golden + 125 行对抗性 destSize 用例,C 交叉字节级验证。
+- **M3(下一步)**:流式压缩(loadDict / continue / saveDict / usingExtDict)与解压。
 
-API 尚未对外(压缩/解压在后续里程碑提供);路线图见 [docs/design.md](docs/design.md)。
+压缩 API 已在 M2 对外提供;解压与流式接口在后续里程碑提供,路线图见 [docs/design.md](docs/design.md)。
 
 ## 变更记录
 

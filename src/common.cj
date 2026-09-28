@@ -52,5 +52,3 @@ internal func LZ4_wildCopy8(op: CPointer<UInt8>, oi: Int64, ip: CPointer<UInt8>,
         }
     }
 }
-
-

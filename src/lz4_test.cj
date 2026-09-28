@@ -543,10 +543,12 @@ func lz4CompressDestSizeTest(): Unit {
 }
 
 // Adversarial fillOutput cases from a C probe against upstream 0774d055
-// (/tmp probe: LZ4_compress_destSize on constant / periodic / LCG buffers with
-// small targets). These force the matchCode-reduction (lz4.c L1198-1216) and
-// rewind hash-clearing paths, which the n*3/4-target corpus rows never reach
-// (mp=0.0 finds no matches; mp>=0.5 compresses below target).
+// (scripts/dest_probe.c: LZ4_compress_destSize on constant / periodic / LCG
+// buffers with small targets; output regenerates these rows verbatim).
+// These force the matchCode-reduction (lz4.c L1198-1216), which the
+// n*3/4-target corpus rows never reach (mp=0.0 finds no matches; mp>=0.5
+// compresses below target). The rewind hash-clearing sub-path inside it
+// (L1204-1215) is not reached by these inputs (see CHANGELOG M2 coverage).
 // (kind, n, target, size, consumed, xxh32, xxh64)
 let DEST_REDUCTION_REF: Array<(Int64, Int64, Int32, Int32, Int32, UInt32, UInt64)> = [
     (0, 4096, 7, 7, 6, 0x6918cab6u32, 0x9caaf84e3e0e5634u64),
@@ -714,6 +716,8 @@ func lz4CompressDestSizeReductionTest(): Unit {
         @Assert(buf.size == n)
         let out = Array<UInt8>(8192, {_ => 0u8})
         let (c, consumed): (Int32, Int32) = LZ4_compress_destSize(buf, Int32(n), out, target)
+        @Assert(c >= 0 && c <= target)
+        @Assert(consumed >= 0 && consumed <= Int32(n))
         if (c != wantSize || consumed != wantConsumed) {
             println("REDUCTION kind=${kind} target=${target}: got (${c}, ${consumed}) want (${wantSize}, ${wantConsumed})")
         }

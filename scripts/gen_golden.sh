@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Generate M2 block-compression golden reference: corpus/block_golden_ref.txt
+# Upstream: Copyright (c) 2011-2024, Yann Collet, BSD-2-Clause.
+# Port: Copyright (c) 2026, lz4cj contributors, BSD-2-Clause.
+# Usage: scripts/gen_golden.sh - generate M2 block-compression golden
+# reference: corpus/block_golden_ref.txt
 # (one line per case, see scripts/gen_golden.c header for the line format)
 # plus corpus/block/<idx>.lz4 artifacts for outputs <= 65536 bytes.
 set -euo pipefail

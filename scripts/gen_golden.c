@@ -57,6 +57,12 @@ int main(void) {
                 c = LZ4_compress_destSize((const char*)buf, (char*)out, &consumed,
                                           (int)(n * 3 / 4));
             }
+            /* default/fast cannot fail here: out is sized compressBound(n) */
+            if (mo != 3 && c == 0) {
+                fprintf(stderr, "mode=%s unexpectedly returned 0 (n=%zu)\n",
+                        kModes[mo], n);
+                return 1;
+            }
             printf("n=%zu mp=%.2f seed=%u mode=%s size=%d ",
                    n, kMps[mi], kSeeds[di], kModes[mo], c);
             if (mo == 3) printf("consumed=%d ", consumed);
