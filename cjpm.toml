@@ -1,0 +1,18 @@
+[package]
+  cjc-version = "1.0.5"
+  name = "lz4"
+  description = "Cangjie port of the LZ4 lossless compression library"
+  version = "1.0.0"
+  target-dir = ""
+  output-type = "static"
+  compile-option = "--int-overflow=wrapping -O2"
+  override-compile-option = ""
+  link-option = ""
+  include = ["src/**/*.cj", "docs/design.md", "README.md", "LICENSE"]
+  exclude = ["src/**/*_test.cj", "scripts/**", "corpus/**"]
+  package-configuration = {}
+  authors = ["lz4cj contributors"]
+  license = ["BSD-2-Clause"]
+  repository = ["https://example.com/lz4cj"]
+
+[dependencies]
