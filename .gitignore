@@ -20,3 +20,4 @@ cjpm.lock
 log
 report
 tmp
+scripts/datagen_ref

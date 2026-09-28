@@ -7,11 +7,11 @@
 需要 Cangjie LTS-1.0.5 或 STS-1.2.0 SDK(安装至 `~/sdk`,或按 `scripts/setup_env.sh` 内注释手动放置 tarball):
 
 ```bash
-scripts/setup_env.sh          # 一次性:安装并自检两套 SDK
+scripts/setup_env.sh           # 一次性:安装并自检两套 SDK
 scripts/build_and_test.sh both # 双工具链构建 + 全量测试
 ```
 
-`build_and_test.sh` 也接受 `1.0.5` / `1.2.0` 单工具链参数。
+`build_and_test.sh` 也接受 `lt`(LTS-1.0.5)/ `st`(STS-1.2.0)单工具链参数,缺省 `both`。
 
 ## 测试
 

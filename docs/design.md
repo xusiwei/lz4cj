@@ -112,13 +112,14 @@ lz4cj/
 | `int* srcSizePtr`(in/out 参数) | 并入返回值元组 | 见 4.3 |
 | `const char*`(版本/错误名) | `String` | |
 
-### 4.3 签名调整规则(仅两条,全局统一)
+### 4.3 签名调整规则(共三条,全局统一)
 
 1. **in/out 指针参数 → 返回值元组**。仓颉无引用参数,受影响函数:
    - `LZ4_compress_destSize(src, dst, srcSizePtr, targetDstSize)` → 返回 `(ret: Int32, srcConsumed: Int32)`
    - `LZ4F_getFrameInfo(dctx, src, srcSizePtr)` → 返回 `(code: Int64, frameInfo: LZ4F_frameInfo_t, srcConsumed: Int64)`
    - `LZ4F_decompress(dctx, dst, src, srcSizePtr, dOptPtr)` → 返回 `(ret: Int64, srcConsumed: Int64, dstWritten: Int64)`
 2. **可 NULL 的结构体指针 → `Option<T>`**;其余指针一律映射为非空 `Array<UInt8>` 或类实例。
+3. **C 指针前移 → 具名可选参数 `offset!: Int64`(默认 0)**:用于 `XXH*_update` 等需要从缓冲中部继续的场景;后续 frame/流式 API 沿用此惯例。
 
 ### 4.4 状态对象模型
 
