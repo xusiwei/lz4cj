@@ -142,3 +142,23 @@ func xxhFreeStateResetTest(): Unit {
     @Assert(XXH64_update(st64, data, 255, offset: 0) == 0)
     @Assert(XXH64_digest(st64) == XXH64(data, 255, 11400714785074694791u64))
 }
+
+@Test
+func xxhStreamingSmallInputTest(): Unit {
+    // total_len < 16 的流式路径(v3 未轮转,digest 走 v3+PRIME5 分支)
+    let a = "a".toArray()
+    let hello = "Hello, world!".toArray()   // 13 字节,分块 5+8
+    let st = XXH32_createState()
+    @Assert(XXH32_reset(st, 0u32) == 0)
+    @Assert(XXH32_update(st, a, 1, offset: 0) == 0)
+    @Assert(XXH32_digest(st) == XXH32(a, 1, 0u32))
+    @Assert(XXH32_reset(st, 0u32) == 0)
+    @Assert(XXH32_update(st, hello, 5, offset: 0) == 0)
+    @Assert(XXH32_update(st, hello, 8, offset: 5) == 0)
+    @Assert(XXH32_digest(st) == XXH32(hello, 13, 0u32))
+    let st64 = XXH64_createState()
+    @Assert(XXH64_reset(st64, 0u64) == 0)
+    @Assert(XXH64_update(st64, hello, 7, offset: 0) == 0)
+    @Assert(XXH64_update(st64, hello, 6, offset: 7) == 0)
+    @Assert(XXH64_digest(st64) == XXH64(hello, 13, 0u64))
+}

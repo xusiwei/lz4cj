@@ -9,7 +9,7 @@
 1. **格式与语义等价**:压缩输出、解压行为、帧格式与 C 实现一致;在确定性条件下,压缩输出与 C 版**逐字节一致**(作为移植保真度的强校验)。
 2. **双版本通过**:同一套源码在仓颉 **LTS-1.0.5** 与 **STS-1.2.0** 两套工具链下均可编译并通过全部测试。
 3. **API 命名与 C 头文件逐字一致**:降低对照移植、代码审查与上游升级的成本。
-4. **正确性优先,热点优化**:主体代码保证正确性与可读性,热路径(哈希查找、序列复制)允许 `UnsafePointer` 手工优化。
+4. **正确性优先,热点优化**:主体代码保证正确性与可读性,热路径(哈希查找、序列复制)允许 `CPointer` 手工优化。
 
 ## 2. 范围与非目标
 
@@ -187,7 +187,7 @@ C 中"用户提供裸缓冲当状态"的 API(`LZ4_compress_fast_extState(void* s
 
 对应 C 侧 `MEM_*` 宏族,是保真度与性能的基石:
 
-- **非对齐读写**:`MEM_read16/32/64`、`MEM_write16/32/64` → 基于 `UnsafePointer<UInt8>` 偏移构出 `UnsafePointer<UInt32/UInt64>` 后 `read()/write()`。目标平台(x86_64/aarch64)非对齐访问与 C `memcpy` 语义等价;**回退预案**:若某平台出现对齐故障,切换为按字节组装实现,接口不变。
+- **非对齐读写**:`MEM_read16/32/64`、`MEM_write16/32/64` → 经 `acquireArrayRawData` 取得 `CPointer<UInt8>` 后,按偏移构出 `CPointer<UInt32/UInt64>` 再 `read()/write()`,用毕 `releaseArrayRawData` 归还。目标平台(x86_64/aarch64)非对齐访问与 C `memcpy` 语义等价;**回退预案**:若某平台出现对齐故障,切换为按字节组装实现,接口不变。
 - **序列复制**:
   - `LZ4_wildCopy8`:8 字节步进的"野复制"(允许写越界到 `dst+8` 内的安全余量),照搬 C 的循环结构与步长;
   - `LZ4_memcpy_using_offset`:解压热路径的交叠复制(`src` 与 `dst` 固定偏移),照搬 C 的分支逻辑(offset<8 的特殊表、>=8 的 8 字节步进);
@@ -258,10 +258,11 @@ C 侧 `LZ4_compress_generic` 是一个多态宏展开的状态机(字典模式 �
 | 层 | 实现 | 理由 |
 |---|---|---|
 | 公开 API 入口、参数校验、frame 装配、状态管理、头/尾编码 | `Array<UInt8>` 安全索引 | 冷路径,可读性与防御性优先 |
-| block/HC/解压的内层循环、哈希表访问、序列复制、校验和更新 | `UnsafePointer<UInt8>` 手工寻址 | 热路径;越界检查开销显著 |
+| block/HC/解压的内层循环、哈希表访问、序列复制、校验和更新 | `CPointer<UInt8>` 手工寻址 | 热路径;越界检查开销显著 |
 
 规则:
-- 进入热路径前,一次 `Array<UInt8>` → `UnsafePointer<UInt8>` 转换(锁住引用防止 GC 移动影响期间不做分配);
+- 进入热路径前,一次 `Array<UInt8>` → `CPointer<UInt8>` 转换(`acquireArrayRawData` 取裸指针,用毕 `releaseArrayRawData` 归还);
+- **acquire → 操作 → release 必须在同一 `unsafe {}` 域内完成,域内不做对象分配**(期间 GC 不移动对象,裸指针保持有效);
 - unsafe 域内**照搬 C 的显式边界检查**(`ip < ilimit`、`op < oend`、`lowLimit/dictLimit` 区间判断),**不**依赖仓颉数组越界异常兜底——C 代码本身就是全量边界受控的,逐条对应移植即可;
 - 每个进入 unsafe 的函数在注释中标注前置条件(指针有效范围),格式统一,便于评审。
 
