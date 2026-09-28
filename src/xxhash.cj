@@ -184,3 +184,194 @@ internal func XXH32_digest(state: XXH32_state_t): UInt32 {
     }
     return XXH32_avalanche(h)
 }
+
+/*-************************************
+*  XXH64 one-shot
+**************************************/
+private const PRIME64_1: UInt64 = 11400714785074694791u64
+private const PRIME64_2: UInt64 = 14029467366897019727u64
+private const PRIME64_3: UInt64 = 1609587929392839161u64
+private const PRIME64_4: UInt64 = 9650029242287828579u64
+private const PRIME64_5: UInt64 = 2870177450012600261u64
+
+private func XXH_rotl64(x: UInt64, r: UInt32): UInt64 {
+    (x << r) | (x >> (64u32 - r))
+}
+
+private func XXH64_round(acc: UInt64, input: UInt64): UInt64 {
+    return XXH_rotl64(acc + input * PRIME64_2, 31u32) * PRIME64_1
+}
+
+private func XXH64_mergeRound(acc: UInt64, val: UInt64): UInt64 {
+    var v = XXH64_round(0u64, val)
+    var a = acc ^ v
+    return a * PRIME64_1 + PRIME64_4
+}
+
+private func XXH64_avalanche(h64: UInt64): UInt64 {
+    var h = h64 ^ (h64 >> 33u32)
+    h *= PRIME64_2
+    h ^= (h >> 29u32)
+    h *= PRIME64_3
+    h ^= (h >> 32u32)
+    return h
+}
+
+internal func XXH64(input: Array<UInt8>, len: Int64, seed: UInt64): UInt64 {
+    var p: Int64 = 0
+    var h: UInt64
+    if (len >= 32) {
+        var v1: UInt64 = seed + PRIME64_1 + PRIME64_2
+        var v2: UInt64 = seed + PRIME64_2
+        var v3: UInt64 = seed
+        var v4: UInt64 = seed - PRIME64_1
+        let limit: Int64 = len - 32
+        do {
+            v1 = XXH64_round(v1, XXH_readLE64(input, p)); p += 8
+            v2 = XXH64_round(v2, XXH_readLE64(input, p)); p += 8
+            v3 = XXH64_round(v3, XXH_readLE64(input, p)); p += 8
+            v4 = XXH64_round(v4, XXH_readLE64(input, p)); p += 8
+        } while (p <= limit)
+        h = XXH_rotl64(v1, 1u32) + XXH_rotl64(v2, 7u32) + XXH_rotl64(v3, 12u32) + XXH_rotl64(v4, 18u32)
+        h = XXH64_mergeRound(h, v1)
+        h = XXH64_mergeRound(h, v2)
+        h = XXH64_mergeRound(h, v3)
+        h = XXH64_mergeRound(h, v4)
+    } else {
+        h = seed + PRIME64_5
+    }
+    h += UInt64(len)
+    while (p + 8 <= len) {
+        var k1 = XXH64_round(0u64, XXH_readLE64(input, p))
+        h = h ^ k1
+        h = XXH_rotl64(h, 27u32) * PRIME64_1 + PRIME64_4
+        p += 8
+    }
+    if (p + 4 <= len) {
+        h = h ^ (UInt64(XXH_readLE32(input, p)) * PRIME64_1)
+        h = XXH_rotl64(h, 23u32) * PRIME64_2 + PRIME64_3
+        p += 4
+    }
+    while (p < len) {
+        h = h ^ (UInt64(input[p]) * PRIME64_5)
+        h = XXH_rotl64(h, 11u32) * PRIME64_1
+        p += 1
+    }
+    return XXH64_avalanche(h)
+}
+
+/*-************************************
+*  XXH64 streaming
+**************************************/
+internal class XXH64_state_t {
+    var total_len: UInt64 = 0
+    var v1: UInt64 = 0
+    var v2: UInt64 = 0
+    var v3: UInt64 = 0
+    var v4: UInt64 = 0
+    var mem: Array<UInt8> = Array<UInt8>(32, {_ => 0u8})
+    var memsize: UInt32 = 0
+}
+
+internal func XXH64_createState(): XXH64_state_t { return XXH64_state_t() }
+
+internal func XXH64_freeState(state: XXH64_state_t): Int32 { return 0 } // GC 管理,API 对齐保留
+
+internal func XXH64_reset(state: XXH64_state_t, seed: UInt64): Int32 {
+    state.total_len = 0
+    state.v1 = seed + PRIME64_1 + PRIME64_2
+    state.v2 = seed + PRIME64_2
+    state.v3 = seed
+    state.v4 = seed - PRIME64_1
+    state.memsize = 0
+    return 0
+}
+
+internal func XXH64_update(state: XXH64_state_t, input: Array<UInt8>, len: Int64, offset!: Int64): Int32 {
+    var p: Int64 = offset
+    let bEnd: Int64 = offset + len
+    state.total_len += UInt64(len)
+
+    if (Int64(state.memsize) + len < 32) {
+        var i: Int64 = 0
+        while (i < len) {
+            state.mem[Int64(state.memsize) + i] = input[p + i]
+            i += 1
+        }
+        state.memsize += UInt32(len)
+        return 0
+    }
+
+    if (state.memsize > 0u32) {
+        while (Int64(state.memsize) < 32) {
+            state.mem[Int64(state.memsize)] = input[p]
+            state.memsize += 1u32
+            p += 1
+        }
+        state.v1 = XXH64_round(state.v1, XXH_readLE64(state.mem, 0))
+        state.v2 = XXH64_round(state.v2, XXH_readLE64(state.mem, 8))
+        state.v3 = XXH64_round(state.v3, XXH_readLE64(state.mem, 16))
+        state.v4 = XXH64_round(state.v4, XXH_readLE64(state.mem, 24))
+        state.memsize = 0
+    }
+
+    if (bEnd - p >= 32) {
+        let limit: Int64 = bEnd - 32
+        var v1 = state.v1
+        var v2 = state.v2
+        var v3 = state.v3
+        var v4 = state.v4
+        do {
+            v1 = XXH64_round(v1, XXH_readLE64(input, p)); p += 8
+            v2 = XXH64_round(v2, XXH_readLE64(input, p)); p += 8
+            v3 = XXH64_round(v3, XXH_readLE64(input, p)); p += 8
+            v4 = XXH64_round(v4, XXH_readLE64(input, p)); p += 8
+        } while (p <= limit)
+        state.v1 = v1; state.v2 = v2; state.v3 = v3; state.v4 = v4
+    }
+
+    if (p < bEnd) {
+        var i: Int64 = 0
+        while (p + i < bEnd) {
+            state.mem[i] = input[p + i]
+            i += 1
+        }
+        state.memsize = UInt32(i)
+    }
+    return 0
+}
+
+internal func XXH64_digest(state: XXH64_state_t): UInt64 {
+    var h: UInt64
+    if (state.total_len >= 32u64) {
+        h = XXH_rotl64(state.v1, 1u32) + XXH_rotl64(state.v2, 7u32) +
+            XXH_rotl64(state.v3, 12u32) + XXH_rotl64(state.v4, 18u32)
+        h = XXH64_mergeRound(h, state.v1)
+        h = XXH64_mergeRound(h, state.v2)
+        h = XXH64_mergeRound(h, state.v3)
+        h = XXH64_mergeRound(h, state.v4)
+    } else {
+        h = state.v3 + PRIME64_5
+    }
+    h += state.total_len
+    // finalize:mem[0, memsize) 上 8B→4B→1B 贪心(等价上游 switch(len&31) fallthrough)
+    let n: Int64 = Int64(state.memsize)
+    var p: Int64 = 0
+    while (p + 8 <= n) {
+        var k1 = XXH64_round(0u64, XXH_readLE64(state.mem, p))
+        h = h ^ k1
+        h = XXH_rotl64(h, 27u32) * PRIME64_1 + PRIME64_4
+        p += 8
+    }
+    if (p + 4 <= n) {
+        h = h ^ (UInt64(XXH_readLE32(state.mem, p)) * PRIME64_1)
+        h = XXH_rotl64(h, 23u32) * PRIME64_2 + PRIME64_3
+        p += 4
+    }
+    while (p < n) {
+        h = h ^ (UInt64(state.mem[p]) * PRIME64_5)
+        h = XXH_rotl64(h, 11u32) * PRIME64_1
+        p += 1
+    }
+    return XXH64_avalanche(h)
+}

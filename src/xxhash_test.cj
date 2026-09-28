@@ -76,3 +76,31 @@ func streamAt(data: Array<UInt8>, seed: UInt32, cuts: Array<Int64>): UInt32 {
     }
     return XXH32_digest(st)
 }
+
+@Test
+func xxh64VectorTest(): Unit {
+    let empty = Array<UInt8>(0, {_ => 0u8})
+    let a = "a".toArray()
+    let abc = "abc".toArray()
+    let hello = "Hello, world!".toArray()
+    let p255 = pattern255()
+    @Assert(XXH64(empty, 0, 0u64) == 17241709254077376921u64)
+    @Assert(XXH64(a, 1, 0u64) == 15154266338359012955u64)
+    @Assert(XXH64(abc, 3, 0u64) == 4952883123889572249u64)
+    @Assert(XXH64(hello, 13, 0u64) == 17691043854468224118u64)
+    @Assert(XXH64(p255, 255, 0u64) == 15989308032179186496u64)
+}
+
+@Test
+func xxh64StreamingTest(): Unit {
+    let data = pattern255()
+    // 与 XXH32 相同的边界切分
+    let st = XXH64_createState()
+    @Assert(XXH64_reset(st, 0u64) == 0)
+    var prev: Int64 = 0
+    for (c in [1, 7, 15, 16, 17, 31, 32, 255]) {
+        @Assert(XXH64_update(st, data, c - prev, offset: prev) == 0)
+        prev = c
+    }
+    @Assert(XXH64_digest(st) == XXH64(data, 255, 0u64))
+}
