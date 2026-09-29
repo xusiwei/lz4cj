@@ -312,3 +312,56 @@ n=40000 mp=0.90 seed=407 mode=fastreset seq=0 size=4602 xxh32=b6ac7687 xxh64=386
 n=40000 mp=0.50 seed=408 mode=fastreset seq=1 size=21787 xxh32=73f2f1ee xxh64=c95a9858d8838cb1 inxxh32=daa4506e inxxh64=54e130d5e9ae8919 off=40000 tt=3 file=block/307.lz4
 n=65547 mp=0.90 seed=409 mode=fastreset seq=0 size=6254 xxh32=29bfa032 xxh64=1abb56a0104e3eed inxxh32=dbfa3fe3 inxxh64=cb9857ebe6d39993 off=65547 tt=2 file=block/308.lz4
 n=2048 mp=0.50 seed=410 mode=fastreset seq=1 size=1588 xxh32=c3d2274a xxh64=aaf6504ed6a5e26b inxxh32=0490af77 inxxh64=d40ccdcbcc8e5367 off=2048 tt=3 file=block/309.lz4
+# cont=one 262144-byte buffer: A=[0,122880) RDG(mp=0.50 lp=0.00 seed=501) blocks 0-2 (40960 each) B=[122880,245760) RDG(mp=0.90 lp=0.00 seed=502) blocks 3-5 (40960 each) T=[245760,262144) RDG(mp=0.50 lp=0.00 seed=503) block 6 (16384); stack stream (LZ4_initStream) + LZ4_compress_fast_continue(accel=1) per consecutive block; row cont0 = LZ4_compress_default(block 0) one-shot anchor
+n=40960 mp=0.50 seed=501 mode=cont seq=0 size=20143 xxh32=0d711d17 xxh64=b8c605e29392a2f0 inxxh32=1d4fdcfe inxxh64=57f20e3137dcc4f5 off=40960 tt=2 file=block/310.lz4
+n=40960 mp=0.50 seed=501 mode=cont seq=1 size=26011 xxh32=c6dfc6d4 xxh64=508cce362fb6d4cd inxxh32=f24c3394 inxxh64=1666d0d299a4db1d off=81920 tt=2 file=block/311.lz4
+n=40960 mp=0.50 seed=501 mode=cont seq=2 size=26215 xxh32=9efd201f xxh64=724838d39f15d582 inxxh32=ad23e199 inxxh64=cdcaeaeea1a8b6e9 off=122880 tt=2 file=block/312.lz4
+n=40960 mp=0.90 seed=502 mode=cont seq=3 size=6796 xxh32=3e27e37e xxh64=824923ade96fcad9 inxxh32=8ecd4ec7 inxxh64=4b6a1a182a8c5858 off=163840 tt=2 file=block/313.lz4
+n=40960 mp=0.90 seed=502 mode=cont seq=4 size=6389 xxh32=5ca1e4f8 xxh64=dcdbd7af79c36406 inxxh32=2ece46b7 inxxh64=2e4f6b09bbe8adfc off=204800 tt=2 file=block/314.lz4
+n=40960 mp=0.90 seed=502 mode=cont seq=5 size=7941 xxh32=341be888 xxh64=f3c733727577bc7e inxxh32=0c35e453 inxxh64=9b53b754ee032115 off=245760 tt=2 file=block/315.lz4
+n=16384 mp=0.50 seed=503 mode=cont seq=6 size=8864 xxh32=936c2210 xxh64=970f84a4345a61b0 inxxh32=940216df inxxh64=5e455b7c6a774e31 off=262144 tt=2 file=block/316.lz4
+n=40960 mp=0.50 seed=501 mode=cont0 size=19452 xxh32=9f3b56ae xxh64=c7261a033ab3bed1 inxxh32=1d4fdcfe inxxh64=57f20e3137dcc4f5 file=block/317.lz4
+# savedict=RDG(n=245760 block=40960 mp=0.90 lp=0.00 seed=601) one buffer; LZ4_saveDict(safeBuffer,65536) after seq=0 (ret=40960 history-limited) and seq=3 (ret=65536 64KB-capped) relocates the dictionary; off=/tt= are post-block values (saveDict preserves them)
+n=40960 mp=0.90 seed=601 mode=savedict seq=0 size=5477 xxh32=88d9fbd3 xxh64=be613fd74041a3c6 inxxh32=806da343 inxxh64=9c8b7bcbbd2065d8 off=40960 tt=2 file=block/318.lz4
+n=40960 mp=0.90 seed=601 mode=savedict seq=1 size=8701 xxh32=4e3ba695 xxh64=98817a0156de196b inxxh32=1ddf8fab inxxh64=30c008e7a3cceef9 off=81920 tt=2 file=block/319.lz4
+n=40960 mp=0.90 seed=601 mode=savedict seq=2 size=7145 xxh32=faffbf31 xxh64=1c34bed6d3269658 inxxh32=45c1b0ac inxxh64=98ee089a059b1d05 off=122880 tt=2 file=block/320.lz4
+n=40960 mp=0.90 seed=601 mode=savedict seq=3 size=8724 xxh32=84bb93e5 xxh64=ec70e0e05832569e inxxh32=fdf9c837 inxxh64=cda107622476a275 off=163840 tt=2 file=block/321.lz4
+n=40960 mp=0.90 seed=601 mode=savedict seq=4 size=8666 xxh32=43251223 xxh64=dbc6968c2b7034a5 inxxh32=19de378f inxxh64=e09f3f66fb61ad23 off=204800 tt=2 file=block/322.lz4
+n=40960 mp=0.90 seed=601 mode=savedict seq=5 size=8530 xxh32=a018b547 xxh64=321838e1a0673eb5 inxxh32=b005e7c3 inxxh64=fc11cf96941ce939 off=245760 tt=2 file=block/323.lz4
+# dictfast=dict=RDG(n=65536 mp=0.50 lp=0.00 seed=99) xxh32=059edec2 xxh64=d41565bb0ecfa4e3 via LZ4_loadDict; per-row fresh stream + LZ4_compress_fast_continue(accel=1); off=/tt= post-call state; input seed=99 rows share the dict's own prefix (streaming RDG) so the table fills yield different candidates
+n=255 mp=0.00 seed=0 mode=dictfast size=257 xxh32=42be5aa6 xxh64=1fb93d0dad1a834d inxxh32=6e96b077 inxxh64=efd4dc746ff90d2e off=65791 tt=2 file=block/324.lz4
+n=255 mp=0.90 seed=7 mode=dictfast size=11 xxh32=8ebfdc6d xxh64=f9f9a04a61934aaa inxxh32=e9da7969 inxxh64=e9e6f65ad9880591 off=65791 tt=2 file=block/325.lz4
+n=4096 mp=0.00 seed=7 mode=dictfast size=4114 xxh32=833d749c xxh64=eacc7240615d52b9 inxxh32=3b449358 inxxh64=560614d60dbfda09 off=69632 tt=2 file=block/326.lz4
+n=4096 mp=0.90 seed=0 mode=dictfast size=430 xxh32=7d74865a xxh64=69cf680a1dbbdcef inxxh32=f3a05cfb inxxh64=03cce69c58e99124 off=69632 tt=2 file=block/327.lz4
+n=65536 mp=0.00 seed=0 mode=dictfast size=65794 xxh32=0a92397a xxh64=5c8462a7bf58a498 inxxh32=00d020c6 inxxh64=e5445c011d57719a off=131072 tt=2
+n=65536 mp=0.90 seed=7 mode=dictfast size=6723 xxh32=7c9ce9ad xxh64=6742dc7714939a86 inxxh32=99ba8de1 inxxh64=3a798cd5ac65353f off=131072 tt=2 file=block/329.lz4
+n=65537 mp=0.50 seed=3 mode=dictfast size=33264 xxh32=8e344bd3 xxh64=33e51ce12311b1c1 inxxh32=f41b4e18 inxxh64=f2b3c896a454d62d off=131073 tt=2 file=block/330.lz4
+n=4096 mp=0.50 seed=99 mode=dictfast size=1122 xxh32=fa460b8a xxh64=83e22ee94aff90cb inxxh32=7085c0ee inxxh64=ebba4e70ddd088c4 off=69632 tt=2 file=block/331.lz4
+# dictslow=dict=RDG(n=65536 mp=0.50 lp=0.00 seed=99) xxh32=059edec2 xxh64=d41565bb0ecfa4e3 via LZ4_loadDictSlow; per-row fresh stream + LZ4_compress_fast_continue(accel=1); off=/tt= post-call state; input seed=99 rows share the dict's own prefix (streaming RDG) so the table fills yield different candidates
+n=255 mp=0.00 seed=0 mode=dictslow size=257 xxh32=42be5aa6 xxh64=1fb93d0dad1a834d inxxh32=6e96b077 inxxh64=efd4dc746ff90d2e off=65791 tt=2 file=block/332.lz4
+n=255 mp=0.90 seed=7 mode=dictslow size=11 xxh32=8ebfdc6d xxh64=f9f9a04a61934aaa inxxh32=e9da7969 inxxh64=e9e6f65ad9880591 off=65791 tt=2 file=block/333.lz4
+n=4096 mp=0.00 seed=7 mode=dictslow size=4114 xxh32=833d749c xxh64=eacc7240615d52b9 inxxh32=3b449358 inxxh64=560614d60dbfda09 off=69632 tt=2 file=block/334.lz4
+n=4096 mp=0.90 seed=0 mode=dictslow size=430 xxh32=7d74865a xxh64=69cf680a1dbbdcef inxxh32=f3a05cfb inxxh64=03cce69c58e99124 off=69632 tt=2 file=block/335.lz4
+n=65536 mp=0.00 seed=0 mode=dictslow size=65794 xxh32=0a92397a xxh64=5c8462a7bf58a498 inxxh32=00d020c6 inxxh64=e5445c011d57719a off=131072 tt=2
+n=65536 mp=0.90 seed=7 mode=dictslow size=6723 xxh32=7c9ce9ad xxh64=6742dc7714939a86 inxxh32=99ba8de1 inxxh64=3a798cd5ac65353f off=131072 tt=2 file=block/337.lz4
+n=65537 mp=0.50 seed=3 mode=dictslow size=33264 xxh32=8e344bd3 xxh64=33e51ce12311b1c1 inxxh32=f41b4e18 inxxh64=f2b3c896a454d62d off=131073 tt=2 file=block/338.lz4
+n=4096 mp=0.50 seed=99 mode=dictslow size=1122 xxh32=fa460b8a xxh64=83e22ee94aff90cb inxxh32=7085c0ee inxxh64=ebba4e70ddd088c4 off=69632 tt=2 file=block/339.lz4
+# attach=dict=RDG(n=65536 mp=0.50 lp=0.00 seed=99) xxh32=059edec2 xxh64=d41565bb0ecfa4e3 on dictionary stream A (LZ4_loadDict); per-row fresh working stream B, LZ4_attach_dictionary(B,A), LZ4_compress_fast_continue(accel=1) on B; inputSize<=4096 -> usingDictCtx, >4096 -> table-copy usingExtDict
+n=255 mp=0.90 seed=0 mode=attach size=11 xxh32=387b105f xxh64=6ade35f444efe462 inxxh32=cbe2766c inxxh64=d1074591b2fa8835 off=65791 tt=2 file=block/340.lz4
+n=4096 mp=0.00 seed=7 mode=attach size=4114 xxh32=833d749c xxh64=eacc7240615d52b9 inxxh32=3b449358 inxxh64=560614d60dbfda09 off=69632 tt=2 file=block/341.lz4
+n=4097 mp=0.50 seed=3 mode=attach size=2772 xxh32=dd1f8842 xxh64=6f1eb699fce1930b inxxh32=324bf5e7 inxxh64=bfbb9c11c66935b2 off=69633 tt=2 file=block/342.lz4
+n=65536 mp=0.00 seed=0 mode=attach size=65794 xxh32=0a92397a xxh64=5c8462a7bf58a498 inxxh32=00d020c6 inxxh64=e5445c011d57719a off=131072 tt=2
+# extdict=twin buffers with identical RDG content per scenario, block source zig-zags A/B/A forcing usingExtDict cross-buffer references: scen0=RDG(n=122880 block=40960 mp=0.90 lp=0.00 seed=711) seq=0-2, scen1=RDG(n=196608 block=65536 mp=0.50 lp=0.00 seed=712) seq=3-5; off=/tt= post-call state
+n=40960 mp=0.90 seed=711 mode=extdict seq=0 size=5536 xxh32=84ab5fff xxh64=d880f670e6b2bbf7 inxxh32=fc9157d5 inxxh64=31ca4729b9c01c1f off=40960 tt=2 file=block/344.lz4
+n=40960 mp=0.90 seed=711 mode=extdict seq=1 size=6513 xxh32=6a451de6 xxh64=e3bd26a1a9377a36 inxxh32=9a36eb47 inxxh64=2f9ad61527444543 off=81920 tt=2 file=block/345.lz4
+n=40960 mp=0.90 seed=711 mode=extdict seq=2 size=7519 xxh32=66c8e661 xxh64=19680b7567db384d inxxh32=75eb1f42 inxxh64=0077e0083574567b off=122880 tt=2 file=block/346.lz4
+n=65536 mp=0.50 seed=712 mode=extdict seq=3 size=36707 xxh32=0b84822c xxh64=5363303bdbc4f945 inxxh32=787c0118 inxxh64=a29be2f252fface4 off=65536 tt=2 file=block/347.lz4
+n=65536 mp=0.50 seed=712 mode=extdict seq=4 size=41567 xxh32=c920f69f xxh64=a108b5398af270f8 inxxh32=07341a6e inxxh64=af8a3215a40c0cab off=131072 tt=2 file=block/348.lz4
+n=65536 mp=0.50 seed=712 mode=extdict seq=5 size=42910 xxh32=d13915a7 xxh64=d5ebaae3e88dc073 inxxh32=d018602e inxxh64=55db4ba83898e211 off=196608 tt=2 file=block/349.lz4
+# destext=LZ4_compress_destSize_extState(accel=1) one shared stream state; per input: tg=n*3/2 (>=compressBound => extState delegation, srcSizePtr untouched) then tg=n*3/4 (fillOutput); consumed= pins *srcSizePtr
+n=4096 mp=0.00 seed=801 mode=destext tg=6144 size=4114 consumed=4096 xxh32=08f85529 xxh64=7e6690e991374e52 inxxh32=eed34f09 inxxh64=a856ed04561648e0 file=block/350.lz4
+n=4096 mp=0.00 seed=801 mode=destext tg=3072 size=3072 consumed=3059 xxh32=3e3f296b xxh64=8db760879ba4fa73 inxxh32=eed34f09 inxxh64=a856ed04561648e0 file=block/351.lz4
+n=65536 mp=0.50 seed=802 mode=destext tg=98304 size=33368 consumed=65536 xxh32=fdb4005a xxh64=22fad74ef55e859f inxxh32=ca1943c2 inxxh64=fbccac0f7f1d13c3 file=block/352.lz4
+n=65536 mp=0.50 seed=802 mode=destext tg=49152 size=33368 consumed=65536 xxh32=fdb4005a xxh64=22fad74ef55e859f inxxh32=ca1943c2 inxxh64=fbccac0f7f1d13c3 file=block/353.lz4
+n=131072 mp=0.00 seed=803 mode=destext tg=196608 size=131587 consumed=131072 xxh32=78410cba xxh64=7f6ee26b91cadbec inxxh32=264e2b39 inxxh64=c698523d24c90fbc
+n=131072 mp=0.00 seed=803 mode=destext tg=98304 size=98304 consumed=97919 xxh32=e202c7ae xxh64=7bdc460baac80596 inxxh32=264e2b39 inxxh64=c698523d24c90fbc

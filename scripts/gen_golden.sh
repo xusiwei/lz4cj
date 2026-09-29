@@ -20,11 +20,34 @@ scripts/gen_golden | tee corpus/block_golden_ref.txt
 # sanity: 64 inputs x 4 modes = 256 rows + 8 tight rows + 16 dict rows
 #         + 8 stream rows + 10 ring rows + 2 setdict rows
 #         + 10 fastreset rows (M3b Task 1)
-# = 310 data rows, plus 4 leading '#' provenance comments
-#   (dict / stream / ring / setdict sections)
-[ "$(wc -l < corpus/block_golden_ref.txt)" -eq 314 ] \
-    || { echo "ERROR: expected 314 golden lines (310 rows + 4 comments)" >&2; exit 1; }
-[ "$(grep -c '^#' corpus/block_golden_ref.txt)" -eq 4 ] \
-    || { echo "ERROR: expected exactly 4 comment lines" >&2; exit 1; }
+#         + 8 cont rows (M3b Task 2: 7 rolling + 1 cont0 anchor)
+#         + 6 savedict rows (M3b Task 2)
+#         + 8 dictfast + 8 dictslow rows (M3b Task 3)
+#         + 4 attach rows (M3b Task 3)
+#         + 6 extdict rows (M3b Task 3)
+#         + 6 destext rows (M3b Task 4)
+# = 356 data rows, plus 11 '#' provenance comments
+#   (dict / stream / ring / setdict + cont / savedict / dictfast /
+#    dictslow / attach / extdict / destext sections)
+[ "$(wc -l < corpus/block_golden_ref.txt)" -eq 367 ] \
+    || { echo "ERROR: expected 367 golden lines (356 rows + 11 comments)" >&2; exit 1; }
+[ "$(grep -c '^#' corpus/block_golden_ref.txt)" -eq 11 ] \
+    || { echo "ERROR: expected exactly 11 comment lines" >&2; exit 1; }
 [ "$(grep -c 'mode=fastreset' corpus/block_golden_ref.txt)" -eq 10 ] \
     || { echo "ERROR: expected 10 fastreset rows" >&2; exit 1; }
+[ "$(grep -c 'mode=cont seq=' corpus/block_golden_ref.txt)" -eq 7 ] \
+    || { echo "ERROR: expected 7 cont rows" >&2; exit 1; }
+[ "$(grep -c 'mode=cont0' corpus/block_golden_ref.txt)" -eq 1 ] \
+    || { echo "ERROR: expected 1 cont0 row" >&2; exit 1; }
+[ "$(grep -c 'mode=savedict' corpus/block_golden_ref.txt)" -eq 6 ] \
+    || { echo "ERROR: expected 6 savedict rows" >&2; exit 1; }
+[ "$(grep -c 'mode=dictfast' corpus/block_golden_ref.txt)" -eq 8 ] \
+    || { echo "ERROR: expected 8 dictfast rows" >&2; exit 1; }
+[ "$(grep -c 'mode=dictslow' corpus/block_golden_ref.txt)" -eq 8 ] \
+    || { echo "ERROR: expected 8 dictslow rows" >&2; exit 1; }
+[ "$(grep -c 'mode=attach' corpus/block_golden_ref.txt)" -eq 4 ] \
+    || { echo "ERROR: expected 4 attach rows" >&2; exit 1; }
+[ "$(grep -c 'mode=extdict' corpus/block_golden_ref.txt)" -eq 6 ] \
+    || { echo "ERROR: expected 6 extdict rows" >&2; exit 1; }
+[ "$(grep -c 'mode=destext' corpus/block_golden_ref.txt)" -eq 6 ] \
+    || { echo "ERROR: expected 6 destext rows" >&2; exit 1; }
