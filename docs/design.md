@@ -177,7 +177,7 @@ C 中"用户提供裸缓冲当状态"的 API(`LZ4_compress_fast_extState(void* s
 
 ### 4.7 错误处理
 
-- **block 侧**:保持 C 语义——返回 0(压缩失败/容量不足)或负数(解压错误码:`LZ4_errorCodes` 语义,逐字定义错误常量)。
+- **block 侧**:保持 C 语义——压缩返回 0(失败/容量不足);解压错误为负位置编码 `-(ip 偏移)-1`(ip 为解析失败时的输入位置,与上游 lz4.c:2462 的 `_output_error` 出口一致),输入尺寸校验错误返回 -1(lz4.c:2035/2068)。上游 `LZ4_errorCodes` 枚举仅服务于 `LZ4_getErrorString` 等 CLI 辅助函数,并非 `LZ4_decompress_safe` 返回值语义,不移植。
 - **frame 侧**:保持 C 的 size_t 数值错误码模式——`LZ4F_errorCode_t = Int64`,错误值为负;`LZ4F_isError(code)`、`LZ4F_getErrorCode`、`LZ4F_getErrorName` 可用性与 C 一致。**不**改用异常/Option,保持逐字 API 契约;调用方按 C 习惯先查 `LZ4F_isError`。
 - 仓颉异常仅用于防御性断言内部不变量(理论上不可达路径),文档注明。
 
@@ -210,7 +210,7 @@ C 侧 `LZ4_compress_generic` 是一个多态宏展开的状态机(字典模式 �
 
 ### 5.3 block 解压(lz4.cj + lz4_stream.cj)
 
-- `LZ4_decompress_safe` 系列:先移植**safe 完整版**(逐 token 显式边界检查,错误码逐字对齐 `LZ4_errorCodes`),作为正确性基准;
+- `LZ4_decompress_safe` 系列:先移植**safe 完整版**(逐 token 显式边界检查,错误语义逐字对齐上游:负位置编码 `-(ip)-1`,尺寸校验错误 -1),作为正确性基准;
 - 再移植 fast 路径(以 `LZ4_wildCopy8` 为主体的快循环 + 尾部 `LZ4_safeCopy` 精确收尾),通过"fast 与 safe 输出必须一致"的差分测试保障;
 - `LZ4_decompress_safe_partial`:按 targetOutputSize 提前终止的分支逻辑照搬;
 - 流式解码:`LZ4_streamDecode_t` 维护 64KB+ 环缓冲字典,`LZ4_decompress_safe_continue` 的字典内容判定(前缀在外部字典/环缓冲内/混合)逐分支移植;

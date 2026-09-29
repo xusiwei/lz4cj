@@ -41,7 +41,7 @@ public func LZ4_compressBound(inputSize: Int32): Int32 {
 **************************************/
 /* 上游为裸缓冲 + memset 的流状态;仓颉侧改为类承载(设计 §4.4),
    LZ4_STREAMSIZE/LZ4_sizeofState 保留为信息性常量。
-   字典字段(dictCtx/dictionary/dictSize)留待 M5 补齐。 */
+    字典字段(dictCtx/dictionary/dictSize)留待 M3 补齐。 */
 public class LZ4_stream_t {
     internal var hashTable: Array<UInt32> = Array<UInt32>(16384, {_ => 0u32})
     internal var currentOffset: UInt32 = 0u32
@@ -239,7 +239,7 @@ internal func LZ4_compress_generic_noDict(
         return (0, 0)
     }
 
-    /* L999-1009: 更新上下文(dictSize 字段 M5 补;tableType 枚举值沿上游
+    /* L999-1009: 更新上下文(dictSize 字段 M3 补;tableType 枚举值沿上游
        {clearedTable=0, byPtr, byU32, byU16} → byU32=2 / byU16=3) */
     state.currentOffset = startIndex + UInt32(n)
     state.tableType = if (byU16) { 3 } else { 2 }
@@ -529,8 +529,8 @@ public func LZ4_compress_fast_extState(state: LZ4_stream_t, src: Array<UInt8>, s
 
 /* 上游(L1423-1459)不调用 initStream,由 LZ4_prepareTable 依据 tableType/
    currentOffset 决定是否清表并处理 64KB gap。M2 仅 one-shot(新构造或已 init 的
-   state):clearedTable → 不清表、currentOffset==0 → noDictIssue,与 extState 路径
-   完全一致;脏表复用的正确性属流式范畴(M4+),届时移植 prepareTable。 */
+   state):clearedTable → 不清表、   currentOffset==0 → noDictIssue,与 extState 路径
+   完全一致;脏表复用的正确性属 M3 范畴,届时移植 prepareTable。 */
 public func LZ4_compress_fast_extState_fastReset(state: LZ4_stream_t, src: Array<UInt8>,
         srcSize: Int32, dst: Array<UInt8>, dstCapacity: Int32, acceleration: Int32): Int32 {
     return LZ4_compress_fast_extState(state, src, srcSize, dst, dstCapacity, acceleration)
@@ -579,10 +579,352 @@ private func lz4CompressDestSizeInternal(state: LZ4_stream_t, src: Array<UInt8>,
 }
 
 /* LZ4_compress_destSize(lz4.c L1515-1531):压缩 src 前缀直至产出恰好不超过
-   targetDstSize 的块;返回 (压缩字节数, srcConsumed)。失败(target ≤ 0 等)
-   返回 (0, srcSize)(C 返回 0 且 *srcSizePtr 保持调用方初值)。 */
+    targetDstSize 的块;返回 (压缩字节数, srcConsumed)。失败(target ≤ 0 等)
+    返回 (0, srcSize)(C 返回 0 且 *srcSizePtr 保持调用方初值)。 */
 public func LZ4_compress_destSize(src: Array<UInt8>, srcSize: Int32, dst: Array<UInt8>,
         targetDstSize: Int32): (Int32, Int32) {
     let ctx = LZ4_stream_t()                                    /* L1521-1522: 栈上临时 ctx */
     return lz4CompressDestSizeInternal(ctx, src, srcSize, dst, targetDstSize)
+}
+
+/*-************************************
+*  Decompression constants (lz4.c L243-249, L475-476)
+**************************************/
+internal const LZ4_WILDCOPYLENGTH: Int64 = 8                        /* lz4.c L245 */
+/* lz4.c L248:2×WILDCOPYLENGTH-MINMATCH = 12,保证可写两组野复制而不越输出界 */
+internal const LZ4_MATCH_SAFEGUARD_DISTANCE: Int64 = 2 * LZ4_WILDCOPYLENGTH - LZ4_MINMATCH
+internal const LZ4_FASTLOOP_SAFE_DISTANCE: Int64 = 64               /* lz4.c L249(T3 fast 循环分派用) */
+
+/* lz4.c L475-476:offset<8 时交叠 match 拷贝的增量表(safe 循环 L2425-2437 用) */
+internal let LZ4_INC32TABLE: Array<Int64> = [0, 1, 2, 1, 0, 4, 4, 4]
+internal let LZ4_DEC64TABLE: Array<Int64> = [0, 0, 0, -1, -4, 1, 2, 3]
+
+/*-************************************
+*  Decompression core (lz4.c L2015-2464, safe decode path)
+**************************************/
+/* 上游 read_variable_length(lz4.c L1978-2013):逐字节读取 255 进位长度。
+   返回 (length, 新 ip);ilimit 为禁止越过的读界限;错误以 length == -1
+   表示(rvl_error),此时第二个分量停在检测到界限时的 ip(与 C 的指针
+   推进一致,供 -(ip)-1 位置编码使用)。L2007 的 32 位累加器溢出检查
+   在 64 位构建(Int64 累加)下不可达,不移植。 */
+internal func lz4ReadVariableLength(src: CPointer<UInt8>, ip: Int64, ilimit: Int64): (Int64, Int64) {
+    var p = ip
+    if (p >= ilimit) {                                           /* L1992 */
+        return (-1, p)
+    }
+    var s: Int64 = Int64(LZ4_read8(src, p))
+    p += 1
+    var length: Int64 = s
+    if (s != 255) {
+        return (length, p)                                       /* L1998 */
+    }
+    do {
+        if (p >= ilimit) {                                       /* L2000 */
+            return (-1, p)
+        }
+        s = Int64(LZ4_read8(src, p))
+        p += 1
+        length += s
+    } while (s == 255)
+    return (length, p)
+}
+
+/* LZ4_decompress_generic 的指针循环体(safe decode loop,L2226-2454)。
+   (buf, idx) 位置模型:src/dst 以基指针 + Int64 索引表达;lowPrefixIdx 为
+   dst 同缓冲内前缀起点(withPrefix64k 时 < dstIdx);dictIsExtDict 时
+   dictP/dictStartIdx/dictSize 表达外字典(dictEnd = dictStartIdx + dictSize)。
+   dict_directive 的位置编码:noDict = 低前缀与输出重合且无外字典;
+   withPrefix64k = 无外字典但 lowPrefixIdx < dstIdx;usingExtDict = dictIsExtDict。
+   _output_error 以 `return -(ip) - 1` 直接实现(L2462);成功返回输出字节数。
+   T3 将在 L2074-2222 分派点插入 fast 解码循环(outputSize ≥
+   FASTLOOP_SAFE_DISTANCE 时走 fast 路径),本函数即其 safe_decode 落点。 */
+private func lz4DecompressGenericBody(
+        src: CPointer<UInt8>, srcSize: Int64,
+        dst: CPointer<UInt8>, dstIdx: Int64, outputSize: Int64,
+        partialDecoding: Bool,
+        lowPrefixIdx: Int64,
+        dictP: CPointer<UInt8>, dictIsExtDict: Bool, dictStartIdx: Int64, dictSize: Int64): Int64 {
+    let iend: Int64 = srcSize                                    /* L2038 */
+    var op: Int64 = dstIdx                                       /* L2040 */
+    let oend: Int64 = dstIdx + outputSize                        /* L2041 */
+    let dictEnd: Int64 = dictStartIdx + dictSize                 /* L2044(dictIsExtDict 时有效) */
+    let checkOffset: Bool = dictSize < 65536                     /* L2046 */
+    let shortiend: Int64 = iend - 14 - 2                         /* L2050:maxLL+offset */
+    let shortoend: Int64 = oend - 14 - 18                        /* L2051:maxLL+maxML */
+    /* withPrefix64k:捷径分支 L2155/L2259 的字典指令豁免(位置模型编码) */
+    let withPrefix64k: Bool = (!dictIsExtDict) && (lowPrefixIdx < dstIdx)
+
+    /* Special cases(L2063-2068;L2062 断言 lowPrefix ≤ op 由模型保证) */
+    if (outputSize == 0) {
+        /* Empty output buffer */
+        if (partialDecoding) {
+            return 0
+        }
+        if (srcSize == 1 && LZ4_read8(src, 0) == 0u8) { return 0 }
+        return -1
+    }
+    if (srcSize == 0) {
+        return -1
+    }
+
+    /* T3 分派点(L2075):(oend - op) < FASTLOOP_SAFE_DISTANCE 时直接
+       进入 safe 循环;fast 循环(L2079-2221)整体留待 T3 插入。 */
+    var ip: Int64 = 0
+    /* Main Loop:safe decode loop(L2226-2454) */
+    while (true) {
+        let token: UInt8 = LZ4_read8(src, ip)                     /* L2228 */
+        ip += 1
+        var length: Int64 = Int64(token >> 4)                     /* L2229: literal length */
+        var offset: Int64 = 0
+        var matchIdx: Int64 = 0
+        var fromShortcut = false
+
+        /* 两段式捷径(L2241-2272):litLen 0..14 且距输入/输出末尾足够远时,
+           字面量超量拷贝 16 字节 + 尝试 18 字节 match 快拷 */
+        if ((length != LZ4_RUN_MASK) && (ip < shortiend) && (op <= shortoend)) {
+            /* Copy the literals(读界 shortiend/写界 shortoend 保证 16 字节安全) */
+            LZ4_memcpyPtr(dst, op, src, ip, 16)                   /* L2245 */
+            op += length
+            ip += length
+            length = Int64(token & 0x0Fu8)                        /* L2250: match length */
+            offset = Int64(LZ4_readLE16(src, ip))                 /* L2252 */
+            ip += 2
+            matchIdx = op - offset                                   /* L2253 */
+            /* 不处理交叠 match(offset ≥ 8 且不越 lowPrefix;withPrefix64k 豁免) */
+            if ((length != LZ4_ML_MASK) && (offset >= 8) &&
+                    (withPrefix64k || matchIdx >= lowPrefixIdx)) {   /* L2257-2259 */
+                LZ4_memcpyPtr(dst, op, dst, matchIdx, 8)             /* L2261-2263: 8+8+2 */
+                LZ4_memcpyPtr(dst, op + 8, dst, matchIdx + 8, 8)
+                LZ4_memcpyPtr(dst, op + 16, dst, matchIdx + 16, 2)
+                op += length + LZ4_MINMATCH
+                continue                                          /* L2266 */
+            }
+            fromShortcut = true                                   /* L2271: goto _copy_match */
+        }
+
+        if (!fromShortcut) {
+            /* decode literal length(L2279-2287) */
+            if (length == LZ4_RUN_MASK) {
+                /* 扩展字节不可能触及输入末尾 RUN_MASK 字节(L2280-2281) */
+                let (addl, nip) = lz4ReadVariableLength(src, ip, iend - LZ4_RUN_MASK)   /* L2282 */
+                if (addl == -1) {
+                    return -nip - 1                               /* _output_error */
+                }
+                ip = nip
+                length += addl
+                if (op + length < op) { return -ip - 1 }          /* L2285 溢出检测(64 位下不可达,防御性保留) */
+                if (ip + length < ip) { return -ip - 1 }          /* L2286 */
+            }
+
+            /* copy literals(L2289-2352) */
+            var cpy: Int64 = op + length                          /* L2290 */
+            if ((cpy > oend - LZ4_MFLIMIT) || (ip + length > iend - (2 + 1 + LZ4_LASTLITERALS))) {   /* L2297 */
+                /* 命中输入或输出解析限制:整块解码时必为末序列,否则报错;
+                   partialDecoding 时收缩到剩余空间(允许欠尺寸输出) */
+                if (partialDecoding) {
+                    if (ip + length > iend) {                     /* L2314: 输入不足 */
+                        length = iend - ip
+                        cpy = op + length
+                    }
+                    if (cpy > oend) {                             /* L2321: 输出不足 */
+                        cpy = oend
+                        length = oend - op
+                    }
+                } else {
+                    /* 必须恰好吃尽输入且不越输出界(L2330) */
+                    if ((ip + length != iend) || (cpy > oend)) {
+                        return -ip - 1                            /* _output_error */
+                    }
+                }
+                /* L2338 memmove:同缓冲交叠(原地解压)在分离缓冲模型下不存在,
+                   精确正向拷贝等价 */
+                LZ4_memcpyPtr(dst, op, src, ip, length)
+                ip += length
+                op += length
+                /* L2346:非 partial 必然 EOF;partial 时填满输出或无法继续读
+                   offset 也终止 */
+                if ((!partialDecoding) || (cpy == oend) || (ip >= iend - 2)) {
+                    break
+                }
+            } else {
+                LZ4_wildCopy8(dst, op, src, ip, length)           /* L2350: 可越写 cpy 后至多 7 字节(界内) */
+                ip += length
+                op = cpy
+            }
+
+            /* get offset(L2355) */
+            offset = Int64(LZ4_readLE16(src, ip))
+            ip += 2
+            matchIdx = op - offset                                   /* L2356 */
+
+            /* get matchlength(L2359) */
+            length = Int64(token & 0x0Fu8)
+        }
+
+        /* _copy_match(L2362) */
+        if (length == LZ4_ML_MASK) {
+            /* match 扩展字节后至少还需 1 token + LASTLITERALS 字面量(L2364) */
+            let (addl, nip) = lz4ReadVariableLength(src, ip, iend - (1 + LZ4_LASTLITERALS))   /* L2365 */
+            if (addl == -1) {
+                return -nip - 1                                   /* _output_error */
+            }
+            ip = nip
+            length += addl
+            if (op + length < op) { return -ip - 1 }              /* L2368 溢出检测(64 位下不可达) */
+        }
+        length += LZ4_MINMATCH                                   /* L2370 */
+
+        if (checkOffset && (matchIdx + dictSize < lowPrefixIdx)) {   /* L2375: offset outside buffers */
+            return -ip - 1
+        }
+        /* match starting within external dictionary(L2377-2403) */
+        if (dictIsExtDict && (matchIdx < lowPrefixIdx)) {
+            if (op + length > oend - LZ4_LASTLITERALS) {          /* L2379 */
+                if (partialDecoding) {
+                    length = if (length < oend - op) { length } else { oend - op }   /* L2380 */
+                } else {
+                    return -ip - 1                                /* L2381: 不满足解析限制 */
+                }
+            }
+            if (length <= lowPrefixIdx - matchIdx) {                 /* L2384 */
+                /* match 全部位于外字典:直接拷贝 */
+                LZ4_memcpyPtr(dst, op, dictP, dictEnd - (lowPrefixIdx - matchIdx), length)   /* L2386 */
+                op += length
+            } else {
+                /* match 跨外字典与当前块 */
+                let copySize: Int64 = lowPrefixIdx - matchIdx        /* L2390 */
+                let restSize: Int64 = length - copySize
+                LZ4_memcpyPtr(dst, op, dictP, dictEnd - copySize, copySize)   /* L2392 */
+                op += copySize
+                if (restSize > op - lowPrefixIdx) {               /* L2394: overlap copy */
+                    let endOfMatch: Int64 = op + restSize
+                    var copyFrom: Int64 = lowPrefixIdx
+                    while (op < endOfMatch) {
+                        LZ4_write8(dst, op, LZ4_read8(dst, copyFrom))
+                        op += 1
+                        copyFrom += 1
+                    }
+                } else {
+                    LZ4_memcpyPtr(dst, op, dst, lowPrefixIdx, restSize)   /* L2399 */
+                    op += restSize
+                }
+            }
+            continue                                             /* L2402 */
+        }
+
+        /* copy match within block(L2406) */
+        let cpy: Int64 = op + length
+
+        /* partialDecoding:可在块内任意位置结束(L2411-2423) */
+        if (partialDecoding && (cpy > oend - LZ4_MATCH_SAFEGUARD_DISTANCE)) {
+            let mlen: Int64 = if (length < oend - op) { length } else { oend - op }   /* L2412 */
+            let matchEnd: Int64 = matchIdx + mlen
+            let copyEnd: Int64 = op + mlen
+            if (matchEnd > op) {                                  /* L2415: overlap copy */
+                while (op < copyEnd) {
+                    LZ4_write8(dst, op, LZ4_read8(dst, matchIdx))
+                    op += 1
+                    matchIdx += 1
+                }
+            } else {
+                LZ4_memcpyPtr(dst, op, dst, matchIdx, mlen)          /* L2418 */
+            }
+            op = copyEnd                                         /* L2420 */
+            if (op == oend) {
+                break                                            /* L2421 */
+            }
+            continue                                             /* L2422 */
+        }
+
+        if (offset < 8) {                                        /* L2425: 交叠 match */
+            LZ4_writeLE32(dst, op, 0u32)                          /* L2426: 消 msan 警告(offset==0) */
+            LZ4_write8(dst, op + 0, LZ4_read8(dst, matchIdx + 0))
+            LZ4_write8(dst, op + 1, LZ4_read8(dst, matchIdx + 1))
+            LZ4_write8(dst, op + 2, LZ4_read8(dst, matchIdx + 2))
+            LZ4_write8(dst, op + 3, LZ4_read8(dst, matchIdx + 3))
+            matchIdx += LZ4_INC32TABLE[Int64(offset)]                /* L2431 */
+            LZ4_memcpyPtr(dst, op + 4, dst, matchIdx, 4)             /* L2432 */
+            matchIdx -= LZ4_DEC64TABLE[Int64(offset)]              /* L2433 */
+        } else {
+            LZ4_memcpyPtr(dst, op, dst, matchIdx, 8)                 /* L2435 */
+            matchIdx += 8
+        }
+        op += 8                                                   /* L2438 */
+
+        if (cpy > oend - LZ4_MATCH_SAFEGUARD_DISTANCE) {          /* L2440 */
+            let oCopyLimit: Int64 = oend - (LZ4_WILDCOPYLENGTH - 1)   /* L2441 */
+            if (cpy > oend - LZ4_LASTLITERALS) {
+                return -ip - 1                                    /* L2442: 末 LASTLITERALS 字节必须是字面量 */
+            }
+            if (op < oCopyLimit) {                                /* L2443 */
+                LZ4_wildCopy8(dst, op, dst, matchIdx, oCopyLimit - op)   /* L2444 */
+                matchIdx += oCopyLimit - op
+                op = oCopyLimit
+            }
+            while (op < cpy) {                                    /* L2448: 逐字节收尾 */
+                LZ4_write8(dst, op, LZ4_read8(dst, matchIdx))
+                op += 1
+                matchIdx += 1
+            }
+        } else {
+            LZ4_memcpyPtr(dst, op, dst, matchIdx, 8)                 /* L2450 */
+            if (length > 16) {
+                LZ4_wildCopy8(dst, op + 8, dst, matchIdx + 8, cpy - (op + 8))   /* L2451 */
+            }
+        }
+        op = cpy                                                  /* L2453: wildcopy correction */
+    }
+
+    /* end of decoding(L2457-2458) */
+    return op - dstIdx
+}
+
+/* LZ4_decompress_generic(lz4.c L2022-2464):解压核心,(buf, idx) 位置模型
+   参数化(T2 的 partial/前缀、T4 的外字典直接复用);src+dst(+字典)在
+   单一 unsafe 块内 acquire/release(指针三律)。无字典时 dictP 传 src 指针
+   占位,dictIsExtDict=false 保证其绝不解引用。 */
+internal func LZ4_decompress_generic(
+        srcArr: Array<UInt8>, srcSize: Int64,
+        dstArr: Array<UInt8>, dstIdx: Int64, outputSize: Int64,
+        partialDecoding: Bool,
+        lowPrefixIdx: Int64,
+        dictArr: Option<Array<UInt8>>, dictStartIdx: Int64, dictSize: Int64): Int64 {
+    if (outputSize < 0) {                                         /* L2035(src 模型恒非空) */
+        return -1
+    }
+    unsafe {
+        let sh = acquireArrayRawData<UInt8>(srcArr)
+        let dh = acquireArrayRawData<UInt8>(dstArr)
+        let r: Int64 = match (dictArr) {
+            case Some(d) =>
+                let kh = acquireArrayRawData<UInt8>(d)
+                let v = lz4DecompressGenericBody(sh.pointer, srcSize, dh.pointer, dstIdx,
+                    outputSize, partialDecoding, lowPrefixIdx, kh.pointer, true,
+                    dictStartIdx, dictSize)
+                releaseArrayRawData<UInt8>(kh)
+                v
+            case None =>
+                lz4DecompressGenericBody(sh.pointer, srcSize, dh.pointer, dstIdx,
+                    outputSize, partialDecoding, lowPrefixIdx, sh.pointer, false,
+                    dictStartIdx, dictSize)
+        }
+        releaseArrayRawData<UInt8>(sh)
+        releaseArrayRawData<UInt8>(dh)
+        return r
+    }
+}
+
+/*-************************************
+*  Public decompression API
+**************************************/
+/* LZ4_decompress_safe(lz4.c L2470-2475):decode_full_block + noDict 实例化,
+   lowPrefix = dst、无字典。入口校验:dstCapacity < 0 → -1(上游 L2035 的
+   outputSize<0);srcSize < 0 防御性同报 -1(C 侧经 iend 下溢同样落入错误出口)。 */
+public func LZ4_decompress_safe(src: Array<UInt8>, srcSize: Int32, dst: Array<UInt8>,
+        dstCapacity: Int32): Int32 {
+    if (srcSize < 0 || dstCapacity < 0) {
+        return -1
+    }
+    return Int32(LZ4_decompress_generic(src, Int64(srcSize), dst, 0, Int64(dstCapacity),
+        false, 0, None<Array<UInt8>>, 0, 0))
 }

@@ -254,3 +254,11 @@ n=131072 mp=1.00 seed=7 mode=default size=524 xxh32=5fb89b06 xxh64=5d85b5212525a
 n=131072 mp=1.00 seed=7 mode=fast1 size=524 xxh32=5fb89b06 xxh64=5d85b5212525a475 file=block/253.lz4
 n=131072 mp=1.00 seed=7 mode=fast8 size=524 xxh32=5fb89b06 xxh64=5d85b5212525a475 file=block/254.lz4
 n=131072 mp=1.00 seed=7 mode=dest size=524 consumed=131072 xxh32=5fb89b06 xxh64=5d85b5212525a475 file=block/255.lz4
+n=0 mp=0.50 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/256.lz4
+n=1 mp=0.90 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/257.lz4
+n=255 mp=1.00 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/258.lz4
+n=4096 mp=0.00 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/259.lz4
+n=65535 mp=0.50 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/260.lz4
+n=65536 mp=0.90 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/261.lz4
+n=65537 mp=1.00 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/262.lz4
+n=131072 mp=0.00 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/263.lz4

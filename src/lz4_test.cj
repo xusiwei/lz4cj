@@ -736,3 +736,182 @@ func lz4CompressDestSizeReductionTest(): Unit {
     println("reduction golden: ${checked}/125 rows exact (matchCode reduction + hash clear paths)")
 }
 
+/*-************************************
+*  M2 leftover: tight-capacity golden rows (gen_golden.c mode=tight)
+**************************************/
+// tight rows of corpus/block_golden_ref.txt (rows 256..263): compress with
+// full bound first, then re-encode with dstCapacity = c-1. The encode is
+// deterministic, so the capacity-starved retry must bail out -> size=0.
+// (n, mpIndex, seed), seed always 0, mp cycles 0.5/0.9/1.0/0.0 over sizes
+let BLOCK_TIGHT_REF: Array<(Int64, Int64, UInt32)> = [
+    (0, 1, 0u32), (1, 2, 0u32), (255, 3, 0u32), (4096, 0, 0u32),
+    (65535, 1, 0u32), (65536, 2, 0u32), (65537, 3, 0u32), (131072, 0, 0u32),
+]
+
+@Test
+func lz4CompressTightGoldenTest(): Unit {
+    var checked = 0
+    for ((n, mpIdx, seed) in BLOCK_TIGHT_REF) {
+        let buf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(buf, n, BLOCK_MPS[mpIdx], 0.0, seed)
+        let bound = Int64(LZ4_compressBound(Int32(n)))
+        let out = Array<UInt8>(bound, {_ => 0u8})
+        let c = LZ4_compress_default(buf, Int32(n), out, Int32(bound))
+        @Assert(c > 0)
+        let tight = LZ4_compress_default(buf, Int32(n), out, c - 1)
+        if (tight != 0) {
+            println("TIGHT n=${n} mp=${BLOCK_MPS[mpIdx]} seed=${seed}: got ${tight} want 0")
+        }
+        @Assert(tight == 0)
+        checked += 1
+    }
+    @Assert(checked == 8)
+    println("tight golden: ${checked}/8 rows size=0")
+}
+
+/*-************************************
+*  M3 Task 1: LZ4_decompress_safe (golden + error semantics + roundtrip)
+**************************************/
+@Test
+func lz4DecompressGoldenTest(): Unit {
+    var decomp = 0
+    var destEmpty = 0
+    // default/fast rows: artifact decompresses to the full regenerated input
+    for ((n, mpIdx, seed, modeIdx, wantSize, want32, want64, fileRow) in BLOCK_REF) {
+        if (fileRow < 0) { continue }
+        let art = readBlockArtifact(fileRow)
+        @Assert(art.size == Int64(wantSize))
+        let u8art = Array<UInt8>(art.size, {i => UInt8(art[i])})
+        let buf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(buf, n, BLOCK_MPS[mpIdx], 0.0, seed)
+        let out = Array<UInt8>(n, {_ => 0u8})
+        let r = LZ4_decompress_safe(u8art, Int32(wantSize), out, Int32(n))
+        if (r != Int32(n)) {
+            println("DECOMP n=${n} mp=${BLOCK_MPS[mpIdx]} seed=${seed} mode=${modeIdx} row=${fileRow}: got ${r} want ${n}")
+        }
+        @Assert(r == Int32(n))
+        var eq = true
+        for (i in 0..n) {
+            if (out[i] != buf[i]) { eq = false; break }
+        }
+        if (!eq) { println("DECOMP BYTES differ row=${fileRow}") }
+        @Assert(eq)
+        decomp += 1
+    }
+    // dest rows: artifact decompresses to the consumed-prefix of the input
+    for ((n, mpIdx, seed, wantSize, wantConsumed, want32, want64, fileRow) in BLOCK_DEST_REF) {
+        if (fileRow < 0) { continue }
+        let art = readBlockArtifact(fileRow)
+        @Assert(art.size == Int64(wantSize))
+        let u8art = Array<UInt8>(art.size, {i => UInt8(art[i])})
+        if (wantSize == 0) {
+            // target<=0 failure rows: empty artifact, srcSize==0 -> -1 (L2068)
+            let d0 = Array<UInt8>(n, {_ => 0u8})
+            @Assert(LZ4_decompress_safe(u8art, 0, d0, Int32(n)) == -1)
+            destEmpty += 1
+            continue
+        }
+        let buf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(buf, n, BLOCK_MPS[mpIdx], 0.0, seed)
+        let out = Array<UInt8>(Int64(wantConsumed), {_ => 0u8})
+        let r = LZ4_decompress_safe(u8art, Int32(wantSize), out, wantConsumed)
+        if (r != wantConsumed) {
+            println("DECOMP-DEST n=${n} mp=${BLOCK_MPS[mpIdx]} seed=${seed} row=${fileRow}: got ${r} want ${wantConsumed}")
+        }
+        @Assert(r == wantConsumed)
+        var eq = true
+        for (i in 0..Int64(wantConsumed)) {
+            if (out[i] != buf[i]) { eq = false; break }
+        }
+        if (!eq) { println("DECOMP-DEST BYTES differ row=${fileRow}") }
+        @Assert(eq)
+        decomp += 1
+    }
+    @Assert(decomp == 206)
+    @Assert(destEmpty == 16)
+    println("decompress golden: ${decomp} artifacts byte-exact, ${destEmpty} empty artifacts -> -1")
+}
+
+@Test
+func lz4DecompressErrorSemanticsTest(): Unit {
+    let dst = Array<UInt8>(64, {_ => 0u8})
+    let src = Array<UInt8>(16, {_ => 0u8})
+    RDG_genBuffer(src, 16, 0.5, 0.0, 0u32)
+    // entry validation: upstream L2035 (outputSize<0 -> -1); srcSize<0 fails alike
+    @Assert(LZ4_decompress_safe(src, -1, dst, 64) == -1)
+    @Assert(LZ4_decompress_safe(src, 16, dst, -1) == -1)
+    // empty input (L2068) -> -1
+    @Assert(LZ4_decompress_safe(src, 0, dst, 64) == -1)
+    // outputSize==0 special cases (L2063-2067)
+    @Assert(LZ4_decompress_safe(src, 16, dst, 0) == -1)
+    let emptyBlock = Array<UInt8>(1, {_ => 0u8})
+    @Assert(LZ4_decompress_safe(emptyBlock, 1, dst, 0) == 0)
+    // handcrafted bad block: litLen nibble 15 but no extension byte ->
+    // read_variable_length limit -> error position encoding -(ip)-1 = -2
+    let badLitLen = Array<UInt8>(1, {_ => 0xF0u8})
+    @Assert(LZ4_decompress_safe(badLitLen, 1, dst, 64) == -2)
+    // literals declared (5) exceed remaining input (3) -> -(ip)-1 = -2
+    let badLit = Array<UInt8>(4, {_ => 0x41u8})
+    badLit[0] = 0x50u8
+    @Assert(LZ4_decompress_safe(badLit, 4, dst, 64) == -2)
+    // match offset outside buffers: offset=10 > 1 byte of history ->
+    // checkOffset error after offset read (ip=4) -> -(ip)-1 = -5
+    let badOffset = Array<UInt8>(12, {_ => 0u8})
+    badOffset[0] = 0x10u8
+    badOffset[1] = 0x41u8
+    badOffset[2] = 0x0Au8
+    @Assert(LZ4_decompress_safe(badOffset, 12, dst, 64) == -5)
+    // truncations of a real artifact (row 64: n=255 mp=0.0 seed=0, 257 bytes)
+    let art = readBlockArtifact(64)
+    @Assert(art.size == 257)
+    let full = Array<UInt8>(257, {i => UInt8(art[i])})
+    let out255 = Array<UInt8>(255, {_ => 0u8})
+    @Assert(LZ4_decompress_safe(full, 257, out255, 255) == 255)  // positive control
+    let cuts: Array<Int32> = [1, 2, 13, 64, 128, 200, 256]
+    for (cut in cuts) {
+        let trunc = Array<UInt8>(Int64(cut), {i => full[i]})
+        let r = LZ4_decompress_safe(trunc, cut, out255, 255)
+        if (r >= 0) { println("TRUNC cut=${cut}: got ${r}") }
+        @Assert(r < 0)
+    }
+    // dstCapacity too small for the final literal run -> negative
+    let out254 = Array<UInt8>(254, {_ => 0u8})
+    @Assert(LZ4_decompress_safe(full, 257, out254, 254) < 0)
+    // trailing garbage byte -> last-run exact-consumption check fails
+    let padded = Array<UInt8>(258, {i => if (i < 257) { full[i] } else { 0u8 } })
+    @Assert(LZ4_decompress_safe(padded, 258, out255, 255) < 0)
+    // corrupted extension byte (literal length inflated past input end)
+    let corrupt = Array<UInt8>(257, {i => full[i]})
+    corrupt[1] = 0xF1u8
+    @Assert(LZ4_decompress_safe(corrupt, 257, out255, 255) < 0)
+}
+
+@Test
+func lz4DecompressRoundtripTest(): Unit {
+    // 3 small inputs across table types and content shapes
+    let cases: Array<(Int64, Int64, UInt32)> = [(1, 3, 7u32), (255, 1, 0u32), (4096, 2, 7u32)]
+    for ((n, mpIdx, seed) in cases) {
+        let inBuf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(inBuf, n, BLOCK_MPS[mpIdx], 0.0, seed)
+        let bound = Int64(LZ4_compressBound(Int32(n)))
+        let comp = Array<UInt8>(bound, {_ => 0u8})
+        let c = LZ4_compress_default(inBuf, Int32(n), comp, Int32(bound))
+        @Assert(c > 0)
+        let out = Array<UInt8>(n, {_ => 0u8})
+        let r = LZ4_decompress_safe(comp, c, out, Int32(n))
+        @Assert(r == Int32(n))
+        for (i in 0..n) {
+            @Assert(out[i] == inBuf[i])
+        }
+    }
+    // constant-run input: exercises offset<8 incremental tables + long matches
+    let ones = Array<UInt8>(300, {_ => 0x5Au8})
+    let comp2 = Array<UInt8>(Int64(LZ4_compressBound(300)), {_ => 0u8})
+    let c2 = LZ4_compress_default(ones, 300, comp2, LZ4_compressBound(300))
+    @Assert(c2 > 0)
+    let out2 = Array<UInt8>(300, {_ => 0u8})
+    @Assert(LZ4_decompress_safe(comp2, c2, out2, 300) == 300)
+    for (i in 0..300) {
+        @Assert(out2[i] == 0x5Au8)
+    }
+}
