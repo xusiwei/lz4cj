@@ -40,13 +40,27 @@ public func LZ4_compressBound(inputSize: Int32): Int32 {
 *  Streaming state
 **************************************/
 /* 上游为裸缓冲 + memset 的流状态;仓颉侧改为类承载(设计 §4.4),
-   LZ4_STREAMSIZE/LZ4_sizeofState 保留为信息性常量。
-    字典字段(dictCtx/dictionary/dictSize)留待 M3 补齐。 */
+    LZ4_STREAMSIZE/LZ4_sizeofState 保留为信息性常量。
+    字典字段(dictionary/dictSize/dictCtx,上游 LZ4_stream_t_internal)M3b-T1
+    落位:dictBuf/dictStartIdx 为引用对(controller ruling:不拷贝,saveDict
+    显式拷贝);dictCtx 为外挂字典流(T3 的 usingDictCtx 消费)。 */
 public class LZ4_stream_t {
     internal var hashTable: Array<UInt32> = Array<UInt32>(16384, {_ => 0u32})
     internal var currentOffset: UInt32 = 0u32
     internal var tableType: Int32 = 0
+    internal var dictBuf: Option<Array<UInt8>> = None
+    internal var dictStartIdx: Int64 = 0
+    internal var dictSize: Int64 = 0
+    internal var dictCtx: Option<LZ4_stream_t> = None
 }
+
+/* 上游 tableType_t 枚举(lz4.c L726:{clearedTable=0, byPtr, byU32, byU16})。
+   byPtr(指针表)仅存在于 32 位平台 src>64KB 的场景,64 位构建不可达,
+   此处仅保序占位(prepareTable 的 byPtr 复位条件按上游保留)。 */
+internal const LZ4_TABLE_CLEARED: Int32 = 0
+internal const LZ4_TABLE_BYPTR: Int32 = 1
+internal const LZ4_TABLE_BYU32: Int32 = 2
+internal const LZ4_TABLE_BYU16: Int32 = 3
 
 public func LZ4_sizeofState(): Int32 {
     return LZ4_STREAMSIZE
@@ -59,8 +73,74 @@ public func LZ4_initStream(state: LZ4_stream_t): Int32 {
         i += 1
     }
     state.currentOffset = 0u32
-    state.tableType = 0
+    state.tableType = LZ4_TABLE_CLEARED
+    state.dictBuf = None
+    state.dictStartIdx = 0
+    state.dictSize = 0
+    state.dictCtx = None
     return 0
+}
+
+/* LZ4_createStream(lz4.c L1540-1549):分配 + initStream;仓颉由构造器
+   分配(GC 管理),语义等价。 */
+public func LZ4_createStream(): LZ4_stream_t {
+    let s = LZ4_stream_t()
+    LZ4_initStream(s)
+    return s
+}
+
+/* LZ4_freeStream(lz4.c L1584-1591):C 释放堆内存返回 0(支持 NULL);
+   仓颉无空引用、GC 回收,恒 0。 */
+public func LZ4_freeStream(s: LZ4_stream_t): Int32 {
+    return 0
+}
+
+/* LZ4_prepareTable(lz4.c L893-937):fastReset 家族的表保留决策。
+   5 个复位条件(任一命中即 memset 表 + currentOffset=0 + tableType=
+   clearedTable):tableType 不匹配 / byU16 且 currentOffset+inputSize
+   >= 0xFFFF / byU32 且 currentOffset > 1GB / 请求 byPtr / inputSize
+   >= 4KB;否则复用脏表。随后 byU32 且 currentOffset != 0 时加 64KB 间隔
+   (陈旧登记相对新位置必超过 DISTANCE_MAX,恒被 too-far 检查拒绝,
+   比清表更快);最后无条件清字典历史(dictCtx/dictBuf/dictSize)。
+   clearedTable 直通:上游信任"表全零"标记,不复位。
+   (unsigned)inputSize 以位模式转换复刻 C 的回绕语义。 */
+internal func LZ4_prepareTable(state: LZ4_stream_t, inputSize: Int64, tableType: Int32): Unit {
+    if (state.tableType != LZ4_TABLE_CLEARED) {                 /* L900 */
+        if (state.tableType != tableType                        /* L902 */
+            || ((tableType == LZ4_TABLE_BYU16)
+                && state.currentOffset + UInt32(inputSize & 0xFFFFFFFFi64) >= 0xFFFFu32)  /* L903 */
+            || ((tableType == LZ4_TABLE_BYU32)
+                && state.currentOffset > 0x40000000u32)         /* L904: 1 GB */
+            || tableType == LZ4_TABLE_BYPTR                     /* L905 */
+            || inputSize >= 4096) {                             /* L906: 4 KB */
+            var i: Int64 = 0
+            while (i < state.hashTable.size) {
+                state.hashTable[i] = 0u32
+                i += 1
+            }
+            state.currentOffset = 0u32
+            state.tableType = LZ4_TABLE_CLEARED
+        }                                                       /* else: 复用脏表 */
+    }
+    if (state.currentOffset != 0u32 && tableType == LZ4_TABLE_BYU32) {   /* L918 */
+        state.currentOffset += 65536u32                         /* L920: 64 KB gap */
+    }
+    state.dictCtx = None                                        /* L924-926: 清历史 */
+    state.dictBuf = None
+    state.dictStartIdx = 0
+    state.dictSize = 0
+}
+
+/* LZ4_resetStream(lz4.c L1573-1577):MEM_INIT 整个内部结构 = 全量再初始化
+   (与 initStream 等价,上游已弃用,推荐 initStream)。 */
+public func LZ4_resetStream(s: LZ4_stream_t): Unit {
+    LZ4_initStream(s)
+}
+
+/* LZ4_resetStream_fast(lz4.c L1579-1580):= LZ4_prepareTable(ctx, 0, byU32)。
+   非全量复位:byU32 同型小偏移状态复用表并加 64KB 间隔。 */
+public func LZ4_resetStream_fast(s: LZ4_stream_t): Unit {
+    LZ4_prepareTable(s, 0, LZ4_TABLE_BYU32)
 }
 
 /*-************************************
@@ -207,23 +287,34 @@ internal func lz4ClearHash(table: Array<UInt32>, h: UInt32, byU16: Bool): Unit {
 *  Compression core (lz4.c L939-1347, noDict paths)
 **************************************/
 /* LZ4_compress_generic_validated 的 noDict 移植:byU16/byU32 × outputDirective
-   (notLimited/limitedOutput/fillOutput,lz4.c L330-333)。C 的 const 参数宏展开改用
-   Int32 指令 + Bool 显式分支,语义逐行对照;fillOutput 专属分支(目标 dst 恰好填满,
-   读入 src 前缀):L994 提前失败、L1127-1131/L1156-1161 中途退回 last_literals、
-   L1198-1216 match 缩短 + 哈希清除、L1316-1320 lastRun 收缩。
-   返回 (压缩字节数, srcConsumed):consumed 上游仅在 fillOutput 下写出(L1340-1342),
-   此处统一返回 ip 终值(= anchor + lastRun,L1336,对非 fill 模式即完整 srcSize),
-   由调用方按模式取用。
-   全部位置为相对 src 基指针的 Int64 索引;one-shot 新态 startIndex=0、base=source
-   (L955-956),索引即 0 基偏移(controller ruling #3);hashTable 存 0 基索引。
-   goto _last_literals / _next_match 用标志位 + 标签循环重排,控制流等价。 */
+    (notLimited/limitedOutput/fillOutput,lz4.c L330-333)。C 的 const 参数宏展开改用
+    Int32 指令 + Bool 显式分支,语义逐行对照;fillOutput 专属分支(目标 dst 恰好填满,
+    读入 src 前缀):L994 提前失败、L1127-1131/L1156-1161 中途退回 last_literals、
+    L1198-1216 match 缩短 + 哈希清除、L1316-1320 lastRun 收缩。
+    返回 (压缩字节数, srcConsumed):consumed 上游仅在 fillOutput 下写出(L1340-1342),
+    此处统一返回 ip 终值(= anchor + lastRun,L1336,对非 fill 模式即完整 srcSize),
+    由调用方按模式取用。
+    位置模型:ip/matchPos 为相对 src 基指针的 Int64 索引;哈希表登记/查询的是
+    绝对索引 startIndex + i(L956: base = source - startIndex)——one-shot 新态
+    startIndex=0 即 0 基索引。表内绝对 matchIndex 映射回本块:matchPos =
+    matchIndex - startIndex(候选必 ≥ 0:fastReset 复用路径由 dictSmall 前缀界
+    过滤陈旧登记,byU32 复用由 64KB gap 后的 too-far 检查过滤,见 prepareTable)。
+    dictSmall(L973 prefixIdxLimit = startIndex - dictSize;fastReset byU16 复用
+    传入):matchIndex < prefixIdxLimit 的候选(陈旧登记与空槽 0)跳过。对
+    本 API 其拒收与全新状态下的失败 read32 比较输出等价(空槽 0 候选恒不命中:
+    首字节登记占据同哈希槽),输出恒与全新压缩一致——保真复刻仍按上游逐条件。
+    goto _last_literals / _next_match 用标志位 + 标签循环重排,控制流等价。 */
 internal func LZ4_compress_generic_noDict(
         state: LZ4_stream_t, src: CPointer<UInt8>, n: Int64,
         dst: CPointer<UInt8>, dstCapacity: Int64,
-        byU16: Bool, outputDirective: Int32, acceleration: Int64): (Int64, Int64) {
+        byU16: Bool, outputDirective: Int32, acceleration: Int64,
+        dictSmall: Bool): (Int64, Int64) {
     var ip: Int64 = 0                                  /* L953: ip = source */
     let startIndex: UInt32 = state.currentOffset       /* L955(one-shot 恒 0) */
-    /* L956: base = source - startIndex —— 索引为 startIndex 相对量,新态即 0 基 */
+    /* L973: prefixIdxLimit = startIndex - dictSize(dictSize 取入口值,
+       L1003 的 dictSize += inputSize 在其后;prepareTable 已清 0 → 复用路径
+       即 startIndex) */
+    let prefixIdxLimit: UInt32 = startIndex - UInt32(state.dictSize & 0xFFFFFFFFi64)
     var anchor: Int64 = 0                              /* L970 */
     let iend: Int64 = n                                /* L971 */
     let mflimitPlusOne: Int64 = iend - LZ4_MFLIMIT + 1 /* L972 */
@@ -239,10 +330,11 @@ internal func LZ4_compress_generic_noDict(
         return (0, 0)
     }
 
-    /* L999-1009: 更新上下文(dictSize 字段 M3 补;tableType 枚举值沿上游
-       {clearedTable=0, byPtr, byU32, byU16} → byU32=2 / byU16=3) */
+    /* L999-1009: 更新上下文(noDict 分支 dictSize += inputSize;tableType
+       枚举值沿上游 {clearedTable=0, byPtr, byU32, byU16} → byU32=2 / byU16=3) */
+    state.dictSize += n
     state.currentOffset = startIndex + UInt32(n)
-    state.tableType = if (byU16) { 3 } else { 2 }
+    state.tableType = if (byU16) { LZ4_TABLE_BYU16 } else { LZ4_TABLE_BYU32 }
 
     var runMain = true
     var goLastLiterals = false
@@ -261,20 +353,24 @@ internal func LZ4_compress_generic_noDict(
             var matchPos: Int64 = 0
             do {
                 let h: UInt32 = forwardH                /* L1055 */
-                let current: UInt32 = UInt32(forwardIp) /* L1056(0 基索引) */
+                let current: UInt32 = startIndex + UInt32(forwardIp)   /* L1056(绝对索引) */
                 let matchIndex: UInt32 = lz4GetIndexOnHash(state.hashTable, h, byU16)  /* L1057 */
                 ip = forwardIp                          /* L1060 */
-                forwardIp += step                      /* L1061 */
+                forwardIp += step                       /* L1061 */
                 step = searchMatchNb >> LZ4_skipTrigger /* L1062: step = searchMatchNb++ >> skipTrigger */
                 searchMatchNb += 1
                 if (forwardIp > mflimitPlusOne) {      /* L1064 */
                     goLastLiterals = true
                     break
                 }
-                matchPos = Int64(matchIndex)               /* L1091: match = base + matchIndex(noDict 单段) */
+                matchPos = Int64(matchIndex) - Int64(startIndex)   /* L1091: match = base + matchIndex */
                 forwardH = LZ4_hashPosition(src, forwardIp, byU16)      /* L1093 */
                 lz4PutIndexOnHash(state.hashTable, current, h, byU16)    /* L1094 */
-                /* L1097: dictIssue == noDictIssue,prefixIdxLimit 检查跳过 */
+                /* L1097: dictSmall —— matchIndex < prefixIdxLimit 的候选
+                   (陈旧登记与空槽 0)在有效区之外,跳过 */
+                if (dictSmall && matchIndex < prefixIdxLimit) {
+                    continue
+                }
                 /* L1099-1102: too far——byU16 豁免(DISTANCE_MAX==ABSOLUTE_MAX),
                    byU32 跳过 matchIndex + 65535 < current 的候选 */
                 if ((!byU16) && (matchIndex + LZ4_DISTANCE_MAX < current)) {
@@ -292,7 +388,8 @@ internal func LZ4_compress_generic_noDict(
                fillOutput 缩短 match 后清除越界登记的上界(L1204-1215) */
             let filledIp: Int64 = ip
 
-            /* Catch up(L1113-1118;noDict lowLimit = source → 索引 0,L997) */
+            /* Catch up(L1113-1118;noDict lowLimit = source → 索引 0,L997;
+               matchPos > 0 ⟺ 上游 match > source(绝对 matchIndex > startIndex)) */
             if ((matchPos > 0) && (LZ4_read8(src, ip - 1) == LZ4_read8(src, matchPos - 1))) {
                 do {
                     ip -= 1
@@ -402,19 +499,20 @@ internal func LZ4_compress_generic_noDict(
                     break
                 }
 
-                /* Fill table(L1244-1251):位置 ip-2 */
+                /* Fill table(L1244-1251):位置 ip-2(绝对索引,L1248 idx = (ip-2)-base) */
                 let hFill = LZ4_hashPosition(src, ip - 2, byU16)
-                lz4PutIndexOnHash(state.hashTable, UInt32(ip - 2), hFill, byU16)
+                lz4PutIndexOnHash(state.hashTable, startIndex + UInt32(ip - 2), hFill, byU16)
 
                 /* Test next position(L1253-1303,byU32/byU16 分支) */
                 let hNext = LZ4_hashPosition(src, ip, byU16)                  /* L1264 */
-                let current2: UInt32 = UInt32(ip)                             /* L1265 */
+                let current2: UInt32 = startIndex + UInt32(ip)                /* L1265(绝对索引) */
                 let matchIndex2: UInt32 = lz4GetIndexOnHash(state.hashTable, hNext, byU16)  /* L1266 */
                 lz4PutIndexOnHash(state.hashTable, current2, hNext, byU16)    /* L1292 */
-                matchPos = Int64(matchIndex2)                                  /* L1290: match = base + matchIndex */
-                /* L1294-1296:dictSmall 关;byU16 距离检查恒真(表内索引本就 < 65536),
-                   byU32 要求 matchIndex + 65535 >= current */
-                if ((byU16 || (matchIndex2 + LZ4_DISTANCE_MAX >= current2)) &&
+                matchPos = Int64(matchIndex2) - Int64(startIndex)             /* L1290: match = base + matchIndex */
+                /* L1294-1296:dictSmall 前缀界检查;byU16 距离检查恒真(表内索引
+                   本就 < 65536),byU32 要求 matchIndex + 65535 >= current */
+                if ((!dictSmall || matchIndex2 >= prefixIdxLimit) &&
+                        (byU16 || (matchIndex2 + LZ4_DISTANCE_MAX >= current2)) &&
                         (LZ4_readLE32(src, matchPos) == LZ4_readLE32(src, ip))) {
                     tokenIdx = op                                              /* L1297: token = op++ */
                     op += 1
@@ -474,7 +572,8 @@ internal func LZ4_compress_generic_noDict(
    指针上下文由公开 API 的单一 unsafe 块提供(指针三律)。 */
 internal func lz4CompressDispatch(state: LZ4_stream_t, src: CPointer<UInt8>, srcSize: Int64,
         dst: CPointer<UInt8>, dstCapacity: Int64,
-        byU16: Bool, outputDirective: Int32, acceleration: Int64): (Int64, Int64) {
+        byU16: Bool, outputDirective: Int32, acceleration: Int64,
+        dictSmall: Bool): (Int64, Int64) {
     if (srcSize < 0 || srcSize > Int64(LZ4_MAX_INPUT_SIZE)) {   /* L1369(无符号比较语义) */
         return (0, 0)
     }
@@ -486,32 +585,41 @@ internal func lz4CompressDispatch(state: LZ4_stream_t, src: CPointer<UInt8>, src
         return (1, 0)                                            /* L1376-1380(fillOutput consumed=0) */
     }
     return LZ4_compress_generic_noDict(state, src, srcSize, dst,
-        dstCapacity, byU16, outputDirective, acceleration)
+        dstCapacity, byU16, outputDirective, acceleration, dictSmall)
 }
 
-/* extState 公共尾部(lz4.c L1391-1412):加速度钳制 + 表型/输出模式选择 +
+/* extState 公共尾部(上游 L1391-1412 / L1423-1459 共形):加速度钳制 +
+   表型/输出模式选择;fastReset=true 时以 LZ4_prepareTable 替代全量 init
+   (L1433/1441/1447/1455),byU16 且复用后 currentOffset != 0 → dictSmall
+   (L1435-1439/1443-1447;byU32 分支恒 noDictIssue)。
    指针 acquire→压缩→release(单一 unsafe,无内部分配)。 */
 private func lz4CompressExtStateBody(state: LZ4_stream_t, src: Array<UInt8>, srcSize: Int32,
-        dst: Array<UInt8>, dstCapacity: Int32, acceleration: Int32): Int32 {
+        dst: Array<UInt8>, dstCapacity: Int32, acceleration: Int32, fastReset: Bool): Int32 {
     var accel: Int32 = acceleration
     if (accel < 1) {
-        accel = LZ4_ACCELERATION_DEFAULT                        /* L1395 */
+        accel = LZ4_ACCELERATION_DEFAULT                        /* L1395/L1428 */
     }
     if (accel > LZ4_ACCELERATION_MAX) {
-        accel = LZ4_ACCELERATION_MAX                            /* L1396 */
+        accel = LZ4_ACCELERATION_MAX                            /* L1396/L1429 */
     }
-    let byU16: Bool = Int64(srcSize) < LZ4_64Klimit             /* L1398(64 位:否则 byU32) */
-    let notLimited: Bool = dstCapacity >= LZ4_compressBound(srcSize)   /* L1397 */
+    let byU16: Bool = Int64(srcSize) < LZ4_64Klimit             /* L1398/L1433(64 位:否则 byU32) */
+    let notLimited: Bool = dstCapacity >= LZ4_compressBound(srcSize)   /* L1397/L1432 */
     let outputDirective: Int32 = if (notLimited) {
         LZ4_OUTPUT_NOT_LIMITED
     } else {
         LZ4_OUTPUT_LIMITED
     }
+    var dictSmall: Bool = false
+    if (fastReset) {
+        LZ4_prepareTable(state, Int64(srcSize),
+            if (byU16) { LZ4_TABLE_BYU16 } else { LZ4_TABLE_BYU32 })   /* L1433/1447 */
+        dictSmall = byU16 && state.currentOffset != 0u32        /* L1435/1443: if (ctx->currentOffset) */
+    }
     unsafe {
         let sh = acquireArrayRawData<UInt8>(src)
         let dh = acquireArrayRawData<UInt8>(dst)
         let (r, _) = lz4CompressDispatch(state, sh.pointer, Int64(srcSize), dh.pointer,
-            Int64(dstCapacity), byU16, outputDirective, Int64(accel))
+            Int64(dstCapacity), byU16, outputDirective, Int64(accel), dictSmall)
         releaseArrayRawData<UInt8>(sh)
         releaseArrayRawData<UInt8>(dh)
         return Int32(r)
@@ -524,16 +632,20 @@ private func lz4CompressExtStateBody(state: LZ4_stream_t, src: Array<UInt8>, src
 public func LZ4_compress_fast_extState(state: LZ4_stream_t, src: Array<UInt8>, srcSize: Int32,
         dst: Array<UInt8>, dstCapacity: Int32, acceleration: Int32): Int32 {
     LZ4_initStream(state)                                       /* L1393 */
-    return lz4CompressExtStateBody(state, src, srcSize, dst, dstCapacity, acceleration)
+    return lz4CompressExtStateBody(state, src, srcSize, dst, dstCapacity, acceleration, false)
 }
 
-/* 上游(L1423-1459)不调用 initStream,由 LZ4_prepareTable 依据 tableType/
-   currentOffset 决定是否清表并处理 64KB gap。M2 仅 one-shot(新构造或已 init 的
-   state):clearedTable → 不清表、currentOffset==0 → noDictIssue,与 extState 路径
-   完全一致;脏表复用的正确性属 M3 范畴,届时移植 prepareTable。 */
+/* 上游 L1423-1459:与 extState 的差异即"快复位"——不做全量 initStream,
+   由 LZ4_prepareTable 依据 tableType/currentOffset/inputSize 决定复用脏表
+   (byU16 且 currentOffset+inputSize < 0xFFFF 且 inputSize < 4KB)或清表,
+   复用路径以 dictSmall 前缀界拒绝陈旧登记(安全性必需:陈旧 matchIndex
+   映射回本块为负位置)。输出与全新状态压缩逐字节一致(空槽 0 候选在
+   全新模式下同样不可能通过 read32 比较),差异在状态演化:复用累积
+   currentOffset、保留脏表(golden fastreset 行的 off=/tt= 所锚定)。
+   M2 时期曾委托全量 init(等价性注释),本函数为该登记义务的履行。 */
 public func LZ4_compress_fast_extState_fastReset(state: LZ4_stream_t, src: Array<UInt8>,
         srcSize: Int32, dst: Array<UInt8>, dstCapacity: Int32, acceleration: Int32): Int32 {
-    return LZ4_compress_fast_extState(state, src, srcSize, dst, dstCapacity, acceleration)
+    return lz4CompressExtStateBody(state, src, srcSize, dst, dstCapacity, acceleration, true)
 }
 
 public func LZ4_compress_fast(src: Array<UInt8>, srcSize: Int32, dst: Array<UInt8>,
@@ -557,7 +669,7 @@ private func lz4CompressDestSizeInternal(state: LZ4_stream_t, src: Array<UInt8>,
         dst: Array<UInt8>, targetDstSize: Int32): (Int32, Int32) {
     LZ4_initStream(state)                                       /* L1492 */
     if (targetDstSize >= LZ4_compressBound(srcSize)) {          /* L1495 */
-        let c = lz4CompressExtStateBody(state, src, srcSize, dst, targetDstSize, 1)
+        let c = lz4CompressExtStateBody(state, src, srcSize, dst, targetDstSize, 1, false)
         if (c == 0) {
             return (0, srcSize)                                 /* srcSizePtr 未触碰 */
         }
@@ -568,7 +680,7 @@ private func lz4CompressDestSizeInternal(state: LZ4_stream_t, src: Array<UInt8>,
         let sh = acquireArrayRawData<UInt8>(src)
         let dh = acquireArrayRawData<UInt8>(dst)
         let (r, consumed) = lz4CompressDispatch(state, sh.pointer, Int64(srcSize), dh.pointer,
-            Int64(targetDstSize), byU16, LZ4_OUTPUT_FILL, 1)    /* L1499-1502,acceleration=1(L1525) */
+            Int64(targetDstSize), byU16, LZ4_OUTPUT_FILL, 1, false)   /* L1499-1502,acceleration=1(L1525) */
         releaseArrayRawData<UInt8>(sh)
         releaseArrayRawData<UInt8>(dh)
         if (r == 0) {

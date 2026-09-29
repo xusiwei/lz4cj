@@ -121,7 +121,7 @@ lz4cj/
    - `LZ4F_getFrameInfo(dctx, src, srcSizePtr)` → 返回 `(code: Int64, frameInfo: LZ4F_frameInfo_t, srcConsumed: Int64)`
    - `LZ4F_decompress(dctx, dst, src, srcSizePtr, dOptPtr)` → 返回 `(ret: Int64, srcConsumed: Int64, dstWritten: Int64)`
 2. **可 NULL 的结构体指针 → `Option<T>`**;其余指针一律映射为非空 `Array<UInt8>` 或类实例。
-3. **C 指针前移 → 具名可选参数 `offset!: Int64`(默认 0)**:用于 `XXH*_update` 等需要从缓冲中部继续的场景;后续 frame/流式 API 沿用此惯例。
+3. **C 指针前移 → 具名必传参数 `offset!: Int64`**:用于 `XXH*_update` 等需要从缓冲中部继续的场景;仓颉具名参数现无默认值语法,调用方显式传 0(台账措辞精确化:原"默认 0"表述不准);后续 frame/流式 API 沿用此惯例。
 4. **C 滚动解码指针 `dest` → `(dstBuf: Array<UInt8>, dstIdx: Int64)` 缓冲-位置对**(M3 流式解码确立):用于 `LZ4_decompress_safe_continue` 等滚动/流式解压 API。契约:调用方保证 `dstBuf[dstIdx-前缀, dstIdx)` 已持有先前解码内容(rolling 场景)或指向新缓冲区(缓冲切换场景)。C 侧 `lz4sd->prefixEnd == dest` 的指针相等分派,仓颉无引用同一性比较(`==` 为内容相等),以"滚动窗口内容等价"谓词实现(比较前缀末尾 `min(prefixSize, 65536)` 字节);状态内的 `prefixEnd`/`externalDict` 指针以 `(缓冲引用, 索引)` 对表达。后续 frame 解压的环缓冲路径沿用本规则。**等价性限定**:该内容等价替换对 extDictSize==0 的状态与同缓冲换位场景输出等价;存在一个窄分歧角——调用方中途把窗口字节复制到**不同** Array(同 idx、窗口字节相同)且状态仍有活跃外字典(extDictSize≠0)且块内 offset 深于前缀时,C(指针不等 → 换向)丢弃旧字典并报解码错误,本移植(滚动 doubleDict)保留旧字典而可能成功;需要在该角精确复刻 C 语义的调用方须经 `setStreamDecode` 重新注入字典。
 
 ### 4.4 状态对象模型
@@ -130,7 +130,7 @@ C 侧 opaque 上下文(堆分配 + 内部字段经由 `void*` 别名访问)统�
 
 | C 类型 | 仓颉类 | 内部对应 |
 |---|---|---|
-| `LZ4_stream_t`(hashTable[16384] + 字典区 + tableType) | `public class LZ4_stream_t` | `lz4.cj` |
+| `LZ4_stream_t`(hashTable[16384] + currentOffset/tableType + 字典区 dictionary/dictSize/dictCtx;字典字段 M3b-T1 补齐) | `public class LZ4_stream_t` | `lz4.cj` |
 | `LZ4_streamDecode_t`(字典环缓冲) | `public class LZ4_streamDecode_t` | `lz4.cj`(M3 落地;流式压缩状态迁入 `lz4_stream.cj` 时一并迁移) |
 | `LZ4_streamHC_t`(chainTable + next 优化区) | `public class LZ4_streamHC_t` | `lz4hc.cj` |
 | `LZ4F_cctx` / `LZ4F_dctx` | `public class LZ4F_cctx` / `LZ4F_dctx` | `lz4frame*.cj` |
@@ -143,7 +143,7 @@ C 中"用户提供裸缓冲当状态"的 API(`LZ4_compress_fast_extState(void* s
 **block 压缩/解压(`lz4.h`,非弃用全量)**:
 
 - 版本:`LZ4_versionNumber`、`LZ4_versionString`
-- 简单压缩:`LZ4_compress_default`、`LZ4_compress_fast`、`LZ4_compress_fast_extState`、`LZ4_compress_fast_extState_fastReset`、`LZ4_compress_destSize`、`LZ4_compressBound`
+- 简单压缩:`LZ4_compress_default`、`LZ4_compress_fast`、`LZ4_compress_fast_extState`、`LZ4_compress_fast_extState_fastReset`、`LZ4_compress_destSize`、`LZ4_compressBound`、`LZ4_compress_destSize_extState`(M2 清单漏记;M3b-T4 落地,controller ruling)
 - 解压:`LZ4_decompress_safe`、`LZ4_decompress_safe_partial`、`LZ4_decompress_safe_usingDict`、`LZ4_decompress_safe_partial_usingDict`
 - 流式压缩:`LZ4_createStream`、`LZ4_freeStream`、`LZ4_resetStream`、`LZ4_resetStream_fast`、`LZ4_initStream`、`LZ4_loadDict`、`LZ4_loadDictSlow`、`LZ4_attach_dictionary`、`LZ4_compress_fast_continue`、`LZ4_saveDict`
 - 流式解压:`LZ4_createStreamDecode`、`LZ4_freeStreamDecode`、`LZ4_setStreamDecode`、`LZ4_decoderRingBufferSize`、`LZ4_decompress_safe_continue`

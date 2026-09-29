@@ -2292,3 +2292,300 @@ func lz4DecompressExtDictSpanningTest(): Unit {
     @Assert(LZ4_decompress_safe_partial_usingDict(s5, -1, d, 16, 8, dict, 8) == -1)
     println("extDict spanning: fast/safe loops + partial clamp + errors pinned")
 }
+
+/*-************************************
+*  M3b Task 1: streaming state family + real prepareTable
+**************************************/
+// fastreset rows of corpus/block_golden_ref.txt (rows 300..309): 5 same-stream
+// 2-block scenarios via LZ4_compress_fast_extState_fastReset (accel=1,
+// dstCapacity=compressBound => notLimited). seq=0 runs on a fresh stream
+// (clearedTable) => byte-equal to default mode (regression anchor, also
+// hard-verified C-side); seq=1 runs on the dirty table: byU16 reuse
+// (scenarios 0/1: dictSmall candidate rejection) or full reset per
+// LZ4_prepareTable conditions (inputSize>=4KB / 0xFFFF overflow / type
+// switch). off/tt = post-compress C state (currentOffset/tableType): reuse
+// accumulates off (301: 2048+2048, 303: 200+3000), reset restarts it; the
+// OUTPUT is always fresh-identical for this API (empty/zero hash slots can
+// never yield an accepted candidate in either mode => dictSmall rejection is
+// output-neutral), so off/tt is what discriminates the real prepareTable
+// path from full re-init. Blocks are self-contained; each row round-trips
+// standalone.
+// (n, mp, seed, seq, size, xxh32, xxh64, off, tt, fileRowIdx)
+let FASTRESET_REF: Array<(Int64, Float64, UInt32, Int64, Int32, UInt32, UInt64, UInt32, Int32, Int64)> = [
+    (2048, 0.5, 401u32, 0, 245, 0x79f2f5c2u32, 0xb04cc6d2fe07cab4u64, 2048u32, 3, 300),
+    (2048, 0.9, 402u32, 1, 269, 0x86da8958u32, 0xfeef48dd2b8947adu64, 4096u32, 3, 301),
+    (200, 1.0, 403u32, 0, 11, 0x7e995678u32, 0x23f8c73f45824688u64, 200u32, 3, 302),
+    (3000, 0.5, 404u32, 1, 1687, 0x80098d4fu32, 0x7ffa125d2e2e2614u64, 3200u32, 3, 303),
+    (1024, 0.9, 405u32, 0, 122, 0x0d3d37efu32, 0x61ca7f6297714bffu64, 1024u32, 3, 304),
+    (4096, 0.0, 406u32, 1, 4114, 0xb46053f8u32, 0x67ff9eca3546d736u64, 4096u32, 3, 305),
+    (40000, 0.9, 407u32, 0, 4602, 0xb6ac7687u32, 0x3862d95ca1eed5eeu64, 40000u32, 3, 306),
+    (40000, 0.5, 408u32, 1, 21787, 0x73f2f1eeu32, 0xc95a9858d8838cb1u64, 40000u32, 3, 307),
+    (65547, 0.9, 409u32, 0, 6254, 0x29bfa032u32, 0x1abb56a0104e3eedu64, 65547u32, 2, 308),
+    (2048, 0.5, 410u32, 1, 1588, 0xc3d2274au32, 0xaaf6504ed6a5e26bu64, 2048u32, 3, 309),
+]
+
+@Test
+func lz4CompressFastResetGoldenTest(): Unit {
+    var checked = 0
+    var anchors = 0
+    var fileCompared = 0
+    // one stream per scenario; fresh stream == LZ4_createStream semantics
+    // (allocation + initStream), exercised via the constructor here
+    var st: Option<LZ4_stream_t> = None
+    for ((n, mp, seed, seq, wantSize, want32, want64, wantOff, wantTt, fileRow) in FASTRESET_REF) {
+        if (seq == 0) {
+            let s = LZ4_stream_t()
+            @Assert(LZ4_initStream(s) == 0)
+            st = Some(s)
+        }
+        let stream = st.getOrThrow()
+        let buf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(buf, n, mp, 0.0, seed)
+        let bound = Int64(LZ4_compressBound(Int32(n)))
+        let out = Array<UInt8>(bound, {_ => 0u8})
+        let c = LZ4_compress_fast_extState_fastReset(stream, buf, Int32(n), out, Int32(bound), 1)
+        if (c != wantSize) {
+            println("FASTRESET n=${n} mp=${mp} seed=${seed} seq=${seq}: got ${c} want ${wantSize}")
+        }
+        @Assert(c == wantSize)
+        // post-compress state must match the C snapshot (reuse vs reset)
+        if (stream.currentOffset != wantOff || stream.tableType != wantTt) {
+            println("STATE n=${n} seq=${seq}: got off=${stream.currentOffset} tt=${stream.tableType} want off=${wantOff} tt=${wantTt}")
+        }
+        @Assert(stream.currentOffset == wantOff)
+        @Assert(stream.tableType == wantTt)
+        let got32 = XXH32(out, Int64(c), 0u32)
+        let got64 = XXH64(out, Int64(c), 0u64)
+        if (got32 != want32 || got64 != want64) {
+            println("DIGEST n=${n} mp=${mp} seed=${seed} seq=${seq} size=${c}: got ${blkHex32(got32)}/${blkHex64(got64)} want ${blkHex32(want32)}/${blkHex64(want64)}")
+        }
+        @Assert(got32 == want32)
+        @Assert(got64 == want64)
+        if (seq == 0) {
+            // regression anchor: fresh-state fastReset == plain default mode
+            let ref = Array<UInt8>(bound, {_ => 0u8})
+            let d = LZ4_compress_default(buf, Int32(n), ref, Int32(bound))
+            @Assert(d == c)
+            var eq = d == c
+            for (i in 0..Int64(c)) {
+                if (ref[i] != out[i]) { eq = false; break }
+            }
+            if (!eq) { println("ANCHOR n=${n} mp=${mp} seed=${seed}: fastReset != default") }
+            @Assert(eq)
+            anchors += 1
+        }
+        // self-containment: standalone decode must round-trip (dictSmall
+        // rejects stale candidates => no cross-block offsets)
+        let dec = Array<UInt8>(n, {_ => 0u8})
+        @Assert(LZ4_decompress_safe(out, Int32(c), dec, Int32(n)) == Int32(n))
+        var rt = true
+        for (i in 0..n) {
+            if (dec[i] != buf[i]) { rt = false; break }
+        }
+        @Assert(rt)
+        // byte-exact comparison against the C-generated artifact
+        let art = readBlockArtifact(fileRow)
+        @Assert(art.size == Int64(c))
+        var eq = art.size == Int64(c)
+        for (i in 0..Int64(c)) {
+            if (UInt8(art[i]) != out[i]) { eq = false; break }
+        }
+        if (!eq) { println("BYTES differ n=${n} seq=${seq} row=${fileRow}") }
+        @Assert(eq)
+        fileCompared += 1
+        checked += 1
+    }
+    @Assert(checked == 10)
+    @Assert(anchors == 5)
+    @Assert(fileCompared == 10)
+    println("fastreset golden: ${checked}/10 rows exact (${anchors} fresh-state anchors = default mode)")
+}
+
+// helper: mark the table dirty with sentinels and verify
+private func dirtyTable(st: LZ4_stream_t): Unit {
+    st.hashTable[0] = 0xDEADBEEFu32
+    st.hashTable[1] = 0xCAFEBABEu32
+    st.hashTable[16383] = 0x0BADF00Du32
+}
+
+private func tableIsZero(st: LZ4_stream_t): Bool {
+    for (i in 0..st.hashTable.size) {
+        if (st.hashTable[i] != 0u32) { return false }
+    }
+    return true
+}
+
+private func tableIsDirty(st: LZ4_stream_t): Bool {
+    return st.hashTable[0] == 0xDEADBEEFu32 && st.hashTable[16383] == 0x0BADF00Du32
+}
+
+// helper: set all dictionary fields non-trivial
+private func dirtyDict(st: LZ4_stream_t): Unit {
+    st.dictBuf = Some(Array<UInt8>(8, {_ => 7u8}))
+    st.dictStartIdx = 5
+    st.dictSize = 100
+    st.dictCtx = Some(LZ4_stream_t())
+}
+
+private func dictIsClear(st: LZ4_stream_t): Bool {
+    return st.dictBuf.isNone() && st.dictStartIdx == 0 && st.dictSize == 0 && st.dictCtx.isNone()
+}
+
+@Test
+func lz4PrepareTableTest(): Unit {
+    // upstream tableType_t enum (lz4.c L726: {clearedTable=0, byPtr, byU32, byU16})
+    @Assert(LZ4_TABLE_CLEARED == 0 && LZ4_TABLE_BYPTR == 1 && LZ4_TABLE_BYU32 == 2 && LZ4_TABLE_BYU16 == 3)
+
+    // condition 1: tableType mismatch (L902) -> reset
+    let st = LZ4_stream_t()
+    dirtyTable(st)
+    st.currentOffset = 100u32
+    st.tableType = LZ4_TABLE_BYU16
+    LZ4_prepareTable(st, 50, LZ4_TABLE_BYU32)
+    @Assert(tableIsZero(st) && st.currentOffset == 0u32 && st.tableType == LZ4_TABLE_CLEARED)
+
+    // condition 2: byU16 currentOffset+inputSize >= 0xFFFF (L903) -> reset
+    dirtyTable(st)
+    st.currentOffset = 60000u32
+    st.tableType = LZ4_TABLE_BYU16
+    LZ4_prepareTable(st, 10000, LZ4_TABLE_BYU16)
+    @Assert(tableIsZero(st) && st.currentOffset == 0u32 && st.tableType == LZ4_TABLE_CLEARED)
+    // ... and the non-trigger: small offset + small input reuses (no 64KB gap for byU16)
+    dirtyTable(st)
+    st.currentOffset = 100u32
+    st.tableType = LZ4_TABLE_BYU16
+    LZ4_prepareTable(st, 200, LZ4_TABLE_BYU16)
+    @Assert(tableIsDirty(st) && st.currentOffset == 100u32 && st.tableType == LZ4_TABLE_BYU16)
+
+    // condition 3: byU32 currentOffset > 1 GB (L904) -> reset
+    dirtyTable(st)
+    st.currentOffset = 0x40000001u32
+    st.tableType = LZ4_TABLE_BYU32
+    LZ4_prepareTable(st, 100, LZ4_TABLE_BYU32)
+    @Assert(tableIsZero(st) && st.currentOffset == 0u32 && st.tableType == LZ4_TABLE_CLEARED)
+    // boundary: currentOffset == 1 GB is NOT > 1 GB -> reuse + 64KB gap (L918-920)
+    dirtyTable(st)
+    st.currentOffset = 0x40000000u32
+    st.tableType = LZ4_TABLE_BYU32
+    LZ4_prepareTable(st, 100, LZ4_TABLE_BYU32)
+    @Assert(tableIsDirty(st) && st.currentOffset == 0x40010000u32 && st.tableType == LZ4_TABLE_BYU32)
+
+    // condition 4: requested tableType == byPtr (L905) -> reset (term kept for
+    // fidelity; our 64-bit core never requests byPtr)
+    dirtyTable(st)
+    st.currentOffset = 10u32
+    st.tableType = LZ4_TABLE_BYU16
+    LZ4_prepareTable(st, 10, LZ4_TABLE_BYPTR)
+    @Assert(tableIsZero(st) && st.currentOffset == 0u32 && st.tableType == LZ4_TABLE_CLEARED)
+
+    // condition 5: inputSize >= 4 KB (L906) -> reset
+    dirtyTable(st)
+    st.currentOffset = 10u32
+    st.tableType = LZ4_TABLE_BYU16
+    LZ4_prepareTable(st, 4096, LZ4_TABLE_BYU16)
+    @Assert(tableIsZero(st) && st.currentOffset == 0u32 && st.tableType == LZ4_TABLE_CLEARED)
+    // non-trigger: 4095 reuses
+    dirtyTable(st)
+    st.currentOffset = 10u32
+    st.tableType = LZ4_TABLE_BYU16
+    LZ4_prepareTable(st, 4095, LZ4_TABLE_BYU16)
+    @Assert(tableIsDirty(st) && st.currentOffset == 10u32 && st.tableType == LZ4_TABLE_BYU16)
+
+    // clearedTable passthrough (L900): tableType == clearedTable skips the
+    // reset block entirely (C trusts the marker; a dirty table stays dirty)
+    dirtyTable(st)
+    st.currentOffset = 0u32
+    st.tableType = LZ4_TABLE_CLEARED
+    LZ4_prepareTable(st, 100, LZ4_TABLE_BYU16)
+    @Assert(tableIsDirty(st) && st.currentOffset == 0u32 && st.tableType == LZ4_TABLE_CLEARED)
+
+    // 64KB gap only for byU32 with currentOffset != 0 (L918-920): reset path
+    // leaves currentOffset 0 -> no gap
+    dirtyTable(st)
+    st.currentOffset = 5000u32
+    st.tableType = LZ4_TABLE_BYU32
+    LZ4_prepareTable(st, 5000, LZ4_TABLE_BYU32)   // inputSize >= 4KB -> reset
+    @Assert(st.currentOffset == 0u32)             // no gap after reset
+
+    // dictionary history cleared unconditionally (L924-926), reset and reuse paths
+    dirtyTable(st)
+    st.currentOffset = 100u32
+    st.tableType = LZ4_TABLE_BYU16
+    dirtyDict(st)
+    LZ4_prepareTable(st, 200, LZ4_TABLE_BYU16)    // reuse path
+    @Assert(dictIsClear(st))
+    dirtyTable(st)
+    st.currentOffset = 10u32
+    st.tableType = LZ4_TABLE_BYU16
+    dirtyDict(st)
+    LZ4_prepareTable(st, 4096, LZ4_TABLE_BYU16)   // reset path
+    @Assert(dictIsClear(st))
+    st.currentOffset = 0u32
+    st.tableType = LZ4_TABLE_CLEARED
+    dirtyDict(st)
+    LZ4_prepareTable(st, 100, LZ4_TABLE_BYU16)    // cleared passthrough
+    @Assert(dictIsClear(st))
+    println("prepareTable: 5 reset conditions + reuse/gap/dict-clear pinned")
+}
+
+@Test
+func lz4ResetStreamTest(): Unit {
+    // LZ4_resetStream (L1573-1577): MEM_INIT of the whole internal state =
+    // full re-init semantics (== initStream)
+    let st = LZ4_stream_t()
+    dirtyTable(st)
+    st.currentOffset = 12345u32
+    st.tableType = LZ4_TABLE_BYU16
+    dirtyDict(st)
+    LZ4_resetStream(st)
+    @Assert(tableIsZero(st) && st.currentOffset == 0u32 && st.tableType == LZ4_TABLE_CLEARED)
+    @Assert(dictIsClear(st))
+
+    // LZ4_resetStream_fast (L1579-1580) = LZ4_prepareTable(ctx, 0, byU32):
+    // on a byU32 state with small currentOffset it REUSES the table and
+    // adds the 64KB gap (it is NOT a full reset)
+    let st2 = LZ4_stream_t()
+    dirtyTable(st2)
+    st2.currentOffset = 100u32
+    st2.tableType = LZ4_TABLE_BYU32
+    dirtyDict(st2)
+    LZ4_resetStream_fast(st2)
+    @Assert(tableIsDirty(st2) && st2.currentOffset == 100u32 + 65536u32 && st2.tableType == LZ4_TABLE_BYU32)
+    @Assert(dictIsClear(st2))
+
+    // on a byU16 state the byU32 request mismatches -> full reset
+    dirtyTable(st2)
+    st2.currentOffset = 100u32
+    st2.tableType = LZ4_TABLE_BYU16
+    LZ4_resetStream_fast(st2)
+    @Assert(tableIsZero(st2) && st2.currentOffset == 0u32 && st2.tableType == LZ4_TABLE_CLEARED)
+
+    // on a FRESH state both variants are equivalent (all fields stay zero)
+    let st3 = LZ4_stream_t()
+    LZ4_resetStream_fast(st3)
+    @Assert(tableIsZero(st3) && st3.currentOffset == 0u32 && st3.tableType == LZ4_TABLE_CLEARED)
+    @Assert(dictIsClear(st3))
+    let st4 = LZ4_stream_t()
+    LZ4_resetStream(st4)
+    @Assert(tableIsZero(st4) && st4.currentOffset == 0u32 && st4.tableType == LZ4_TABLE_CLEARED)
+    println("resetStream: full re-init vs prepareTable(0, byU32) semantics pinned")
+}
+
+@Test
+func lz4CreateFreeStreamTest(): Unit {
+    // LZ4_createStream (L1540-1549): allocation + initStream -> fresh state
+    let s = LZ4_createStream()
+    @Assert(tableIsZero(s) && s.currentOffset == 0u32 && s.tableType == LZ4_TABLE_CLEARED)
+    @Assert(dictIsClear(s))
+    // smoke: compress through the created stream (fastReset then plain)
+    let buf = Array<UInt8>(512, {_ => 0u8})
+    RDG_genBuffer(buf, 512, 0.9, 0.0, 501u32)
+    let bound = Int64(LZ4_compressBound(512))
+    let out = Array<UInt8>(bound, {_ => 0u8})
+    let c1 = LZ4_compress_fast_extState_fastReset(s, buf, 512, out, Int32(bound), 1)
+    @Assert(c1 > 0)
+    @Assert(s.currentOffset == 512u32 && s.tableType == LZ4_TABLE_BYU16)
+    // LZ4_freeStream (L1584-1591): returns 0 (C frees; Cangjie GC reclaims)
+    @Assert(LZ4_freeStream(s) == 0)
+    println("createStream/freeStream smoke: fresh state + roundtrip + free=0")
+}

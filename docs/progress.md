@@ -35,9 +35,9 @@
 ## 遗留事项台账(归属里程碑)
 
 - [ ] manifest `#` 行解析侧守卫(gen_golden.sh 已校验恰好 4 条;仓颉测试目前嵌常量不解析)→ **M3b 消费者要求**
-- [ ] `LZ4_compress_destSize_extState` 归属确认:lz4.h 公开 API(两 ref 均有),设计 §4.5 M2 清单漏记 → **M3b 纳入或明确排除并回写设计**
+- [x] ~~`LZ4_compress_destSize_extState` 归属确认:lz4.h 公开 API(两 ref 均有),设计 §4.5 M2 清单漏记~~(M3b-T1 回写 §4.5:纳入 M3b-T4 落地)
 - [ ] spanning/dest 对抗探针脚本入库(现仅嵌入常量,脚本在 /tmp 已失)→ **M3b 下次需要 C 探针时一并补**
-- [ ] design.md §4.3 规则 2 "默认 0" 措辞精确化:`offset!` 实为必传具名参数,无默认值 → **M3b 文档批次**
+- [x] ~~design.md §4.3 "默认 0" 措辞精确化:`offset!` 实为必传具名参数,无默认值~~(M3b-T1 文档批次;注:台账原记"规则 2",实际位于 §4.3 规则 3)
 - [ ] RDG_genBuffer 等测试支撑代码位于 src/ 导致 lib 构建 unused 警告(结构性)→ **M8 发布前评估**(移 *_test.cj 约定或保持)
 - [ ] fast 解压路径字面密集输入 ~0.85x(指针循环 wildCopy 未继承 C SIMD 优势)→ **M7 bench 复评**,劣化再优化
 - [x] ~~CHANGELOG M3a 计时笔误~~(0.3.1 条目修正)
