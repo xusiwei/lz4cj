@@ -529,7 +529,7 @@ public func LZ4_compress_fast_extState(state: LZ4_stream_t, src: Array<UInt8>, s
 
 /* 上游(L1423-1459)不调用 initStream,由 LZ4_prepareTable 依据 tableType/
    currentOffset 决定是否清表并处理 64KB gap。M2 仅 one-shot(新构造或已 init 的
-   state):clearedTable → 不清表、   currentOffset==0 → noDictIssue,与 extState 路径
+   state):clearedTable → 不清表、currentOffset==0 → noDictIssue,与 extState 路径
    完全一致;脏表复用的正确性属 M3 范畴,届时移植 prepareTable。 */
 public func LZ4_compress_fast_extState_fastReset(state: LZ4_stream_t, src: Array<UInt8>,
         srcSize: Int32, dst: Array<UInt8>, dstCapacity: Int32, acceleration: Int32): Int32 {
@@ -579,8 +579,8 @@ private func lz4CompressDestSizeInternal(state: LZ4_stream_t, src: Array<UInt8>,
 }
 
 /* LZ4_compress_destSize(lz4.c L1515-1531):压缩 src 前缀直至产出恰好不超过
-    targetDstSize 的块;返回 (压缩字节数, srcConsumed)。失败(target ≤ 0 等)
-    返回 (0, srcSize)(C 返回 0 且 *srcSizePtr 保持调用方初值)。 */
+   targetDstSize 的块;返回 (压缩字节数, srcConsumed)。失败(target ≤ 0 等)
+   返回 (0, srcSize)(C 返回 0 且 *srcSizePtr 保持调用方初值)。 */
 public func LZ4_compress_destSize(src: Array<UInt8>, srcSize: Int32, dst: Array<UInt8>,
         targetDstSize: Int32): (Int32, Int32) {
     let ctx = LZ4_stream_t()                                    /* L1521-1522: 栈上临时 ctx */
@@ -631,10 +631,10 @@ internal func lz4ReadVariableLength(src: CPointer<UInt8>, ip: Int64, ilimit: Int
 
 /* LZ4_decompress_generic 的指针循环体(safe decode loop,L2226-2454)。
    (buf, idx) 位置模型:src/dst 以基指针 + Int64 索引表达;lowPrefixIdx 为
-   dst 同缓冲内前缀起点(withPrefix64k 时 < dstIdx);dictIsExtDict 时
+   dst 同缓冲内前缀起点(withPrefix64k 时前缀 ≥ 65535 字节);dictIsExtDict 时
    dictP/dictStartIdx/dictSize 表达外字典(dictEnd = dictStartIdx + dictSize)。
-   dict_directive 的位置编码:noDict = 低前缀与输出重合且无外字典;
-   withPrefix64k = 无外字典但 lowPrefixIdx < dstIdx;usingExtDict = dictIsExtDict。
+   dict_directive 的位置编码:noDict = 无外字典(小前缀或无前缀,守卫生效);
+   withPrefix64k = 无外字典且前缀 ≥ 65535;usingExtDict = dictIsExtDict。
    _output_error 以 `return -(ip) - 1` 直接实现(L2462);成功返回输出字节数。
    T3 将在 L2074-2222 分派点插入 fast 解码循环(outputSize ≥
    FASTLOOP_SAFE_DISTANCE 时走 fast 路径),本函数即其 safe_decode 落点。 */
@@ -651,8 +651,14 @@ private func lz4DecompressGenericBody(
     let checkOffset: Bool = dictSize < 65536                     /* L2046 */
     let shortiend: Int64 = iend - 14 - 2                         /* L2050:maxLL+offset */
     let shortoend: Int64 = oend - 14 - 18                        /* L2051:maxLL+maxML */
-    /* withPrefix64k:捷径分支 L2155/L2259 的字典指令豁免(位置模型编码) */
-    let withPrefix64k: Bool = (!dictIsExtDict) && (lowPrefixIdx < dstIdx)
+    /* withPrefix64k:捷径分支 L2155/L2259 的字典指令豁免。上游仅在缓冲内
+       前缀 ≥ 64KB-1 时以 withPrefix64k 实例化(lz4.c:2502 lowPrefix = dest-64KB;
+       L2742-2747:dictSize ≥ 64KB-1 → withPrefix64k,小前缀走 withSmallPrefix
+       (L2523-2529)仍持 noDict 守卫)。空集豁免的数学依据:offset ≤ 65535(u16),
+       match = op - offset ≥ dstIdx - 65535,故 dstIdx - lowPrefixIdx ≥ 65535 时
+       match ≥ lowPrefixIdx 恒真——豁免纯为省分支;小前缀下合法 offset 可指向
+       lowPrefixIdx 之前,守卫必须生效。T3 在 L2155 等价位点需同样纪律。 */
+    let withPrefix64k: Bool = (!dictIsExtDict) && (dstIdx - lowPrefixIdx >= Int64(LZ4_DISTANCE_MAX))
 
     /* Special cases(L2063-2068;L2062 断言 lowPrefix ≤ op 由模型保证) */
     if (outputSize == 0) {

@@ -915,3 +915,55 @@ func lz4DecompressRoundtripTest(): Unit {
         @Assert(out2[i] == 0x5Au8)
     }
 }
+
+/*-************************************
+*  withPrefix64k guard-exemption condition (review fix)
+**************************************/
+// The shortcut's unguarded 18-byte match copy (upstream L2257-2259) may only
+// bypass `match >= lowPrefix` when the in-buffer prefix is >= 65535 bytes
+// (lz4.c:2502, L2742-2747): then offset <= 65535 (u16) implies
+// match = op - offset >= dstIdx - 65535 >= lowPrefix, so the exemption is
+// mathematically vacuous. Small prefixes keep the guard (upstream
+// withSmallPrefix, L2523-2529). These cases drive the internal generic
+// directly since LZ4_decompress_safe is always noDict.
+@Test
+func lz4DecompressPrefixGuardConditionTest(): Unit {
+    // Small prefix (16 bytes): offset pointing below lowPrefix must error.
+    // Shortcut-path variant (srcSize 20 -> ip < shortiend): match = -5
+    // rejected by the guard, falls to _copy_match checkOffset -> -(ip)-1 = -8.
+    let dstA = Array<UInt8>(64, {i => if (i < 16) { 0xEEu8 } else { 0u8 }})
+    var srcA = Array<UInt8>(20, {_ => 0u8})
+    srcA[0] = 0x40u8                                // litLen 4, matchLen 0 (+4)
+    srcA[1] = 0x61u8; srcA[2] = 0x62u8; srcA[3] = 0x63u8; srcA[4] = 0x64u8
+    srcA[5] = 0x19u8; srcA[6] = 0x00u8              // offset 25 > 20 bytes of history
+    let rA = LZ4_decompress_generic(srcA, 20, dstA, 16, 48, false, 0, None<Array<UInt8>>, 0, 0)
+    @Assert(rA == -8)
+    // Main-path variant (srcSize 13 -> shortcut inactive): offset 21,
+    // match = -1 -> checkOffset error at ip=7 -> -8.
+    let dstA2 = Array<UInt8>(64, {i => if (i < 16) { 0xEEu8 } else { 0u8 }})
+    let srcA2 = Array<UInt8>(13, {_ => 0u8})
+    srcA2[0] = 0x40u8
+    srcA2[1] = 0x61u8; srcA2[2] = 0x62u8; srcA2[3] = 0x63u8; srcA2[4] = 0x64u8
+    srcA2[5] = 0x15u8; srcA2[6] = 0x00u8            // offset 21 > 20 bytes of history
+    let rA2 = LZ4_decompress_generic(srcA2, 13, dstA2, 16, 48, false, 0, None<Array<UInt8>>, 0, 0)
+    @Assert(rA2 == -8)
+    // Large prefix (65535 bytes): the exemption legitimately applies and a
+    // prefix-referencing match decodes through the shortcut's fast copy.
+    let prefixSize: Int64 = 65535
+    let dstB = Array<UInt8>(prefixSize + 64, {i => UInt8(i & 0xFF)})
+    var srcB = Array<UInt8>(26, {_ => 0u8})
+    srcB[0] = 0x40u8                                // litLen 4, matchLen 0 (+4)
+    srcB[1] = 0x57u8; srcB[2] = 0x58u8; srcB[3] = 0x59u8; srcB[4] = 0x5Au8   // W X Y Z
+    srcB[5] = 0xFFu8; srcB[6] = 0xFFu8              // offset 65535 -> match = prefix[4]
+    srcB[7] = 0xF0u8; srcB[8] = 0x02u8              // last run: litLen 15+2 = 17
+    for (i in 0..17) {
+        srcB[9 + i] = UInt8(0x30 + (i % 10))        // '0'..'9' pattern
+    }
+    let rB = LZ4_decompress_generic(srcB, 26, dstB, prefixSize, 64, false, 0, None<Array<UInt8>>, 0, 0)
+    @Assert(rB == 25)
+    @Assert(dstB[prefixSize] == 0x57u8 && dstB[prefixSize + 3] == 0x5Au8)          // literals 1
+    @Assert(dstB[prefixSize + 4] == 0x04u8 && dstB[prefixSize + 7] == 0x07u8)      // prefix[4..8)
+    for (i in 0..17) {
+        @Assert(dstB[prefixSize + 8 + i] == UInt8(0x30 + (i % 10)))                // literals 2
+    }
+}

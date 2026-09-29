@@ -37,7 +37,8 @@ int main(void) {
     int idx = 0;
     for (unsigned si = 0; si < sizeof(kSizes) / sizeof(kSizes[0]); si++)
     for (unsigned mi = 0; mi < sizeof(kMps) / sizeof(kMps[0]); mi++)
-    for (unsigned di = 0; di < sizeof(kSeeds) / sizeof(kSeeds[0]); di++) {        size_t n = kSizes[si];
+    for (unsigned di = 0; di < sizeof(kSeeds) / sizeof(kSeeds[0]); di++) {
+        size_t n = kSizes[si];
         /* upstream RDG_genBlock writes buffPtr[0] even when buffSize==0;
            allocate >= 1 byte so the write lands */
         unsigned char* buf = (unsigned char*)malloc(n ? n : 1);
