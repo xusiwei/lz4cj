@@ -17,7 +17,9 @@
 //         (dest target = n*3/4) => 64 inputs x 4 modes = 256 manifest rows,
 //         plus 8 tight rows (seed=0, mp cycled, dstCapacity = c-1 => size=0),
 //         plus 16 mode=dict rows (see the dict section below) => 280 rows,
-//         plus 20 streaming rows (8 stream + 10 ring + 2 setdict) => 300 rows.
+//         plus 20 streaming rows (8 stream + 10 ring + 2 setdict) => 300 rows,
+//         plus 10 mode=fastreset rows (5 same-stream 2-block scenarios via
+//         LZ4_compress_fast_extState_fastReset; M3b Task 1) => 310 rows.
 //
 // Manifest line format (contract for M2 Tasks 3/4 and M3 - follow exactly):
 //   n=<n> mp=<mp> seed=<seed> mode=<mode> size=<c> [consumed=<k> ]xxh32=<h32> xxh64=<h64> inxxh32=<h32> inxxh64=<h64>[ file=block/<idx>.lz4]
@@ -44,6 +46,27 @@
 //   source slices instead (inxxh fields pin those slices)
 // - mp/seed describe the RDG buffer the block was sliced from (one buffer per
 //   scenario half; see the '#' provenance comments in the manifest)
+//
+// fastreset rows (M3b Task 1) extend the line format:
+//   n=<n> mp=<mp> seed=<seed> mode=fastreset seq=<k> size=<c> xxh32=... inxxh32=...
+//       off=<currentOffset> tt=<tableType> [file=...]
+// - one LZ4_stream_t per scenario; seq= blocks are consecutive
+//   LZ4_compress_fast_extState_fastReset calls over independently generated
+//   RDG buffers (each row self-describing: own n/mp/seed, accel=1,
+//   dstCapacity=compressBound => notLimited)
+// - seq=0 runs on a fresh stream (prepareTable sees clearedTable) => output
+//   byte-equal to LZ4_compress_default (regression anchor, hard-verified)
+// - seq=1 runs on the dirty table: byU16 reuse (dictSmall candidate
+//   rejection) or full reset per LZ4_prepareTable conditions
+// - off=/tt= record the post-compress internal state (currentOffset /
+//   tableType, read via internal_donotuse): the reuse/reset branch actually
+//   taken by the C implementation. NOTE: for this API the compressed OUTPUT
+//   is always identical to fresh-state compression (empty/zero hash slots
+//   can never yield an accepted candidate in either mode, so dictSmall
+//   rejection is output-neutral here); the state fields are what
+//   discriminates reuse (off accumulates) from reset (off restarts)
+// - blocks are self-contained (stale candidates rejected => offsets never
+//   cross block boundaries), verified by standalone LZ4_decompress_safe
 //
 // Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs \
 //          scripts/gen_golden.c $HOME/lz4/tests/datagen.c $HOME/lz4/lib/lz4.c \
@@ -490,6 +513,84 @@ int main(void) {
         LZ4_freeStream(cs);
         LZ4_freeStreamDecode(sd);
         free(out); free(dst); free(src); free(dict);
+    }
+    /* fastreset rows (M3b Task 1): 5 same-stream 2-block scenarios via
+       LZ4_compress_fast_extState_fastReset (lz4.c L1423-1459). Scenario
+       design vs LZ4_prepareTable reset conditions (lz4.c L893-937):
+         s0: 2048 + 2048  -> byU16 reuse (offset 2048 + 2048 < 0xFFFF,
+                             both inputs < 4 KB => dirty table + dictSmall)
+         s1: 200 + 3000   -> byU16 reuse (tiny first block, different sizes)
+         s2: 1024 + 4096  -> byU16 reset via inputSize >= 4 KB
+         s3: 40000+40000  -> byU16 reset via currentOffset+inputSize >= 0xFFFF
+         s4: 65547+2048   -> byU32 block then byU16 block (tableType switch
+                             resets; tableType-mismatch isolation is covered
+                             by the Cangjie unit condition table instead)
+       Hard invariants checked C-side per row: seq=0 output byte-equals
+       LZ4_compress_default on a fresh stream, and every block decodes
+       standalone (dictSmall rejects stale candidates => no cross-block
+       offsets). */
+    {
+        static const struct { size_t n; double mp; unsigned seed; } kFastReset[5][2] = {
+            {{2048, 0.5, 401}, {2048, 0.9, 402}},
+            {{200, 1.0, 403}, {3000, 0.5, 404}},
+            {{1024, 0.9, 405}, {4096, 0.0, 406}},
+            {{40000, 0.9, 407}, {40000, 0.5, 408}},
+            {{65547, 0.9, 409}, {2048, 0.5, 410}},
+        };
+        for (unsigned s = 0; s < 5; s++) {
+            LZ4_stream_t* st = LZ4_createStream();
+            if (!st) { fprintf(stderr, "fastreset: alloc failed\n"); return 1; }
+            for (unsigned k = 0; k < 2; k++) {
+                size_t n = kFastReset[s][k].n;
+                unsigned char* buf = (unsigned char*)malloc(n ? n : 1);
+                int bound = LZ4_compressBound((int)n);
+                unsigned char* out = (unsigned char*)malloc((size_t)bound);
+                if (!buf || !out) { fprintf(stderr, "oom\n"); return 1; }
+                RDG_genBuffer(buf, n, kFastReset[s][k].mp, 0.0, kFastReset[s][k].seed);
+                int c = LZ4_compress_fast_extState_fastReset(st, (const char*)buf,
+                                                             (char*)out, (int)n, bound, 1);
+                if (c <= 0) {
+                    fprintf(stderr, "fastreset: compress failed s=%u k=%u\n", s, k);
+                    return 1;
+                }
+                if (k == 0) {
+                    /* regression anchor: fresh-state fastReset == default */
+                    unsigned char* ref = (unsigned char*)malloc((size_t)bound);
+                    if (!ref) { fprintf(stderr, "oom\n"); return 1; }
+                    int cref = LZ4_compress_default((const char*)buf, (char*)ref,
+                                                    (int)n, bound);
+                    if (cref != c || memcmp(out, ref, (size_t)c) != 0) {
+                        fprintf(stderr, "fastreset: seq0 != default s=%u\n", s);
+                        return 1;
+                    }
+                    free(ref);
+                }
+                /* self-containment: standalone decode must round-trip */
+                unsigned char* dec = (unsigned char*)malloc(n ? n : 1);
+                if (!dec) { fprintf(stderr, "oom\n"); return 1; }
+                int r = LZ4_decompress_safe((const char*)out, (char*)dec, c, (int)n);
+                if (r != (int)n || memcmp(dec, buf, n) != 0) {
+                    fprintf(stderr, "fastreset: standalone decode failed s=%u k=%u\n", s, k);
+                    return 1;
+                }
+                free(dec);
+                printf("n=%zu mp=%.2f seed=%u mode=fastreset seq=%u size=%d "
+                       "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx "
+                       "off=%u tt=%u",
+                       n, kFastReset[s][k].mp, kFastReset[s][k].seed, k, c,
+                       XXH32(out, (size_t)c, 0),
+                       (unsigned long long)XXH64(out, (size_t)c, 0),
+                       XXH32(buf, n, 0), (unsigned long long)XXH64(buf, n, 0),
+                       st->internal_donotuse.currentOffset,
+                       st->internal_donotuse.tableType);
+                writeArtifact(out, c, idx);
+                printf("\n");
+                idx++;
+                free(buf);
+                free(out);
+            }
+            LZ4_freeStream(st);
+        }
     }
     fprintf(stderr, "cases=%d\n", idx);
     return 0;

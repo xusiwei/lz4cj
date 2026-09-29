@@ -19,9 +19,12 @@ scripts/gen_golden | tee corpus/block_golden_ref.txt
 
 # sanity: 64 inputs x 4 modes = 256 rows + 8 tight rows + 16 dict rows
 #         + 8 stream rows + 10 ring rows + 2 setdict rows
-# = 300 data rows, plus 4 leading '#' provenance comments
+#         + 10 fastreset rows (M3b Task 1)
+# = 310 data rows, plus 4 leading '#' provenance comments
 #   (dict / stream / ring / setdict sections)
-[ "$(wc -l < corpus/block_golden_ref.txt)" -eq 304 ] \
-    || { echo "ERROR: expected 304 golden lines (300 rows + 4 comments)" >&2; exit 1; }
+[ "$(wc -l < corpus/block_golden_ref.txt)" -eq 314 ] \
+    || { echo "ERROR: expected 314 golden lines (310 rows + 4 comments)" >&2; exit 1; }
 [ "$(grep -c '^#' corpus/block_golden_ref.txt)" -eq 4 ] \
     || { echo "ERROR: expected exactly 4 comment lines" >&2; exit 1; }
+[ "$(grep -c 'mode=fastreset' corpus/block_golden_ref.txt)" -eq 10 ] \
+    || { echo "ERROR: expected 10 fastreset rows" >&2; exit 1; }

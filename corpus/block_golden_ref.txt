@@ -302,3 +302,13 @@ n=16384 mp=0.50 seed=303 mode=ring seq=9 pos=65536 size=9206 ret=16384 xxh32=63c
 # setdict=dict=RDG(n=65536 mp=0.50 lp=0.00 seed=77) xxh32=7b19c37d xxh64=59f6b3f3a2fd2c1a src=RDG(n=81920 block=40960 mp=0.90 lp=0.00 seed=88) fresh-buffer decode
 n=40960 mp=0.90 seed=88 mode=setdict seq=0 size=3282 ret=40960 pre32=37258e24 pre64=0858de551feab56a xxh32=da449cfe xxh64=a54faa19002ead7f inxxh32=37258e24 inxxh64=0858de551feab56a file=block/298.lz4
 n=40960 mp=0.90 seed=88 mode=setdict seq=1 size=7355 ret=40960 pre32=73868952 pre64=09453aa6fd5934bf xxh32=4b0cabe3 xxh64=1ad2592f0285a4a9 inxxh32=2d99ba2d inxxh64=27c0ef47d69a6136 file=block/299.lz4
+n=2048 mp=0.50 seed=401 mode=fastreset seq=0 size=245 xxh32=79f2f5c2 xxh64=b04cc6d2fe07cab4 inxxh32=4335d20f inxxh64=bd6ec2ef13e21972 off=2048 tt=3 file=block/300.lz4
+n=2048 mp=0.90 seed=402 mode=fastreset seq=1 size=269 xxh32=86da8958 xxh64=feef48dd2b8947ad inxxh32=c8ece8fe inxxh64=b7d1ab4ef24bfb3f off=4096 tt=3 file=block/301.lz4
+n=200 mp=1.00 seed=403 mode=fastreset seq=0 size=11 xxh32=7e995678 xxh64=23f8c73f45824688 inxxh32=db1b4d23 inxxh64=7d476f4500ea754f off=200 tt=3 file=block/302.lz4
+n=3000 mp=0.50 seed=404 mode=fastreset seq=1 size=1687 xxh32=80098d4f xxh64=7ffa125d2e2e2614 inxxh32=a3f63681 inxxh64=11c15c6d71857c7c off=3200 tt=3 file=block/303.lz4
+n=1024 mp=0.90 seed=405 mode=fastreset seq=0 size=122 xxh32=0d3d37ef xxh64=61ca7f6297714bff inxxh32=c32adc4d inxxh64=580b0d8bbf23c46a off=1024 tt=3 file=block/304.lz4
+n=4096 mp=0.00 seed=406 mode=fastreset seq=1 size=4114 xxh32=b46053f8 xxh64=67ff9eca3546d736 inxxh32=1d7c092e inxxh64=ad88338e219c5605 off=4096 tt=3 file=block/305.lz4
+n=40000 mp=0.90 seed=407 mode=fastreset seq=0 size=4602 xxh32=b6ac7687 xxh64=3862d95ca1eed5ee inxxh32=4444a880 inxxh64=797b34237d8a70f6 off=40000 tt=3 file=block/306.lz4
+n=40000 mp=0.50 seed=408 mode=fastreset seq=1 size=21787 xxh32=73f2f1ee xxh64=c95a9858d8838cb1 inxxh32=daa4506e inxxh64=54e130d5e9ae8919 off=40000 tt=3 file=block/307.lz4
+n=65547 mp=0.90 seed=409 mode=fastreset seq=0 size=6254 xxh32=29bfa032 xxh64=1abb56a0104e3eed inxxh32=dbfa3fe3 inxxh64=cb9857ebe6d39993 off=65547 tt=2 file=block/308.lz4
+n=2048 mp=0.50 seed=410 mode=fastreset seq=1 size=1588 xxh32=c3d2274a xxh64=aaf6504ed6a5e26b inxxh32=0490af77 inxxh64=d40ccdcbcc8e5367 off=2048 tt=3 file=block/309.lz4
