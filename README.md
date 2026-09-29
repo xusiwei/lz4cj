@@ -25,6 +25,8 @@ scripts/build_and_test.sh both # 双工具链构建 + 全量测试
 - **M3a(完成)**:块解压全家族(`LZ4_decompress_safe` / `safe_partial` / `safe_usingDict` / `safe_partial_usingDict` / `safe_continue` + 流式解码状态与 ring 尺寸契约);300 行 golden、safe/fast 双循环差分、2000+200 种子模糊测试;库源码行覆盖 98.4%。
 - **M3b(下一步)**:流式压缩(loadDict / continue / saveDict / usingExtDict)。
 
+**移植基线**:上游 dev commit `0774d055`(2026-06-01,v1.10.0 发布线之上的官方修复线)。压缩输出与 v1.10.0 发布版逐字节一致(300 行 golden 双 ref 重验零差异);解压包含其后官方 OOB/边界修复,损坏输入行为更严格;详见 [docs/design.md](docs/design.md) 与 [docs/progress.md](docs/progress.md)。
+
 压缩与块解压 API 均已对外提供;流式压缩接口在后续里程碑提供,路线图见 [docs/design.md](docs/design.md)。
 
 ## 变更记录

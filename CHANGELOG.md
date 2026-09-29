@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1(基线确证)
+
+- 移植基线显式化并实证:上游 dev commit `0774d055`(2026-06-01)= v1.10.0 发布线之上的官方修复线(dev 版本宏自报 1.10.0)。以 v1.10.0(tag ebb370ca)独立 worktree 重编 golden harness 重跑全矩阵:manifest 304/304 行、artifacts 264/264、partial 探针(解压合法输入)全部逐字节一致——**压缩输出与 v1.10.0 完全等价**;解压侧保留其后官方修复(read_variable_length OOB 读修复、快/慢循环 ip/iend 边界修复、match length limit 修复),损坏输入行为较 v1.10.0 更严格(v1.10.0 该处为 OOB 读未定义行为,不在仓颉复刻)。HC/frame 后续里程碑按同一 commit 移植
+- 新增 `docs/progress.md` 进度追踪文件(完成态证据、剩余工作分解、遗留事项台账、待决事项),每里程碑收尾更新
+- 修正:M3a 套件计时为 LTS 8.7s / STS 8.9s(此前一处记录误写 12.9s/10.4s)
+
 ## 0.3.0 (M3a)
 
 - 块解压全家族 API:`LZ4_decompress_safe` / `LZ4_decompress_safe_partial`(target 提前停止语义)/ `LZ4_decompress_safe_usingDict` / `LZ4_decompress_safe_partial_usingDict`(外部字典,分离数组模型下恒 forceExtDict 实例化;dictSize 越界防御性 -1)+ 流式解码状态族 `LZ4_createStreamDecode` / `LZ4_freeStreamDecode` / `LZ4_setStreamDecode` / `LZ4_decoderRingBufferSize` / `LZ4_decompress_safe_continue`(dest 以 (dstBuf, dstIdx) 位置对表达滚动契约;C 指针相等判定以"滚动窗口内容等价"谓词替代,作用域已限定并登记设计 §4.3 规则 4)。内部 `LZ4_decompress_generic` 双循环(safe 状态机 + fast 捷径,分派点 FASTLOOP_SAFE_DISTANCE 与上游一致;`LZ4_decompress_generic_forced` 测试钩子可强制两路)
