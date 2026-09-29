@@ -1,264 +1,281 @@
-n=0 mp=0.00 seed=0 mode=default size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/000.lz4
-n=0 mp=0.00 seed=0 mode=fast1 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/001.lz4
-n=0 mp=0.00 seed=0 mode=fast8 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/002.lz4
-n=0 mp=0.00 seed=0 mode=dest size=0 consumed=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/003.lz4
-n=0 mp=0.00 seed=7 mode=default size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/004.lz4
-n=0 mp=0.00 seed=7 mode=fast1 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/005.lz4
-n=0 mp=0.00 seed=7 mode=fast8 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/006.lz4
-n=0 mp=0.00 seed=7 mode=dest size=0 consumed=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/007.lz4
-n=0 mp=0.50 seed=0 mode=default size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/008.lz4
-n=0 mp=0.50 seed=0 mode=fast1 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/009.lz4
-n=0 mp=0.50 seed=0 mode=fast8 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/010.lz4
-n=0 mp=0.50 seed=0 mode=dest size=0 consumed=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/011.lz4
-n=0 mp=0.50 seed=7 mode=default size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/012.lz4
-n=0 mp=0.50 seed=7 mode=fast1 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/013.lz4
-n=0 mp=0.50 seed=7 mode=fast8 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/014.lz4
-n=0 mp=0.50 seed=7 mode=dest size=0 consumed=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/015.lz4
-n=0 mp=0.90 seed=0 mode=default size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/016.lz4
-n=0 mp=0.90 seed=0 mode=fast1 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/017.lz4
-n=0 mp=0.90 seed=0 mode=fast8 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/018.lz4
-n=0 mp=0.90 seed=0 mode=dest size=0 consumed=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/019.lz4
-n=0 mp=0.90 seed=7 mode=default size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/020.lz4
-n=0 mp=0.90 seed=7 mode=fast1 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/021.lz4
-n=0 mp=0.90 seed=7 mode=fast8 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/022.lz4
-n=0 mp=0.90 seed=7 mode=dest size=0 consumed=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/023.lz4
-n=0 mp=1.00 seed=0 mode=default size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/024.lz4
-n=0 mp=1.00 seed=0 mode=fast1 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/025.lz4
-n=0 mp=1.00 seed=0 mode=fast8 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/026.lz4
-n=0 mp=1.00 seed=0 mode=dest size=0 consumed=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/027.lz4
-n=0 mp=1.00 seed=7 mode=default size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/028.lz4
-n=0 mp=1.00 seed=7 mode=fast1 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/029.lz4
-n=0 mp=1.00 seed=7 mode=fast8 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 file=block/030.lz4
-n=0 mp=1.00 seed=7 mode=dest size=0 consumed=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/031.lz4
-n=1 mp=0.00 seed=0 mode=default size=2 xxh32=47bed82c xxh64=ec3cae3829bb6262 file=block/032.lz4
-n=1 mp=0.00 seed=0 mode=fast1 size=2 xxh32=47bed82c xxh64=ec3cae3829bb6262 file=block/033.lz4
-n=1 mp=0.00 seed=0 mode=fast8 size=2 xxh32=47bed82c xxh64=ec3cae3829bb6262 file=block/034.lz4
-n=1 mp=0.00 seed=0 mode=dest size=0 consumed=1 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/035.lz4
-n=1 mp=0.00 seed=7 mode=default size=2 xxh32=58adcfb1 xxh64=c1881941a0d84fe0 file=block/036.lz4
-n=1 mp=0.00 seed=7 mode=fast1 size=2 xxh32=58adcfb1 xxh64=c1881941a0d84fe0 file=block/037.lz4
-n=1 mp=0.00 seed=7 mode=fast8 size=2 xxh32=58adcfb1 xxh64=c1881941a0d84fe0 file=block/038.lz4
-n=1 mp=0.00 seed=7 mode=dest size=0 consumed=1 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/039.lz4
-n=1 mp=0.50 seed=0 mode=default size=2 xxh32=2a48629b xxh64=52af69c62e494cd4 file=block/040.lz4
-n=1 mp=0.50 seed=0 mode=fast1 size=2 xxh32=2a48629b xxh64=52af69c62e494cd4 file=block/041.lz4
-n=1 mp=0.50 seed=0 mode=fast8 size=2 xxh32=2a48629b xxh64=52af69c62e494cd4 file=block/042.lz4
-n=1 mp=0.50 seed=0 mode=dest size=0 consumed=1 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/043.lz4
-n=1 mp=0.50 seed=7 mode=default size=2 xxh32=586a35ac xxh64=860d39e6340d7355 file=block/044.lz4
-n=1 mp=0.50 seed=7 mode=fast1 size=2 xxh32=586a35ac xxh64=860d39e6340d7355 file=block/045.lz4
-n=1 mp=0.50 seed=7 mode=fast8 size=2 xxh32=586a35ac xxh64=860d39e6340d7355 file=block/046.lz4
-n=1 mp=0.50 seed=7 mode=dest size=0 consumed=1 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/047.lz4
-n=1 mp=0.90 seed=0 mode=default size=2 xxh32=958523db xxh64=67cf4e42457fb77d file=block/048.lz4
-n=1 mp=0.90 seed=0 mode=fast1 size=2 xxh32=958523db xxh64=67cf4e42457fb77d file=block/049.lz4
-n=1 mp=0.90 seed=0 mode=fast8 size=2 xxh32=958523db xxh64=67cf4e42457fb77d file=block/050.lz4
-n=1 mp=0.90 seed=0 mode=dest size=0 consumed=1 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/051.lz4
-n=1 mp=0.90 seed=7 mode=default size=2 xxh32=0ed2f8ca xxh64=dcadfb4995a8a6b7 file=block/052.lz4
-n=1 mp=0.90 seed=7 mode=fast1 size=2 xxh32=0ed2f8ca xxh64=dcadfb4995a8a6b7 file=block/053.lz4
-n=1 mp=0.90 seed=7 mode=fast8 size=2 xxh32=0ed2f8ca xxh64=dcadfb4995a8a6b7 file=block/054.lz4
-n=1 mp=0.90 seed=7 mode=dest size=0 consumed=1 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/055.lz4
-n=1 mp=1.00 seed=0 mode=default size=2 xxh32=ec56599f xxh64=ac2fbabfc9927380 file=block/056.lz4
-n=1 mp=1.00 seed=0 mode=fast1 size=2 xxh32=ec56599f xxh64=ac2fbabfc9927380 file=block/057.lz4
-n=1 mp=1.00 seed=0 mode=fast8 size=2 xxh32=ec56599f xxh64=ac2fbabfc9927380 file=block/058.lz4
-n=1 mp=1.00 seed=0 mode=dest size=0 consumed=1 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/059.lz4
-n=1 mp=1.00 seed=7 mode=default size=2 xxh32=ec56599f xxh64=ac2fbabfc9927380 file=block/060.lz4
-n=1 mp=1.00 seed=7 mode=fast1 size=2 xxh32=ec56599f xxh64=ac2fbabfc9927380 file=block/061.lz4
-n=1 mp=1.00 seed=7 mode=fast8 size=2 xxh32=ec56599f xxh64=ac2fbabfc9927380 file=block/062.lz4
-n=1 mp=1.00 seed=7 mode=dest size=0 consumed=1 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/063.lz4
-n=255 mp=0.00 seed=0 mode=default size=257 xxh32=42be5aa6 xxh64=1fb93d0dad1a834d file=block/064.lz4
-n=255 mp=0.00 seed=0 mode=fast1 size=257 xxh32=42be5aa6 xxh64=1fb93d0dad1a834d file=block/065.lz4
-n=255 mp=0.00 seed=0 mode=fast8 size=257 xxh32=42be5aa6 xxh64=1fb93d0dad1a834d file=block/066.lz4
-n=255 mp=0.00 seed=0 mode=dest size=191 consumed=189 xxh32=ac64f922 xxh64=18f7c571d64f08b9 file=block/067.lz4
-n=255 mp=0.00 seed=7 mode=default size=257 xxh32=0ed29158 xxh64=b4f125c8c1816af3 file=block/068.lz4
-n=255 mp=0.00 seed=7 mode=fast1 size=257 xxh32=0ed29158 xxh64=b4f125c8c1816af3 file=block/069.lz4
-n=255 mp=0.00 seed=7 mode=fast8 size=257 xxh32=0ed29158 xxh64=b4f125c8c1816af3 file=block/070.lz4
-n=255 mp=0.00 seed=7 mode=dest size=191 consumed=189 xxh32=83be41af xxh64=4bb31c8082b0cba1 file=block/071.lz4
-n=255 mp=0.50 seed=0 mode=default size=238 xxh32=a1ed468d xxh64=7a32da63abaf06e2 file=block/072.lz4
-n=255 mp=0.50 seed=0 mode=fast1 size=238 xxh32=a1ed468d xxh64=7a32da63abaf06e2 file=block/073.lz4
-n=255 mp=0.50 seed=0 mode=fast8 size=252 xxh32=d612adf7 xxh64=334730c0ce47d36b file=block/074.lz4
-n=255 mp=0.50 seed=0 mode=dest size=191 consumed=203 xxh32=bf5e8316 xxh64=6e39a72f483d9a4d file=block/075.lz4
-n=255 mp=0.50 seed=7 mode=default size=11 xxh32=3b48606a xxh64=4bee6aad626bda16 file=block/076.lz4
-n=255 mp=0.50 seed=7 mode=fast1 size=11 xxh32=3b48606a xxh64=4bee6aad626bda16 file=block/077.lz4
-n=255 mp=0.50 seed=7 mode=fast8 size=11 xxh32=3b48606a xxh64=4bee6aad626bda16 file=block/078.lz4
-n=255 mp=0.50 seed=7 mode=dest size=11 consumed=255 xxh32=3b48606a xxh64=4bee6aad626bda16 file=block/079.lz4
-n=255 mp=0.90 seed=0 mode=default size=11 xxh32=387b105f xxh64=6ade35f444efe462 file=block/080.lz4
-n=255 mp=0.90 seed=0 mode=fast1 size=11 xxh32=387b105f xxh64=6ade35f444efe462 file=block/081.lz4
-n=255 mp=0.90 seed=0 mode=fast8 size=11 xxh32=387b105f xxh64=6ade35f444efe462 file=block/082.lz4
-n=255 mp=0.90 seed=0 mode=dest size=11 consumed=255 xxh32=387b105f xxh64=6ade35f444efe462 file=block/083.lz4
-n=255 mp=0.90 seed=7 mode=default size=11 xxh32=8ebfdc6d xxh64=f9f9a04a61934aaa file=block/084.lz4
-n=255 mp=0.90 seed=7 mode=fast1 size=11 xxh32=8ebfdc6d xxh64=f9f9a04a61934aaa file=block/085.lz4
-n=255 mp=0.90 seed=7 mode=fast8 size=11 xxh32=8ebfdc6d xxh64=f9f9a04a61934aaa file=block/086.lz4
-n=255 mp=0.90 seed=7 mode=dest size=11 consumed=255 xxh32=8ebfdc6d xxh64=f9f9a04a61934aaa file=block/087.lz4
-n=255 mp=1.00 seed=0 mode=default size=11 xxh32=83f66756 xxh64=3ed8172ad694afa3 file=block/088.lz4
-n=255 mp=1.00 seed=0 mode=fast1 size=11 xxh32=83f66756 xxh64=3ed8172ad694afa3 file=block/089.lz4
-n=255 mp=1.00 seed=0 mode=fast8 size=11 xxh32=83f66756 xxh64=3ed8172ad694afa3 file=block/090.lz4
-n=255 mp=1.00 seed=0 mode=dest size=11 consumed=255 xxh32=83f66756 xxh64=3ed8172ad694afa3 file=block/091.lz4
-n=255 mp=1.00 seed=7 mode=default size=11 xxh32=83f66756 xxh64=3ed8172ad694afa3 file=block/092.lz4
-n=255 mp=1.00 seed=7 mode=fast1 size=11 xxh32=83f66756 xxh64=3ed8172ad694afa3 file=block/093.lz4
-n=255 mp=1.00 seed=7 mode=fast8 size=11 xxh32=83f66756 xxh64=3ed8172ad694afa3 file=block/094.lz4
-n=255 mp=1.00 seed=7 mode=dest size=11 consumed=255 xxh32=83f66756 xxh64=3ed8172ad694afa3 file=block/095.lz4
-n=4096 mp=0.00 seed=0 mode=default size=4114 xxh32=754fae48 xxh64=b179757c99f97c27 file=block/096.lz4
-n=4096 mp=0.00 seed=0 mode=fast1 size=4114 xxh32=754fae48 xxh64=b179757c99f97c27 file=block/097.lz4
-n=4096 mp=0.00 seed=0 mode=fast8 size=4114 xxh32=754fae48 xxh64=b179757c99f97c27 file=block/098.lz4
-n=4096 mp=0.00 seed=0 mode=dest size=3072 consumed=3059 xxh32=f04835f6 xxh64=ee4020d2c49cbf13 file=block/099.lz4
-n=4096 mp=0.00 seed=7 mode=default size=4114 xxh32=833d749c xxh64=eacc7240615d52b9 file=block/100.lz4
-n=4096 mp=0.00 seed=7 mode=fast1 size=4114 xxh32=833d749c xxh64=eacc7240615d52b9 file=block/101.lz4
-n=4096 mp=0.00 seed=7 mode=fast8 size=4114 xxh32=833d749c xxh64=eacc7240615d52b9 file=block/102.lz4
-n=4096 mp=0.00 seed=7 mode=dest size=3072 consumed=3059 xxh32=73023f27 xxh64=8397480e5e7db40e file=block/103.lz4
-n=4096 mp=0.50 seed=0 mode=default size=2527 xxh32=84900dc4 xxh64=c1d36a7b7ae8ce5c file=block/104.lz4
-n=4096 mp=0.50 seed=0 mode=fast1 size=2527 xxh32=84900dc4 xxh64=c1d36a7b7ae8ce5c file=block/105.lz4
-n=4096 mp=0.50 seed=0 mode=fast8 size=2848 xxh32=1e0dbab8 xxh64=02ddf1af546ca401 file=block/106.lz4
-n=4096 mp=0.50 seed=0 mode=dest size=2527 consumed=4096 xxh32=84900dc4 xxh64=c1d36a7b7ae8ce5c file=block/107.lz4
-n=4096 mp=0.50 seed=7 mode=default size=1442 xxh32=9af1d84e xxh64=e8758bb9f62bc933 file=block/108.lz4
-n=4096 mp=0.50 seed=7 mode=fast1 size=1442 xxh32=9af1d84e xxh64=e8758bb9f62bc933 file=block/109.lz4
-n=4096 mp=0.50 seed=7 mode=fast8 size=1450 xxh32=50dfff5b xxh64=fe2addf4079e4097 file=block/110.lz4
-n=4096 mp=0.50 seed=7 mode=dest size=1442 consumed=4096 xxh32=9af1d84e xxh64=e8758bb9f62bc933 file=block/111.lz4
-n=4096 mp=0.90 seed=0 mode=default size=443 xxh32=cd28d50d xxh64=017e097f399fb1a0 file=block/112.lz4
-n=4096 mp=0.90 seed=0 mode=fast1 size=443 xxh32=cd28d50d xxh64=017e097f399fb1a0 file=block/113.lz4
-n=4096 mp=0.90 seed=0 mode=fast8 size=449 xxh32=7ba25060 xxh64=3b5603e2375611e0 file=block/114.lz4
-n=4096 mp=0.90 seed=0 mode=dest size=443 consumed=4096 xxh32=cd28d50d xxh64=017e097f399fb1a0 file=block/115.lz4
-n=4096 mp=0.90 seed=7 mode=default size=350 xxh32=0a37027a xxh64=b0b1b7a51c084a07 file=block/116.lz4
-n=4096 mp=0.90 seed=7 mode=fast1 size=350 xxh32=0a37027a xxh64=b0b1b7a51c084a07 file=block/117.lz4
-n=4096 mp=0.90 seed=7 mode=fast8 size=382 xxh32=4c6327bd xxh64=c84fe3d68efd46ad file=block/118.lz4
-n=4096 mp=0.90 seed=7 mode=dest size=350 consumed=4096 xxh32=0a37027a xxh64=b0b1b7a51c084a07 file=block/119.lz4
-n=4096 mp=1.00 seed=0 mode=default size=26 xxh32=1fc69d86 xxh64=ca765317388e8959 file=block/120.lz4
-n=4096 mp=1.00 seed=0 mode=fast1 size=26 xxh32=1fc69d86 xxh64=ca765317388e8959 file=block/121.lz4
-n=4096 mp=1.00 seed=0 mode=fast8 size=26 xxh32=1fc69d86 xxh64=ca765317388e8959 file=block/122.lz4
-n=4096 mp=1.00 seed=0 mode=dest size=26 consumed=4096 xxh32=1fc69d86 xxh64=ca765317388e8959 file=block/123.lz4
-n=4096 mp=1.00 seed=7 mode=default size=26 xxh32=1fc69d86 xxh64=ca765317388e8959 file=block/124.lz4
-n=4096 mp=1.00 seed=7 mode=fast1 size=26 xxh32=1fc69d86 xxh64=ca765317388e8959 file=block/125.lz4
-n=4096 mp=1.00 seed=7 mode=fast8 size=26 xxh32=1fc69d86 xxh64=ca765317388e8959 file=block/126.lz4
-n=4096 mp=1.00 seed=7 mode=dest size=26 consumed=4096 xxh32=1fc69d86 xxh64=ca765317388e8959 file=block/127.lz4
-n=65535 mp=0.00 seed=0 mode=default size=65793 xxh32=10eb4be3 xxh64=3b261b93f74a21c4
-n=65535 mp=0.00 seed=0 mode=fast1 size=65793 xxh32=10eb4be3 xxh64=3b261b93f74a21c4
-n=65535 mp=0.00 seed=0 mode=fast8 size=65793 xxh32=10eb4be3 xxh64=3b261b93f74a21c4
-n=65535 mp=0.00 seed=0 mode=dest size=49151 consumed=48958 xxh32=69b425f0 xxh64=3b181318db8a56d9 file=block/131.lz4
-n=65535 mp=0.00 seed=7 mode=default size=65793 xxh32=6af9d1a6 xxh64=b657c0174306c848
-n=65535 mp=0.00 seed=7 mode=fast1 size=65793 xxh32=6af9d1a6 xxh64=b657c0174306c848
-n=65535 mp=0.00 seed=7 mode=fast8 size=65793 xxh32=6af9d1a6 xxh64=b657c0174306c848
-n=65535 mp=0.00 seed=7 mode=dest size=49151 consumed=48958 xxh32=e35e4e2e xxh64=482a267c4a002fd1 file=block/135.lz4
-n=65535 mp=0.50 seed=0 mode=default size=36459 xxh32=2fc26585 xxh64=d8e8dcf0914b5f2a file=block/136.lz4
-n=65535 mp=0.50 seed=0 mode=fast1 size=36459 xxh32=2fc26585 xxh64=d8e8dcf0914b5f2a file=block/137.lz4
-n=65535 mp=0.50 seed=0 mode=fast8 size=42371 xxh32=41808f86 xxh64=200c81c78ce4b4d1 file=block/138.lz4
-n=65535 mp=0.50 seed=0 mode=dest size=36459 consumed=65535 xxh32=2fc26585 xxh64=d8e8dcf0914b5f2a file=block/139.lz4
-n=65535 mp=0.50 seed=7 mode=default size=36301 xxh32=46f64282 xxh64=21df072ddb19c417 file=block/140.lz4
-n=65535 mp=0.50 seed=7 mode=fast1 size=36301 xxh32=46f64282 xxh64=21df072ddb19c417 file=block/141.lz4
-n=65535 mp=0.50 seed=7 mode=fast8 size=43159 xxh32=981540cd xxh64=83bf31a845c8eb27 file=block/142.lz4
-n=65535 mp=0.50 seed=7 mode=dest size=36301 consumed=65535 xxh32=46f64282 xxh64=21df072ddb19c417 file=block/143.lz4
-n=65535 mp=0.90 seed=0 mode=default size=7990 xxh32=24f6ba6a xxh64=4ffc0e50553460cb file=block/144.lz4
-n=65535 mp=0.90 seed=0 mode=fast1 size=7990 xxh32=24f6ba6a xxh64=4ffc0e50553460cb file=block/145.lz4
-n=65535 mp=0.90 seed=0 mode=fast8 size=9893 xxh32=67ff9251 xxh64=13601519627e2663 file=block/146.lz4
-n=65535 mp=0.90 seed=0 mode=dest size=7990 consumed=65535 xxh32=24f6ba6a xxh64=4ffc0e50553460cb file=block/147.lz4
-n=65535 mp=0.90 seed=7 mode=default size=6560 xxh32=ed2eed3f xxh64=0a21015356d924b2 file=block/148.lz4
-n=65535 mp=0.90 seed=7 mode=fast1 size=6560 xxh32=ed2eed3f xxh64=0a21015356d924b2 file=block/149.lz4
-n=65535 mp=0.90 seed=7 mode=fast8 size=7953 xxh32=aad5c296 xxh64=67fc71ca3a537e36 file=block/150.lz4
-n=65535 mp=0.90 seed=7 mode=dest size=6560 consumed=65535 xxh32=ed2eed3f xxh64=0a21015356d924b2 file=block/151.lz4
-n=65535 mp=1.00 seed=0 mode=default size=267 xxh32=da906640 xxh64=6e4ac478020b8d34 file=block/152.lz4
-n=65535 mp=1.00 seed=0 mode=fast1 size=267 xxh32=da906640 xxh64=6e4ac478020b8d34 file=block/153.lz4
-n=65535 mp=1.00 seed=0 mode=fast8 size=267 xxh32=da906640 xxh64=6e4ac478020b8d34 file=block/154.lz4
-n=65535 mp=1.00 seed=0 mode=dest size=267 consumed=65535 xxh32=da906640 xxh64=6e4ac478020b8d34 file=block/155.lz4
-n=65535 mp=1.00 seed=7 mode=default size=267 xxh32=da906640 xxh64=6e4ac478020b8d34 file=block/156.lz4
-n=65535 mp=1.00 seed=7 mode=fast1 size=267 xxh32=da906640 xxh64=6e4ac478020b8d34 file=block/157.lz4
-n=65535 mp=1.00 seed=7 mode=fast8 size=267 xxh32=da906640 xxh64=6e4ac478020b8d34 file=block/158.lz4
-n=65535 mp=1.00 seed=7 mode=dest size=267 consumed=65535 xxh32=da906640 xxh64=6e4ac478020b8d34 file=block/159.lz4
-n=65536 mp=0.00 seed=0 mode=default size=65794 xxh32=0a92397a xxh64=5c8462a7bf58a498
-n=65536 mp=0.00 seed=0 mode=fast1 size=65794 xxh32=0a92397a xxh64=5c8462a7bf58a498
-n=65536 mp=0.00 seed=0 mode=fast8 size=65794 xxh32=0a92397a xxh64=5c8462a7bf58a498
-n=65536 mp=0.00 seed=0 mode=dest size=49152 consumed=48959 xxh32=9c18b05b xxh64=60e7c42ffb71b8b2 file=block/163.lz4
-n=65536 mp=0.00 seed=7 mode=default size=65794 xxh32=97ac44b5 xxh64=e2811b109edf46c4
-n=65536 mp=0.00 seed=7 mode=fast1 size=65794 xxh32=97ac44b5 xxh64=e2811b109edf46c4
-n=65536 mp=0.00 seed=7 mode=fast8 size=65794 xxh32=97ac44b5 xxh64=e2811b109edf46c4
-n=65536 mp=0.00 seed=7 mode=dest size=49152 consumed=48959 xxh32=6ff324c8 xxh64=19513834e82bd61f file=block/167.lz4
-n=65536 mp=0.50 seed=0 mode=default size=36459 xxh32=cee2d4ba xxh64=38152d09e4a6dc03 file=block/168.lz4
-n=65536 mp=0.50 seed=0 mode=fast1 size=36459 xxh32=cee2d4ba xxh64=38152d09e4a6dc03 file=block/169.lz4
-n=65536 mp=0.50 seed=0 mode=fast8 size=42371 xxh32=3bd2b7d5 xxh64=51ab75c6e3b53a4b file=block/170.lz4
-n=65536 mp=0.50 seed=0 mode=dest size=36459 consumed=65536 xxh32=cee2d4ba xxh64=38152d09e4a6dc03 file=block/171.lz4
-n=65536 mp=0.50 seed=7 mode=default size=36301 xxh32=23c335d6 xxh64=2fb95125f201e883 file=block/172.lz4
-n=65536 mp=0.50 seed=7 mode=fast1 size=36301 xxh32=23c335d6 xxh64=2fb95125f201e883 file=block/173.lz4
-n=65536 mp=0.50 seed=7 mode=fast8 size=43159 xxh32=e625142b xxh64=932aec96346d49e2 file=block/174.lz4
-n=65536 mp=0.50 seed=7 mode=dest size=36301 consumed=65536 xxh32=23c335d6 xxh64=2fb95125f201e883 file=block/175.lz4
-n=65536 mp=0.90 seed=0 mode=default size=7990 xxh32=07cf5a54 xxh64=d51a175057341acd file=block/176.lz4
-n=65536 mp=0.90 seed=0 mode=fast1 size=7990 xxh32=07cf5a54 xxh64=d51a175057341acd file=block/177.lz4
-n=65536 mp=0.90 seed=0 mode=fast8 size=9886 xxh32=1e81178a xxh64=b63f67735535e91e file=block/178.lz4
-n=65536 mp=0.90 seed=0 mode=dest size=7990 consumed=65536 xxh32=07cf5a54 xxh64=d51a175057341acd file=block/179.lz4
-n=65536 mp=0.90 seed=7 mode=default size=6560 xxh32=1d22b405 xxh64=3118e96287656c84 file=block/180.lz4
-n=65536 mp=0.90 seed=7 mode=fast1 size=6560 xxh32=1d22b405 xxh64=3118e96287656c84 file=block/181.lz4
-n=65536 mp=0.90 seed=7 mode=fast8 size=7953 xxh32=8ee3d375 xxh64=e0fde9699981eea9 file=block/182.lz4
-n=65536 mp=0.90 seed=7 mode=dest size=6560 consumed=65536 xxh32=1d22b405 xxh64=3118e96287656c84 file=block/183.lz4
-n=65536 mp=1.00 seed=0 mode=default size=267 xxh32=277289eb xxh64=14e218580c0f5ba9 file=block/184.lz4
-n=65536 mp=1.00 seed=0 mode=fast1 size=267 xxh32=277289eb xxh64=14e218580c0f5ba9 file=block/185.lz4
-n=65536 mp=1.00 seed=0 mode=fast8 size=267 xxh32=277289eb xxh64=14e218580c0f5ba9 file=block/186.lz4
-n=65536 mp=1.00 seed=0 mode=dest size=267 consumed=65536 xxh32=277289eb xxh64=14e218580c0f5ba9 file=block/187.lz4
-n=65536 mp=1.00 seed=7 mode=default size=267 xxh32=277289eb xxh64=14e218580c0f5ba9 file=block/188.lz4
-n=65536 mp=1.00 seed=7 mode=fast1 size=267 xxh32=277289eb xxh64=14e218580c0f5ba9 file=block/189.lz4
-n=65536 mp=1.00 seed=7 mode=fast8 size=267 xxh32=277289eb xxh64=14e218580c0f5ba9 file=block/190.lz4
-n=65536 mp=1.00 seed=7 mode=dest size=267 consumed=65536 xxh32=277289eb xxh64=14e218580c0f5ba9 file=block/191.lz4
-n=65537 mp=0.00 seed=0 mode=default size=65795 xxh32=8cf92a01 xxh64=b1b0b7f4991f7023
-n=65537 mp=0.00 seed=0 mode=fast1 size=65795 xxh32=8cf92a01 xxh64=b1b0b7f4991f7023
-n=65537 mp=0.00 seed=0 mode=fast8 size=65795 xxh32=8cf92a01 xxh64=b1b0b7f4991f7023
-n=65537 mp=0.00 seed=0 mode=dest size=49152 consumed=48959 xxh32=9c18b05b xxh64=60e7c42ffb71b8b2 file=block/195.lz4
-n=65537 mp=0.00 seed=7 mode=default size=65795 xxh32=677ad4b9 xxh64=4b3b2fb8a9320f8f
-n=65537 mp=0.00 seed=7 mode=fast1 size=65795 xxh32=677ad4b9 xxh64=4b3b2fb8a9320f8f
-n=65537 mp=0.00 seed=7 mode=fast8 size=65795 xxh32=677ad4b9 xxh64=4b3b2fb8a9320f8f
-n=65537 mp=0.00 seed=7 mode=dest size=49152 consumed=48959 xxh32=6ff324c8 xxh64=19513834e82bd61f file=block/199.lz4
-n=65537 mp=0.50 seed=0 mode=default size=36459 xxh32=76045679 xxh64=1aa7283971638263 file=block/200.lz4
-n=65537 mp=0.50 seed=0 mode=fast1 size=36459 xxh32=76045679 xxh64=1aa7283971638263 file=block/201.lz4
-n=65537 mp=0.50 seed=0 mode=fast8 size=42371 xxh32=dcc6940a xxh64=dc00bf37c2832870 file=block/202.lz4
-n=65537 mp=0.50 seed=0 mode=dest size=36459 consumed=65537 xxh32=76045679 xxh64=1aa7283971638263 file=block/203.lz4
-n=65537 mp=0.50 seed=7 mode=default size=36301 xxh32=2d65bd38 xxh64=56ab98ab9f496768 file=block/204.lz4
-n=65537 mp=0.50 seed=7 mode=fast1 size=36301 xxh32=2d65bd38 xxh64=56ab98ab9f496768 file=block/205.lz4
-n=65537 mp=0.50 seed=7 mode=fast8 size=43159 xxh32=4e5eff05 xxh64=5c05c58f8c119d02 file=block/206.lz4
-n=65537 mp=0.50 seed=7 mode=dest size=36301 consumed=65537 xxh32=2d65bd38 xxh64=56ab98ab9f496768 file=block/207.lz4
-n=65537 mp=0.90 seed=0 mode=default size=7991 xxh32=5ced5b43 xxh64=14beb48deeb1e588 file=block/208.lz4
-n=65537 mp=0.90 seed=0 mode=fast1 size=7991 xxh32=5ced5b43 xxh64=14beb48deeb1e588 file=block/209.lz4
-n=65537 mp=0.90 seed=0 mode=fast8 size=9887 xxh32=0d5095fe xxh64=6d2636d3e666e99d file=block/210.lz4
-n=65537 mp=0.90 seed=0 mode=dest size=7991 consumed=65537 xxh32=5ced5b43 xxh64=14beb48deeb1e588 file=block/211.lz4
-n=65537 mp=0.90 seed=7 mode=default size=6560 xxh32=e3e25513 xxh64=23389cfe80bd4402 file=block/212.lz4
-n=65537 mp=0.90 seed=7 mode=fast1 size=6560 xxh32=e3e25513 xxh64=23389cfe80bd4402 file=block/213.lz4
-n=65537 mp=0.90 seed=7 mode=fast8 size=7953 xxh32=990538bc xxh64=f75c2b9e8a1bb738 file=block/214.lz4
-n=65537 mp=0.90 seed=7 mode=dest size=6560 consumed=65537 xxh32=e3e25513 xxh64=23389cfe80bd4402 file=block/215.lz4
-n=65537 mp=1.00 seed=0 mode=default size=267 xxh32=c4417ed0 xxh64=5271612dbff11fb5 file=block/216.lz4
-n=65537 mp=1.00 seed=0 mode=fast1 size=267 xxh32=c4417ed0 xxh64=5271612dbff11fb5 file=block/217.lz4
-n=65537 mp=1.00 seed=0 mode=fast8 size=267 xxh32=c4417ed0 xxh64=5271612dbff11fb5 file=block/218.lz4
-n=65537 mp=1.00 seed=0 mode=dest size=267 consumed=65537 xxh32=c4417ed0 xxh64=5271612dbff11fb5 file=block/219.lz4
-n=65537 mp=1.00 seed=7 mode=default size=267 xxh32=c4417ed0 xxh64=5271612dbff11fb5 file=block/220.lz4
-n=65537 mp=1.00 seed=7 mode=fast1 size=267 xxh32=c4417ed0 xxh64=5271612dbff11fb5 file=block/221.lz4
-n=65537 mp=1.00 seed=7 mode=fast8 size=267 xxh32=c4417ed0 xxh64=5271612dbff11fb5 file=block/222.lz4
-n=65537 mp=1.00 seed=7 mode=dest size=267 consumed=65537 xxh32=c4417ed0 xxh64=5271612dbff11fb5 file=block/223.lz4
-n=131072 mp=0.00 seed=0 mode=default size=131587 xxh32=79e8f630 xxh64=4d07d08494c8307f
-n=131072 mp=0.00 seed=0 mode=fast1 size=131587 xxh32=79e8f630 xxh64=4d07d08494c8307f
-n=131072 mp=0.00 seed=0 mode=fast8 size=131587 xxh32=79e8f630 xxh64=4d07d08494c8307f
-n=131072 mp=0.00 seed=0 mode=dest size=98304 consumed=97919 xxh32=0809cf30 xxh64=e7192940dc962351
-n=131072 mp=0.00 seed=7 mode=default size=131587 xxh32=1e04e7d1 xxh64=f9e315287726f0a7
-n=131072 mp=0.00 seed=7 mode=fast1 size=131587 xxh32=1e04e7d1 xxh64=f9e315287726f0a7
-n=131072 mp=0.00 seed=7 mode=fast8 size=131587 xxh32=1e04e7d1 xxh64=f9e315287726f0a7
-n=131072 mp=0.00 seed=7 mode=dest size=98304 consumed=97919 xxh32=d6f1954e xxh64=409c43d9a4b12bb4
-n=131072 mp=0.50 seed=0 mode=default size=76310 xxh32=1d8ec3c9 xxh64=495d931abaa34a6c
-n=131072 mp=0.50 seed=0 mode=fast1 size=76310 xxh32=1d8ec3c9 xxh64=495d931abaa34a6c
-n=131072 mp=0.50 seed=0 mode=fast8 size=90645 xxh32=86ed0724 xxh64=076e6e3222ddbb91
-n=131072 mp=0.50 seed=0 mode=dest size=76310 consumed=131072 xxh32=1d8ec3c9 xxh64=495d931abaa34a6c
-n=131072 mp=0.50 seed=7 mode=default size=76231 xxh32=ea217222 xxh64=c865ab10f26d48bb
-n=131072 mp=0.50 seed=7 mode=fast1 size=76231 xxh32=ea217222 xxh64=c865ab10f26d48bb
-n=131072 mp=0.50 seed=7 mode=fast8 size=91425 xxh32=be6e2ba4 xxh64=d47878da1fe645a5
-n=131072 mp=0.50 seed=7 mode=dest size=76231 consumed=131072 xxh32=ea217222 xxh64=c865ab10f26d48bb
-n=131072 mp=0.90 seed=0 mode=default size=24200 xxh32=ee2f4626 xxh64=183c9f274a7c7b4b file=block/240.lz4
-n=131072 mp=0.90 seed=0 mode=fast1 size=24200 xxh32=ee2f4626 xxh64=183c9f274a7c7b4b file=block/241.lz4
-n=131072 mp=0.90 seed=0 mode=fast8 size=32092 xxh32=d73f5c53 xxh64=c6f4e691aca1fcf5 file=block/242.lz4
-n=131072 mp=0.90 seed=0 mode=dest size=24200 consumed=131072 xxh32=ee2f4626 xxh64=183c9f274a7c7b4b file=block/243.lz4
-n=131072 mp=0.90 seed=7 mode=default size=16789 xxh32=af347eed xxh64=2a7512c0e8542cca file=block/244.lz4
-n=131072 mp=0.90 seed=7 mode=fast1 size=16789 xxh32=af347eed xxh64=2a7512c0e8542cca file=block/245.lz4
-n=131072 mp=0.90 seed=7 mode=fast8 size=21985 xxh32=3c754f77 xxh64=1c7c831d003ed486 file=block/246.lz4
-n=131072 mp=0.90 seed=7 mode=dest size=16789 consumed=131072 xxh32=af347eed xxh64=2a7512c0e8542cca file=block/247.lz4
-n=131072 mp=1.00 seed=0 mode=default size=524 xxh32=5fb89b06 xxh64=5d85b5212525a475 file=block/248.lz4
-n=131072 mp=1.00 seed=0 mode=fast1 size=524 xxh32=5fb89b06 xxh64=5d85b5212525a475 file=block/249.lz4
-n=131072 mp=1.00 seed=0 mode=fast8 size=524 xxh32=5fb89b06 xxh64=5d85b5212525a475 file=block/250.lz4
-n=131072 mp=1.00 seed=0 mode=dest size=524 consumed=131072 xxh32=5fb89b06 xxh64=5d85b5212525a475 file=block/251.lz4
-n=131072 mp=1.00 seed=7 mode=default size=524 xxh32=5fb89b06 xxh64=5d85b5212525a475 file=block/252.lz4
-n=131072 mp=1.00 seed=7 mode=fast1 size=524 xxh32=5fb89b06 xxh64=5d85b5212525a475 file=block/253.lz4
-n=131072 mp=1.00 seed=7 mode=fast8 size=524 xxh32=5fb89b06 xxh64=5d85b5212525a475 file=block/254.lz4
-n=131072 mp=1.00 seed=7 mode=dest size=524 consumed=131072 xxh32=5fb89b06 xxh64=5d85b5212525a475 file=block/255.lz4
-n=0 mp=0.50 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/256.lz4
-n=1 mp=0.90 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/257.lz4
-n=255 mp=1.00 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/258.lz4
-n=4096 mp=0.00 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/259.lz4
-n=65535 mp=0.50 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/260.lz4
-n=65536 mp=0.90 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/261.lz4
-n=65537 mp=1.00 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/262.lz4
-n=131072 mp=0.00 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 file=block/263.lz4
+n=0 mp=0.00 seed=0 mode=default size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/000.lz4
+n=0 mp=0.00 seed=0 mode=fast1 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/001.lz4
+n=0 mp=0.00 seed=0 mode=fast8 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/002.lz4
+n=0 mp=0.00 seed=0 mode=dest size=0 consumed=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/003.lz4
+n=0 mp=0.00 seed=7 mode=default size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/004.lz4
+n=0 mp=0.00 seed=7 mode=fast1 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/005.lz4
+n=0 mp=0.00 seed=7 mode=fast8 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/006.lz4
+n=0 mp=0.00 seed=7 mode=dest size=0 consumed=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/007.lz4
+n=0 mp=0.50 seed=0 mode=default size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/008.lz4
+n=0 mp=0.50 seed=0 mode=fast1 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/009.lz4
+n=0 mp=0.50 seed=0 mode=fast8 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/010.lz4
+n=0 mp=0.50 seed=0 mode=dest size=0 consumed=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/011.lz4
+n=0 mp=0.50 seed=7 mode=default size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/012.lz4
+n=0 mp=0.50 seed=7 mode=fast1 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/013.lz4
+n=0 mp=0.50 seed=7 mode=fast8 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/014.lz4
+n=0 mp=0.50 seed=7 mode=dest size=0 consumed=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/015.lz4
+n=0 mp=0.90 seed=0 mode=default size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/016.lz4
+n=0 mp=0.90 seed=0 mode=fast1 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/017.lz4
+n=0 mp=0.90 seed=0 mode=fast8 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/018.lz4
+n=0 mp=0.90 seed=0 mode=dest size=0 consumed=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/019.lz4
+n=0 mp=0.90 seed=7 mode=default size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/020.lz4
+n=0 mp=0.90 seed=7 mode=fast1 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/021.lz4
+n=0 mp=0.90 seed=7 mode=fast8 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/022.lz4
+n=0 mp=0.90 seed=7 mode=dest size=0 consumed=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/023.lz4
+n=0 mp=1.00 seed=0 mode=default size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/024.lz4
+n=0 mp=1.00 seed=0 mode=fast1 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/025.lz4
+n=0 mp=1.00 seed=0 mode=fast8 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/026.lz4
+n=0 mp=1.00 seed=0 mode=dest size=0 consumed=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/027.lz4
+n=0 mp=1.00 seed=7 mode=default size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/028.lz4
+n=0 mp=1.00 seed=7 mode=fast1 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/029.lz4
+n=0 mp=1.00 seed=7 mode=fast8 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/030.lz4
+n=0 mp=1.00 seed=7 mode=dest size=0 consumed=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/031.lz4
+n=1 mp=0.00 seed=0 mode=default size=2 xxh32=47bed82c xxh64=ec3cae3829bb6262 inxxh32=9608f5fb inxxh64=50bd57c8fab35779 file=block/032.lz4
+n=1 mp=0.00 seed=0 mode=fast1 size=2 xxh32=47bed82c xxh64=ec3cae3829bb6262 inxxh32=9608f5fb inxxh64=50bd57c8fab35779 file=block/033.lz4
+n=1 mp=0.00 seed=0 mode=fast8 size=2 xxh32=47bed82c xxh64=ec3cae3829bb6262 inxxh32=9608f5fb inxxh64=50bd57c8fab35779 file=block/034.lz4
+n=1 mp=0.00 seed=0 mode=dest size=0 consumed=1 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=9608f5fb inxxh64=50bd57c8fab35779 file=block/035.lz4
+n=1 mp=0.00 seed=7 mode=default size=2 xxh32=58adcfb1 xxh64=c1881941a0d84fe0 inxxh32=28d0ed78 inxxh64=f8108221c3d40e21 file=block/036.lz4
+n=1 mp=0.00 seed=7 mode=fast1 size=2 xxh32=58adcfb1 xxh64=c1881941a0d84fe0 inxxh32=28d0ed78 inxxh64=f8108221c3d40e21 file=block/037.lz4
+n=1 mp=0.00 seed=7 mode=fast8 size=2 xxh32=58adcfb1 xxh64=c1881941a0d84fe0 inxxh32=28d0ed78 inxxh64=f8108221c3d40e21 file=block/038.lz4
+n=1 mp=0.00 seed=7 mode=dest size=0 consumed=1 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=28d0ed78 inxxh64=f8108221c3d40e21 file=block/039.lz4
+n=1 mp=0.50 seed=0 mode=default size=2 xxh32=2a48629b xxh64=52af69c62e494cd4 inxxh32=06e7e66f inxxh64=122ebd68645a7cf7 file=block/040.lz4
+n=1 mp=0.50 seed=0 mode=fast1 size=2 xxh32=2a48629b xxh64=52af69c62e494cd4 inxxh32=06e7e66f inxxh64=122ebd68645a7cf7 file=block/041.lz4
+n=1 mp=0.50 seed=0 mode=fast8 size=2 xxh32=2a48629b xxh64=52af69c62e494cd4 inxxh32=06e7e66f inxxh64=122ebd68645a7cf7 file=block/042.lz4
+n=1 mp=0.50 seed=0 mode=dest size=0 consumed=1 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=06e7e66f inxxh64=122ebd68645a7cf7 file=block/043.lz4
+n=1 mp=0.50 seed=7 mode=default size=2 xxh32=586a35ac xxh64=860d39e6340d7355 inxxh32=fa21d689 inxxh64=2c3f836a5df75b04 file=block/044.lz4
+n=1 mp=0.50 seed=7 mode=fast1 size=2 xxh32=586a35ac xxh64=860d39e6340d7355 inxxh32=fa21d689 inxxh64=2c3f836a5df75b04 file=block/045.lz4
+n=1 mp=0.50 seed=7 mode=fast8 size=2 xxh32=586a35ac xxh64=860d39e6340d7355 inxxh32=fa21d689 inxxh64=2c3f836a5df75b04 file=block/046.lz4
+n=1 mp=0.50 seed=7 mode=dest size=0 consumed=1 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=fa21d689 inxxh64=2c3f836a5df75b04 file=block/047.lz4
+n=1 mp=0.90 seed=0 mode=default size=2 xxh32=958523db xxh64=67cf4e42457fb77d inxxh32=9cec73c4 inxxh64=26167c2af5162ca4 file=block/048.lz4
+n=1 mp=0.90 seed=0 mode=fast1 size=2 xxh32=958523db xxh64=67cf4e42457fb77d inxxh32=9cec73c4 inxxh64=26167c2af5162ca4 file=block/049.lz4
+n=1 mp=0.90 seed=0 mode=fast8 size=2 xxh32=958523db xxh64=67cf4e42457fb77d inxxh32=9cec73c4 inxxh64=26167c2af5162ca4 file=block/050.lz4
+n=1 mp=0.90 seed=0 mode=dest size=0 consumed=1 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=9cec73c4 inxxh64=26167c2af5162ca4 file=block/051.lz4
+n=1 mp=0.90 seed=7 mode=default size=2 xxh32=0ed2f8ca xxh64=dcadfb4995a8a6b7 inxxh32=68fcf025 inxxh64=ad4662bb7caac864 file=block/052.lz4
+n=1 mp=0.90 seed=7 mode=fast1 size=2 xxh32=0ed2f8ca xxh64=dcadfb4995a8a6b7 inxxh32=68fcf025 inxxh64=ad4662bb7caac864 file=block/053.lz4
+n=1 mp=0.90 seed=7 mode=fast8 size=2 xxh32=0ed2f8ca xxh64=dcadfb4995a8a6b7 inxxh32=68fcf025 inxxh64=ad4662bb7caac864 file=block/054.lz4
+n=1 mp=0.90 seed=7 mode=dest size=0 consumed=1 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=68fcf025 inxxh64=ad4662bb7caac864 file=block/055.lz4
+n=1 mp=1.00 seed=0 mode=default size=2 xxh32=ec56599f xxh64=ac2fbabfc9927380 inxxh32=cf65b03e inxxh64=e934a84adb052768 file=block/056.lz4
+n=1 mp=1.00 seed=0 mode=fast1 size=2 xxh32=ec56599f xxh64=ac2fbabfc9927380 inxxh32=cf65b03e inxxh64=e934a84adb052768 file=block/057.lz4
+n=1 mp=1.00 seed=0 mode=fast8 size=2 xxh32=ec56599f xxh64=ac2fbabfc9927380 inxxh32=cf65b03e inxxh64=e934a84adb052768 file=block/058.lz4
+n=1 mp=1.00 seed=0 mode=dest size=0 consumed=1 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=cf65b03e inxxh64=e934a84adb052768 file=block/059.lz4
+n=1 mp=1.00 seed=7 mode=default size=2 xxh32=ec56599f xxh64=ac2fbabfc9927380 inxxh32=cf65b03e inxxh64=e934a84adb052768 file=block/060.lz4
+n=1 mp=1.00 seed=7 mode=fast1 size=2 xxh32=ec56599f xxh64=ac2fbabfc9927380 inxxh32=cf65b03e inxxh64=e934a84adb052768 file=block/061.lz4
+n=1 mp=1.00 seed=7 mode=fast8 size=2 xxh32=ec56599f xxh64=ac2fbabfc9927380 inxxh32=cf65b03e inxxh64=e934a84adb052768 file=block/062.lz4
+n=1 mp=1.00 seed=7 mode=dest size=0 consumed=1 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=cf65b03e inxxh64=e934a84adb052768 file=block/063.lz4
+n=255 mp=0.00 seed=0 mode=default size=257 xxh32=42be5aa6 xxh64=1fb93d0dad1a834d inxxh32=6e96b077 inxxh64=efd4dc746ff90d2e file=block/064.lz4
+n=255 mp=0.00 seed=0 mode=fast1 size=257 xxh32=42be5aa6 xxh64=1fb93d0dad1a834d inxxh32=6e96b077 inxxh64=efd4dc746ff90d2e file=block/065.lz4
+n=255 mp=0.00 seed=0 mode=fast8 size=257 xxh32=42be5aa6 xxh64=1fb93d0dad1a834d inxxh32=6e96b077 inxxh64=efd4dc746ff90d2e file=block/066.lz4
+n=255 mp=0.00 seed=0 mode=dest size=191 consumed=189 xxh32=ac64f922 xxh64=18f7c571d64f08b9 inxxh32=6e96b077 inxxh64=efd4dc746ff90d2e file=block/067.lz4
+n=255 mp=0.00 seed=7 mode=default size=257 xxh32=0ed29158 xxh64=b4f125c8c1816af3 inxxh32=45fd394b inxxh64=7c8719724e691375 file=block/068.lz4
+n=255 mp=0.00 seed=7 mode=fast1 size=257 xxh32=0ed29158 xxh64=b4f125c8c1816af3 inxxh32=45fd394b inxxh64=7c8719724e691375 file=block/069.lz4
+n=255 mp=0.00 seed=7 mode=fast8 size=257 xxh32=0ed29158 xxh64=b4f125c8c1816af3 inxxh32=45fd394b inxxh64=7c8719724e691375 file=block/070.lz4
+n=255 mp=0.00 seed=7 mode=dest size=191 consumed=189 xxh32=83be41af xxh64=4bb31c8082b0cba1 inxxh32=45fd394b inxxh64=7c8719724e691375 file=block/071.lz4
+n=255 mp=0.50 seed=0 mode=default size=238 xxh32=a1ed468d xxh64=7a32da63abaf06e2 inxxh32=f125f7b1 inxxh64=42bbcae5695ca49e file=block/072.lz4
+n=255 mp=0.50 seed=0 mode=fast1 size=238 xxh32=a1ed468d xxh64=7a32da63abaf06e2 inxxh32=f125f7b1 inxxh64=42bbcae5695ca49e file=block/073.lz4
+n=255 mp=0.50 seed=0 mode=fast8 size=252 xxh32=d612adf7 xxh64=334730c0ce47d36b inxxh32=f125f7b1 inxxh64=42bbcae5695ca49e file=block/074.lz4
+n=255 mp=0.50 seed=0 mode=dest size=191 consumed=203 xxh32=bf5e8316 xxh64=6e39a72f483d9a4d inxxh32=f125f7b1 inxxh64=42bbcae5695ca49e file=block/075.lz4
+n=255 mp=0.50 seed=7 mode=default size=11 xxh32=3b48606a xxh64=4bee6aad626bda16 inxxh32=2110dfcf inxxh64=28c09d2b78a828b9 file=block/076.lz4
+n=255 mp=0.50 seed=7 mode=fast1 size=11 xxh32=3b48606a xxh64=4bee6aad626bda16 inxxh32=2110dfcf inxxh64=28c09d2b78a828b9 file=block/077.lz4
+n=255 mp=0.50 seed=7 mode=fast8 size=11 xxh32=3b48606a xxh64=4bee6aad626bda16 inxxh32=2110dfcf inxxh64=28c09d2b78a828b9 file=block/078.lz4
+n=255 mp=0.50 seed=7 mode=dest size=11 consumed=255 xxh32=3b48606a xxh64=4bee6aad626bda16 inxxh32=2110dfcf inxxh64=28c09d2b78a828b9 file=block/079.lz4
+n=255 mp=0.90 seed=0 mode=default size=11 xxh32=387b105f xxh64=6ade35f444efe462 inxxh32=cbe2766c inxxh64=d1074591b2fa8835 file=block/080.lz4
+n=255 mp=0.90 seed=0 mode=fast1 size=11 xxh32=387b105f xxh64=6ade35f444efe462 inxxh32=cbe2766c inxxh64=d1074591b2fa8835 file=block/081.lz4
+n=255 mp=0.90 seed=0 mode=fast8 size=11 xxh32=387b105f xxh64=6ade35f444efe462 inxxh32=cbe2766c inxxh64=d1074591b2fa8835 file=block/082.lz4
+n=255 mp=0.90 seed=0 mode=dest size=11 consumed=255 xxh32=387b105f xxh64=6ade35f444efe462 inxxh32=cbe2766c inxxh64=d1074591b2fa8835 file=block/083.lz4
+n=255 mp=0.90 seed=7 mode=default size=11 xxh32=8ebfdc6d xxh64=f9f9a04a61934aaa inxxh32=e9da7969 inxxh64=e9e6f65ad9880591 file=block/084.lz4
+n=255 mp=0.90 seed=7 mode=fast1 size=11 xxh32=8ebfdc6d xxh64=f9f9a04a61934aaa inxxh32=e9da7969 inxxh64=e9e6f65ad9880591 file=block/085.lz4
+n=255 mp=0.90 seed=7 mode=fast8 size=11 xxh32=8ebfdc6d xxh64=f9f9a04a61934aaa inxxh32=e9da7969 inxxh64=e9e6f65ad9880591 file=block/086.lz4
+n=255 mp=0.90 seed=7 mode=dest size=11 consumed=255 xxh32=8ebfdc6d xxh64=f9f9a04a61934aaa inxxh32=e9da7969 inxxh64=e9e6f65ad9880591 file=block/087.lz4
+n=255 mp=1.00 seed=0 mode=default size=11 xxh32=83f66756 xxh64=3ed8172ad694afa3 inxxh32=769746c1 inxxh64=5baf79c705ca1e7b file=block/088.lz4
+n=255 mp=1.00 seed=0 mode=fast1 size=11 xxh32=83f66756 xxh64=3ed8172ad694afa3 inxxh32=769746c1 inxxh64=5baf79c705ca1e7b file=block/089.lz4
+n=255 mp=1.00 seed=0 mode=fast8 size=11 xxh32=83f66756 xxh64=3ed8172ad694afa3 inxxh32=769746c1 inxxh64=5baf79c705ca1e7b file=block/090.lz4
+n=255 mp=1.00 seed=0 mode=dest size=11 consumed=255 xxh32=83f66756 xxh64=3ed8172ad694afa3 inxxh32=769746c1 inxxh64=5baf79c705ca1e7b file=block/091.lz4
+n=255 mp=1.00 seed=7 mode=default size=11 xxh32=83f66756 xxh64=3ed8172ad694afa3 inxxh32=769746c1 inxxh64=5baf79c705ca1e7b file=block/092.lz4
+n=255 mp=1.00 seed=7 mode=fast1 size=11 xxh32=83f66756 xxh64=3ed8172ad694afa3 inxxh32=769746c1 inxxh64=5baf79c705ca1e7b file=block/093.lz4
+n=255 mp=1.00 seed=7 mode=fast8 size=11 xxh32=83f66756 xxh64=3ed8172ad694afa3 inxxh32=769746c1 inxxh64=5baf79c705ca1e7b file=block/094.lz4
+n=255 mp=1.00 seed=7 mode=dest size=11 consumed=255 xxh32=83f66756 xxh64=3ed8172ad694afa3 inxxh32=769746c1 inxxh64=5baf79c705ca1e7b file=block/095.lz4
+n=4096 mp=0.00 seed=0 mode=default size=4114 xxh32=754fae48 xxh64=b179757c99f97c27 inxxh32=fc2fdd05 inxxh64=d93027eb00db934a file=block/096.lz4
+n=4096 mp=0.00 seed=0 mode=fast1 size=4114 xxh32=754fae48 xxh64=b179757c99f97c27 inxxh32=fc2fdd05 inxxh64=d93027eb00db934a file=block/097.lz4
+n=4096 mp=0.00 seed=0 mode=fast8 size=4114 xxh32=754fae48 xxh64=b179757c99f97c27 inxxh32=fc2fdd05 inxxh64=d93027eb00db934a file=block/098.lz4
+n=4096 mp=0.00 seed=0 mode=dest size=3072 consumed=3059 xxh32=f04835f6 xxh64=ee4020d2c49cbf13 inxxh32=fc2fdd05 inxxh64=d93027eb00db934a file=block/099.lz4
+n=4096 mp=0.00 seed=7 mode=default size=4114 xxh32=833d749c xxh64=eacc7240615d52b9 inxxh32=3b449358 inxxh64=560614d60dbfda09 file=block/100.lz4
+n=4096 mp=0.00 seed=7 mode=fast1 size=4114 xxh32=833d749c xxh64=eacc7240615d52b9 inxxh32=3b449358 inxxh64=560614d60dbfda09 file=block/101.lz4
+n=4096 mp=0.00 seed=7 mode=fast8 size=4114 xxh32=833d749c xxh64=eacc7240615d52b9 inxxh32=3b449358 inxxh64=560614d60dbfda09 file=block/102.lz4
+n=4096 mp=0.00 seed=7 mode=dest size=3072 consumed=3059 xxh32=73023f27 xxh64=8397480e5e7db40e inxxh32=3b449358 inxxh64=560614d60dbfda09 file=block/103.lz4
+n=4096 mp=0.50 seed=0 mode=default size=2527 xxh32=84900dc4 xxh64=c1d36a7b7ae8ce5c inxxh32=67fcb522 inxxh64=c530a1f18ea87157 file=block/104.lz4
+n=4096 mp=0.50 seed=0 mode=fast1 size=2527 xxh32=84900dc4 xxh64=c1d36a7b7ae8ce5c inxxh32=67fcb522 inxxh64=c530a1f18ea87157 file=block/105.lz4
+n=4096 mp=0.50 seed=0 mode=fast8 size=2848 xxh32=1e0dbab8 xxh64=02ddf1af546ca401 inxxh32=67fcb522 inxxh64=c530a1f18ea87157 file=block/106.lz4
+n=4096 mp=0.50 seed=0 mode=dest size=2527 consumed=4096 xxh32=84900dc4 xxh64=c1d36a7b7ae8ce5c inxxh32=67fcb522 inxxh64=c530a1f18ea87157 file=block/107.lz4
+n=4096 mp=0.50 seed=7 mode=default size=1442 xxh32=9af1d84e xxh64=e8758bb9f62bc933 inxxh32=11f9c7b1 inxxh64=3f129fb9d09bd2f0 file=block/108.lz4
+n=4096 mp=0.50 seed=7 mode=fast1 size=1442 xxh32=9af1d84e xxh64=e8758bb9f62bc933 inxxh32=11f9c7b1 inxxh64=3f129fb9d09bd2f0 file=block/109.lz4
+n=4096 mp=0.50 seed=7 mode=fast8 size=1450 xxh32=50dfff5b xxh64=fe2addf4079e4097 inxxh32=11f9c7b1 inxxh64=3f129fb9d09bd2f0 file=block/110.lz4
+n=4096 mp=0.50 seed=7 mode=dest size=1442 consumed=4096 xxh32=9af1d84e xxh64=e8758bb9f62bc933 inxxh32=11f9c7b1 inxxh64=3f129fb9d09bd2f0 file=block/111.lz4
+n=4096 mp=0.90 seed=0 mode=default size=443 xxh32=cd28d50d xxh64=017e097f399fb1a0 inxxh32=f3a05cfb inxxh64=03cce69c58e99124 file=block/112.lz4
+n=4096 mp=0.90 seed=0 mode=fast1 size=443 xxh32=cd28d50d xxh64=017e097f399fb1a0 inxxh32=f3a05cfb inxxh64=03cce69c58e99124 file=block/113.lz4
+n=4096 mp=0.90 seed=0 mode=fast8 size=449 xxh32=7ba25060 xxh64=3b5603e2375611e0 inxxh32=f3a05cfb inxxh64=03cce69c58e99124 file=block/114.lz4
+n=4096 mp=0.90 seed=0 mode=dest size=443 consumed=4096 xxh32=cd28d50d xxh64=017e097f399fb1a0 inxxh32=f3a05cfb inxxh64=03cce69c58e99124 file=block/115.lz4
+n=4096 mp=0.90 seed=7 mode=default size=350 xxh32=0a37027a xxh64=b0b1b7a51c084a07 inxxh32=f3fe2ced inxxh64=086503c70d062006 file=block/116.lz4
+n=4096 mp=0.90 seed=7 mode=fast1 size=350 xxh32=0a37027a xxh64=b0b1b7a51c084a07 inxxh32=f3fe2ced inxxh64=086503c70d062006 file=block/117.lz4
+n=4096 mp=0.90 seed=7 mode=fast8 size=382 xxh32=4c6327bd xxh64=c84fe3d68efd46ad inxxh32=f3fe2ced inxxh64=086503c70d062006 file=block/118.lz4
+n=4096 mp=0.90 seed=7 mode=dest size=350 consumed=4096 xxh32=0a37027a xxh64=b0b1b7a51c084a07 inxxh32=f3fe2ced inxxh64=086503c70d062006 file=block/119.lz4
+n=4096 mp=1.00 seed=0 mode=default size=26 xxh32=1fc69d86 xxh64=ca765317388e8959 inxxh32=475546f5 inxxh64=ac869b6f32d8bbdb file=block/120.lz4
+n=4096 mp=1.00 seed=0 mode=fast1 size=26 xxh32=1fc69d86 xxh64=ca765317388e8959 inxxh32=475546f5 inxxh64=ac869b6f32d8bbdb file=block/121.lz4
+n=4096 mp=1.00 seed=0 mode=fast8 size=26 xxh32=1fc69d86 xxh64=ca765317388e8959 inxxh32=475546f5 inxxh64=ac869b6f32d8bbdb file=block/122.lz4
+n=4096 mp=1.00 seed=0 mode=dest size=26 consumed=4096 xxh32=1fc69d86 xxh64=ca765317388e8959 inxxh32=475546f5 inxxh64=ac869b6f32d8bbdb file=block/123.lz4
+n=4096 mp=1.00 seed=7 mode=default size=26 xxh32=1fc69d86 xxh64=ca765317388e8959 inxxh32=475546f5 inxxh64=ac869b6f32d8bbdb file=block/124.lz4
+n=4096 mp=1.00 seed=7 mode=fast1 size=26 xxh32=1fc69d86 xxh64=ca765317388e8959 inxxh32=475546f5 inxxh64=ac869b6f32d8bbdb file=block/125.lz4
+n=4096 mp=1.00 seed=7 mode=fast8 size=26 xxh32=1fc69d86 xxh64=ca765317388e8959 inxxh32=475546f5 inxxh64=ac869b6f32d8bbdb file=block/126.lz4
+n=4096 mp=1.00 seed=7 mode=dest size=26 consumed=4096 xxh32=1fc69d86 xxh64=ca765317388e8959 inxxh32=475546f5 inxxh64=ac869b6f32d8bbdb file=block/127.lz4
+n=65535 mp=0.00 seed=0 mode=default size=65793 xxh32=10eb4be3 xxh64=3b261b93f74a21c4 inxxh32=acac7fa8 inxxh64=97973365ddafb017
+n=65535 mp=0.00 seed=0 mode=fast1 size=65793 xxh32=10eb4be3 xxh64=3b261b93f74a21c4 inxxh32=acac7fa8 inxxh64=97973365ddafb017
+n=65535 mp=0.00 seed=0 mode=fast8 size=65793 xxh32=10eb4be3 xxh64=3b261b93f74a21c4 inxxh32=acac7fa8 inxxh64=97973365ddafb017
+n=65535 mp=0.00 seed=0 mode=dest size=49151 consumed=48958 xxh32=69b425f0 xxh64=3b181318db8a56d9 inxxh32=acac7fa8 inxxh64=97973365ddafb017 file=block/131.lz4
+n=65535 mp=0.00 seed=7 mode=default size=65793 xxh32=6af9d1a6 xxh64=b657c0174306c848 inxxh32=0d21db5c inxxh64=6fcf4b749073d583
+n=65535 mp=0.00 seed=7 mode=fast1 size=65793 xxh32=6af9d1a6 xxh64=b657c0174306c848 inxxh32=0d21db5c inxxh64=6fcf4b749073d583
+n=65535 mp=0.00 seed=7 mode=fast8 size=65793 xxh32=6af9d1a6 xxh64=b657c0174306c848 inxxh32=0d21db5c inxxh64=6fcf4b749073d583
+n=65535 mp=0.00 seed=7 mode=dest size=49151 consumed=48958 xxh32=e35e4e2e xxh64=482a267c4a002fd1 inxxh32=0d21db5c inxxh64=6fcf4b749073d583 file=block/135.lz4
+n=65535 mp=0.50 seed=0 mode=default size=36459 xxh32=2fc26585 xxh64=d8e8dcf0914b5f2a inxxh32=f0bf1c6c inxxh64=f127d3849da6da49 file=block/136.lz4
+n=65535 mp=0.50 seed=0 mode=fast1 size=36459 xxh32=2fc26585 xxh64=d8e8dcf0914b5f2a inxxh32=f0bf1c6c inxxh64=f127d3849da6da49 file=block/137.lz4
+n=65535 mp=0.50 seed=0 mode=fast8 size=42371 xxh32=41808f86 xxh64=200c81c78ce4b4d1 inxxh32=f0bf1c6c inxxh64=f127d3849da6da49 file=block/138.lz4
+n=65535 mp=0.50 seed=0 mode=dest size=36459 consumed=65535 xxh32=2fc26585 xxh64=d8e8dcf0914b5f2a inxxh32=f0bf1c6c inxxh64=f127d3849da6da49 file=block/139.lz4
+n=65535 mp=0.50 seed=7 mode=default size=36301 xxh32=46f64282 xxh64=21df072ddb19c417 inxxh32=128bbb3e inxxh64=ce89b0df55295419 file=block/140.lz4
+n=65535 mp=0.50 seed=7 mode=fast1 size=36301 xxh32=46f64282 xxh64=21df072ddb19c417 inxxh32=128bbb3e inxxh64=ce89b0df55295419 file=block/141.lz4
+n=65535 mp=0.50 seed=7 mode=fast8 size=43159 xxh32=981540cd xxh64=83bf31a845c8eb27 inxxh32=128bbb3e inxxh64=ce89b0df55295419 file=block/142.lz4
+n=65535 mp=0.50 seed=7 mode=dest size=36301 consumed=65535 xxh32=46f64282 xxh64=21df072ddb19c417 inxxh32=128bbb3e inxxh64=ce89b0df55295419 file=block/143.lz4
+n=65535 mp=0.90 seed=0 mode=default size=7990 xxh32=24f6ba6a xxh64=4ffc0e50553460cb inxxh32=0bb6ca95 inxxh64=bc83143838535470 file=block/144.lz4
+n=65535 mp=0.90 seed=0 mode=fast1 size=7990 xxh32=24f6ba6a xxh64=4ffc0e50553460cb inxxh32=0bb6ca95 inxxh64=bc83143838535470 file=block/145.lz4
+n=65535 mp=0.90 seed=0 mode=fast8 size=9893 xxh32=67ff9251 xxh64=13601519627e2663 inxxh32=0bb6ca95 inxxh64=bc83143838535470 file=block/146.lz4
+n=65535 mp=0.90 seed=0 mode=dest size=7990 consumed=65535 xxh32=24f6ba6a xxh64=4ffc0e50553460cb inxxh32=0bb6ca95 inxxh64=bc83143838535470 file=block/147.lz4
+n=65535 mp=0.90 seed=7 mode=default size=6560 xxh32=ed2eed3f xxh64=0a21015356d924b2 inxxh32=3d38c793 inxxh64=196e3819440e484e file=block/148.lz4
+n=65535 mp=0.90 seed=7 mode=fast1 size=6560 xxh32=ed2eed3f xxh64=0a21015356d924b2 inxxh32=3d38c793 inxxh64=196e3819440e484e file=block/149.lz4
+n=65535 mp=0.90 seed=7 mode=fast8 size=7953 xxh32=aad5c296 xxh64=67fc71ca3a537e36 inxxh32=3d38c793 inxxh64=196e3819440e484e file=block/150.lz4
+n=65535 mp=0.90 seed=7 mode=dest size=6560 consumed=65535 xxh32=ed2eed3f xxh64=0a21015356d924b2 inxxh32=3d38c793 inxxh64=196e3819440e484e file=block/151.lz4
+n=65535 mp=1.00 seed=0 mode=default size=267 xxh32=da906640 xxh64=6e4ac478020b8d34 inxxh32=705c5ed7 inxxh64=bef1ace972e53997 file=block/152.lz4
+n=65535 mp=1.00 seed=0 mode=fast1 size=267 xxh32=da906640 xxh64=6e4ac478020b8d34 inxxh32=705c5ed7 inxxh64=bef1ace972e53997 file=block/153.lz4
+n=65535 mp=1.00 seed=0 mode=fast8 size=267 xxh32=da906640 xxh64=6e4ac478020b8d34 inxxh32=705c5ed7 inxxh64=bef1ace972e53997 file=block/154.lz4
+n=65535 mp=1.00 seed=0 mode=dest size=267 consumed=65535 xxh32=da906640 xxh64=6e4ac478020b8d34 inxxh32=705c5ed7 inxxh64=bef1ace972e53997 file=block/155.lz4
+n=65535 mp=1.00 seed=7 mode=default size=267 xxh32=da906640 xxh64=6e4ac478020b8d34 inxxh32=705c5ed7 inxxh64=bef1ace972e53997 file=block/156.lz4
+n=65535 mp=1.00 seed=7 mode=fast1 size=267 xxh32=da906640 xxh64=6e4ac478020b8d34 inxxh32=705c5ed7 inxxh64=bef1ace972e53997 file=block/157.lz4
+n=65535 mp=1.00 seed=7 mode=fast8 size=267 xxh32=da906640 xxh64=6e4ac478020b8d34 inxxh32=705c5ed7 inxxh64=bef1ace972e53997 file=block/158.lz4
+n=65535 mp=1.00 seed=7 mode=dest size=267 consumed=65535 xxh32=da906640 xxh64=6e4ac478020b8d34 inxxh32=705c5ed7 inxxh64=bef1ace972e53997 file=block/159.lz4
+n=65536 mp=0.00 seed=0 mode=default size=65794 xxh32=0a92397a xxh64=5c8462a7bf58a498 inxxh32=00d020c6 inxxh64=e5445c011d57719a
+n=65536 mp=0.00 seed=0 mode=fast1 size=65794 xxh32=0a92397a xxh64=5c8462a7bf58a498 inxxh32=00d020c6 inxxh64=e5445c011d57719a
+n=65536 mp=0.00 seed=0 mode=fast8 size=65794 xxh32=0a92397a xxh64=5c8462a7bf58a498 inxxh32=00d020c6 inxxh64=e5445c011d57719a
+n=65536 mp=0.00 seed=0 mode=dest size=49152 consumed=48959 xxh32=9c18b05b xxh64=60e7c42ffb71b8b2 inxxh32=00d020c6 inxxh64=e5445c011d57719a file=block/163.lz4
+n=65536 mp=0.00 seed=7 mode=default size=65794 xxh32=97ac44b5 xxh64=e2811b109edf46c4 inxxh32=f0915266 inxxh64=63afd095c366d56c
+n=65536 mp=0.00 seed=7 mode=fast1 size=65794 xxh32=97ac44b5 xxh64=e2811b109edf46c4 inxxh32=f0915266 inxxh64=63afd095c366d56c
+n=65536 mp=0.00 seed=7 mode=fast8 size=65794 xxh32=97ac44b5 xxh64=e2811b109edf46c4 inxxh32=f0915266 inxxh64=63afd095c366d56c
+n=65536 mp=0.00 seed=7 mode=dest size=49152 consumed=48959 xxh32=6ff324c8 xxh64=19513834e82bd61f inxxh32=f0915266 inxxh64=63afd095c366d56c file=block/167.lz4
+n=65536 mp=0.50 seed=0 mode=default size=36459 xxh32=cee2d4ba xxh64=38152d09e4a6dc03 inxxh32=c20f7bcc inxxh64=197a59a7c9d2bd88 file=block/168.lz4
+n=65536 mp=0.50 seed=0 mode=fast1 size=36459 xxh32=cee2d4ba xxh64=38152d09e4a6dc03 inxxh32=c20f7bcc inxxh64=197a59a7c9d2bd88 file=block/169.lz4
+n=65536 mp=0.50 seed=0 mode=fast8 size=42371 xxh32=3bd2b7d5 xxh64=51ab75c6e3b53a4b inxxh32=c20f7bcc inxxh64=197a59a7c9d2bd88 file=block/170.lz4
+n=65536 mp=0.50 seed=0 mode=dest size=36459 consumed=65536 xxh32=cee2d4ba xxh64=38152d09e4a6dc03 inxxh32=c20f7bcc inxxh64=197a59a7c9d2bd88 file=block/171.lz4
+n=65536 mp=0.50 seed=7 mode=default size=36301 xxh32=23c335d6 xxh64=2fb95125f201e883 inxxh32=93e70ff8 inxxh64=834be9316bc7c3c5 file=block/172.lz4
+n=65536 mp=0.50 seed=7 mode=fast1 size=36301 xxh32=23c335d6 xxh64=2fb95125f201e883 inxxh32=93e70ff8 inxxh64=834be9316bc7c3c5 file=block/173.lz4
+n=65536 mp=0.50 seed=7 mode=fast8 size=43159 xxh32=e625142b xxh64=932aec96346d49e2 inxxh32=93e70ff8 inxxh64=834be9316bc7c3c5 file=block/174.lz4
+n=65536 mp=0.50 seed=7 mode=dest size=36301 consumed=65536 xxh32=23c335d6 xxh64=2fb95125f201e883 inxxh32=93e70ff8 inxxh64=834be9316bc7c3c5 file=block/175.lz4
+n=65536 mp=0.90 seed=0 mode=default size=7990 xxh32=07cf5a54 xxh64=d51a175057341acd inxxh32=7cf903fc inxxh64=05cbf98ef5fd4a64 file=block/176.lz4
+n=65536 mp=0.90 seed=0 mode=fast1 size=7990 xxh32=07cf5a54 xxh64=d51a175057341acd inxxh32=7cf903fc inxxh64=05cbf98ef5fd4a64 file=block/177.lz4
+n=65536 mp=0.90 seed=0 mode=fast8 size=9886 xxh32=1e81178a xxh64=b63f67735535e91e inxxh32=7cf903fc inxxh64=05cbf98ef5fd4a64 file=block/178.lz4
+n=65536 mp=0.90 seed=0 mode=dest size=7990 consumed=65536 xxh32=07cf5a54 xxh64=d51a175057341acd inxxh32=7cf903fc inxxh64=05cbf98ef5fd4a64 file=block/179.lz4
+n=65536 mp=0.90 seed=7 mode=default size=6560 xxh32=1d22b405 xxh64=3118e96287656c84 inxxh32=99ba8de1 inxxh64=3a798cd5ac65353f file=block/180.lz4
+n=65536 mp=0.90 seed=7 mode=fast1 size=6560 xxh32=1d22b405 xxh64=3118e96287656c84 inxxh32=99ba8de1 inxxh64=3a798cd5ac65353f file=block/181.lz4
+n=65536 mp=0.90 seed=7 mode=fast8 size=7953 xxh32=8ee3d375 xxh64=e0fde9699981eea9 inxxh32=99ba8de1 inxxh64=3a798cd5ac65353f file=block/182.lz4
+n=65536 mp=0.90 seed=7 mode=dest size=6560 consumed=65536 xxh32=1d22b405 xxh64=3118e96287656c84 inxxh32=99ba8de1 inxxh64=3a798cd5ac65353f file=block/183.lz4
+n=65536 mp=1.00 seed=0 mode=default size=267 xxh32=277289eb xxh64=14e218580c0f5ba9 inxxh32=0f64e81c inxxh64=5983dda9f15715a4 file=block/184.lz4
+n=65536 mp=1.00 seed=0 mode=fast1 size=267 xxh32=277289eb xxh64=14e218580c0f5ba9 inxxh32=0f64e81c inxxh64=5983dda9f15715a4 file=block/185.lz4
+n=65536 mp=1.00 seed=0 mode=fast8 size=267 xxh32=277289eb xxh64=14e218580c0f5ba9 inxxh32=0f64e81c inxxh64=5983dda9f15715a4 file=block/186.lz4
+n=65536 mp=1.00 seed=0 mode=dest size=267 consumed=65536 xxh32=277289eb xxh64=14e218580c0f5ba9 inxxh32=0f64e81c inxxh64=5983dda9f15715a4 file=block/187.lz4
+n=65536 mp=1.00 seed=7 mode=default size=267 xxh32=277289eb xxh64=14e218580c0f5ba9 inxxh32=0f64e81c inxxh64=5983dda9f15715a4 file=block/188.lz4
+n=65536 mp=1.00 seed=7 mode=fast1 size=267 xxh32=277289eb xxh64=14e218580c0f5ba9 inxxh32=0f64e81c inxxh64=5983dda9f15715a4 file=block/189.lz4
+n=65536 mp=1.00 seed=7 mode=fast8 size=267 xxh32=277289eb xxh64=14e218580c0f5ba9 inxxh32=0f64e81c inxxh64=5983dda9f15715a4 file=block/190.lz4
+n=65536 mp=1.00 seed=7 mode=dest size=267 consumed=65536 xxh32=277289eb xxh64=14e218580c0f5ba9 inxxh32=0f64e81c inxxh64=5983dda9f15715a4 file=block/191.lz4
+n=65537 mp=0.00 seed=0 mode=default size=65795 xxh32=8cf92a01 xxh64=b1b0b7f4991f7023 inxxh32=94b6c259 inxxh64=8fcd923d28220cb1
+n=65537 mp=0.00 seed=0 mode=fast1 size=65795 xxh32=8cf92a01 xxh64=b1b0b7f4991f7023 inxxh32=94b6c259 inxxh64=8fcd923d28220cb1
+n=65537 mp=0.00 seed=0 mode=fast8 size=65795 xxh32=8cf92a01 xxh64=b1b0b7f4991f7023 inxxh32=94b6c259 inxxh64=8fcd923d28220cb1
+n=65537 mp=0.00 seed=0 mode=dest size=49152 consumed=48959 xxh32=9c18b05b xxh64=60e7c42ffb71b8b2 inxxh32=94b6c259 inxxh64=8fcd923d28220cb1 file=block/195.lz4
+n=65537 mp=0.00 seed=7 mode=default size=65795 xxh32=677ad4b9 xxh64=4b3b2fb8a9320f8f inxxh32=e43f0302 inxxh64=022ba9266b995f9e
+n=65537 mp=0.00 seed=7 mode=fast1 size=65795 xxh32=677ad4b9 xxh64=4b3b2fb8a9320f8f inxxh32=e43f0302 inxxh64=022ba9266b995f9e
+n=65537 mp=0.00 seed=7 mode=fast8 size=65795 xxh32=677ad4b9 xxh64=4b3b2fb8a9320f8f inxxh32=e43f0302 inxxh64=022ba9266b995f9e
+n=65537 mp=0.00 seed=7 mode=dest size=49152 consumed=48959 xxh32=6ff324c8 xxh64=19513834e82bd61f inxxh32=e43f0302 inxxh64=022ba9266b995f9e file=block/199.lz4
+n=65537 mp=0.50 seed=0 mode=default size=36459 xxh32=76045679 xxh64=1aa7283971638263 inxxh32=effc6527 inxxh64=f31e6398ce4e2a55 file=block/200.lz4
+n=65537 mp=0.50 seed=0 mode=fast1 size=36459 xxh32=76045679 xxh64=1aa7283971638263 inxxh32=effc6527 inxxh64=f31e6398ce4e2a55 file=block/201.lz4
+n=65537 mp=0.50 seed=0 mode=fast8 size=42371 xxh32=dcc6940a xxh64=dc00bf37c2832870 inxxh32=effc6527 inxxh64=f31e6398ce4e2a55 file=block/202.lz4
+n=65537 mp=0.50 seed=0 mode=dest size=36459 consumed=65537 xxh32=76045679 xxh64=1aa7283971638263 inxxh32=effc6527 inxxh64=f31e6398ce4e2a55 file=block/203.lz4
+n=65537 mp=0.50 seed=7 mode=default size=36301 xxh32=2d65bd38 xxh64=56ab98ab9f496768 inxxh32=6cd9f06b inxxh64=42f5efd30f60f947 file=block/204.lz4
+n=65537 mp=0.50 seed=7 mode=fast1 size=36301 xxh32=2d65bd38 xxh64=56ab98ab9f496768 inxxh32=6cd9f06b inxxh64=42f5efd30f60f947 file=block/205.lz4
+n=65537 mp=0.50 seed=7 mode=fast8 size=43159 xxh32=4e5eff05 xxh64=5c05c58f8c119d02 inxxh32=6cd9f06b inxxh64=42f5efd30f60f947 file=block/206.lz4
+n=65537 mp=0.50 seed=7 mode=dest size=36301 consumed=65537 xxh32=2d65bd38 xxh64=56ab98ab9f496768 inxxh32=6cd9f06b inxxh64=42f5efd30f60f947 file=block/207.lz4
+n=65537 mp=0.90 seed=0 mode=default size=7991 xxh32=5ced5b43 xxh64=14beb48deeb1e588 inxxh32=b785f3dc inxxh64=6e16431cf522c012 file=block/208.lz4
+n=65537 mp=0.90 seed=0 mode=fast1 size=7991 xxh32=5ced5b43 xxh64=14beb48deeb1e588 inxxh32=b785f3dc inxxh64=6e16431cf522c012 file=block/209.lz4
+n=65537 mp=0.90 seed=0 mode=fast8 size=9887 xxh32=0d5095fe xxh64=6d2636d3e666e99d inxxh32=b785f3dc inxxh64=6e16431cf522c012 file=block/210.lz4
+n=65537 mp=0.90 seed=0 mode=dest size=7991 consumed=65537 xxh32=5ced5b43 xxh64=14beb48deeb1e588 inxxh32=b785f3dc inxxh64=6e16431cf522c012 file=block/211.lz4
+n=65537 mp=0.90 seed=7 mode=default size=6560 xxh32=e3e25513 xxh64=23389cfe80bd4402 inxxh32=818d4a31 inxxh64=3b688446e0b2b94e file=block/212.lz4
+n=65537 mp=0.90 seed=7 mode=fast1 size=6560 xxh32=e3e25513 xxh64=23389cfe80bd4402 inxxh32=818d4a31 inxxh64=3b688446e0b2b94e file=block/213.lz4
+n=65537 mp=0.90 seed=7 mode=fast8 size=7953 xxh32=990538bc xxh64=f75c2b9e8a1bb738 inxxh32=818d4a31 inxxh64=3b688446e0b2b94e file=block/214.lz4
+n=65537 mp=0.90 seed=7 mode=dest size=6560 consumed=65537 xxh32=e3e25513 xxh64=23389cfe80bd4402 inxxh32=818d4a31 inxxh64=3b688446e0b2b94e file=block/215.lz4
+n=65537 mp=1.00 seed=0 mode=default size=267 xxh32=c4417ed0 xxh64=5271612dbff11fb5 inxxh32=a4ae77cd inxxh64=9fa5da74f6ecb3f3 file=block/216.lz4
+n=65537 mp=1.00 seed=0 mode=fast1 size=267 xxh32=c4417ed0 xxh64=5271612dbff11fb5 inxxh32=a4ae77cd inxxh64=9fa5da74f6ecb3f3 file=block/217.lz4
+n=65537 mp=1.00 seed=0 mode=fast8 size=267 xxh32=c4417ed0 xxh64=5271612dbff11fb5 inxxh32=a4ae77cd inxxh64=9fa5da74f6ecb3f3 file=block/218.lz4
+n=65537 mp=1.00 seed=0 mode=dest size=267 consumed=65537 xxh32=c4417ed0 xxh64=5271612dbff11fb5 inxxh32=a4ae77cd inxxh64=9fa5da74f6ecb3f3 file=block/219.lz4
+n=65537 mp=1.00 seed=7 mode=default size=267 xxh32=c4417ed0 xxh64=5271612dbff11fb5 inxxh32=a4ae77cd inxxh64=9fa5da74f6ecb3f3 file=block/220.lz4
+n=65537 mp=1.00 seed=7 mode=fast1 size=267 xxh32=c4417ed0 xxh64=5271612dbff11fb5 inxxh32=a4ae77cd inxxh64=9fa5da74f6ecb3f3 file=block/221.lz4
+n=65537 mp=1.00 seed=7 mode=fast8 size=267 xxh32=c4417ed0 xxh64=5271612dbff11fb5 inxxh32=a4ae77cd inxxh64=9fa5da74f6ecb3f3 file=block/222.lz4
+n=65537 mp=1.00 seed=7 mode=dest size=267 consumed=65537 xxh32=c4417ed0 xxh64=5271612dbff11fb5 inxxh32=a4ae77cd inxxh64=9fa5da74f6ecb3f3 file=block/223.lz4
+n=131072 mp=0.00 seed=0 mode=default size=131587 xxh32=79e8f630 xxh64=4d07d08494c8307f inxxh32=1498b8b4 inxxh64=9ea2ebaf54626d76
+n=131072 mp=0.00 seed=0 mode=fast1 size=131587 xxh32=79e8f630 xxh64=4d07d08494c8307f inxxh32=1498b8b4 inxxh64=9ea2ebaf54626d76
+n=131072 mp=0.00 seed=0 mode=fast8 size=131587 xxh32=79e8f630 xxh64=4d07d08494c8307f inxxh32=1498b8b4 inxxh64=9ea2ebaf54626d76
+n=131072 mp=0.00 seed=0 mode=dest size=98304 consumed=97919 xxh32=0809cf30 xxh64=e7192940dc962351 inxxh32=1498b8b4 inxxh64=9ea2ebaf54626d76
+n=131072 mp=0.00 seed=7 mode=default size=131587 xxh32=1e04e7d1 xxh64=f9e315287726f0a7 inxxh32=78bde30f inxxh64=1c029bd61e6499ca
+n=131072 mp=0.00 seed=7 mode=fast1 size=131587 xxh32=1e04e7d1 xxh64=f9e315287726f0a7 inxxh32=78bde30f inxxh64=1c029bd61e6499ca
+n=131072 mp=0.00 seed=7 mode=fast8 size=131587 xxh32=1e04e7d1 xxh64=f9e315287726f0a7 inxxh32=78bde30f inxxh64=1c029bd61e6499ca
+n=131072 mp=0.00 seed=7 mode=dest size=98304 consumed=97919 xxh32=d6f1954e xxh64=409c43d9a4b12bb4 inxxh32=78bde30f inxxh64=1c029bd61e6499ca
+n=131072 mp=0.50 seed=0 mode=default size=76310 xxh32=1d8ec3c9 xxh64=495d931abaa34a6c inxxh32=d184759e inxxh64=c55a7b0a4dd34d71
+n=131072 mp=0.50 seed=0 mode=fast1 size=76310 xxh32=1d8ec3c9 xxh64=495d931abaa34a6c inxxh32=d184759e inxxh64=c55a7b0a4dd34d71
+n=131072 mp=0.50 seed=0 mode=fast8 size=90645 xxh32=86ed0724 xxh64=076e6e3222ddbb91 inxxh32=d184759e inxxh64=c55a7b0a4dd34d71
+n=131072 mp=0.50 seed=0 mode=dest size=76310 consumed=131072 xxh32=1d8ec3c9 xxh64=495d931abaa34a6c inxxh32=d184759e inxxh64=c55a7b0a4dd34d71
+n=131072 mp=0.50 seed=7 mode=default size=76231 xxh32=ea217222 xxh64=c865ab10f26d48bb inxxh32=2c97344a inxxh64=9c4153ebc8cfb2a3
+n=131072 mp=0.50 seed=7 mode=fast1 size=76231 xxh32=ea217222 xxh64=c865ab10f26d48bb inxxh32=2c97344a inxxh64=9c4153ebc8cfb2a3
+n=131072 mp=0.50 seed=7 mode=fast8 size=91425 xxh32=be6e2ba4 xxh64=d47878da1fe645a5 inxxh32=2c97344a inxxh64=9c4153ebc8cfb2a3
+n=131072 mp=0.50 seed=7 mode=dest size=76231 consumed=131072 xxh32=ea217222 xxh64=c865ab10f26d48bb inxxh32=2c97344a inxxh64=9c4153ebc8cfb2a3
+n=131072 mp=0.90 seed=0 mode=default size=24200 xxh32=ee2f4626 xxh64=183c9f274a7c7b4b inxxh32=bf1377f2 inxxh64=683af1c226081890 file=block/240.lz4
+n=131072 mp=0.90 seed=0 mode=fast1 size=24200 xxh32=ee2f4626 xxh64=183c9f274a7c7b4b inxxh32=bf1377f2 inxxh64=683af1c226081890 file=block/241.lz4
+n=131072 mp=0.90 seed=0 mode=fast8 size=32092 xxh32=d73f5c53 xxh64=c6f4e691aca1fcf5 inxxh32=bf1377f2 inxxh64=683af1c226081890 file=block/242.lz4
+n=131072 mp=0.90 seed=0 mode=dest size=24200 consumed=131072 xxh32=ee2f4626 xxh64=183c9f274a7c7b4b inxxh32=bf1377f2 inxxh64=683af1c226081890 file=block/243.lz4
+n=131072 mp=0.90 seed=7 mode=default size=16789 xxh32=af347eed xxh64=2a7512c0e8542cca inxxh32=d32b2e99 inxxh64=da4a4d3650f8293c file=block/244.lz4
+n=131072 mp=0.90 seed=7 mode=fast1 size=16789 xxh32=af347eed xxh64=2a7512c0e8542cca inxxh32=d32b2e99 inxxh64=da4a4d3650f8293c file=block/245.lz4
+n=131072 mp=0.90 seed=7 mode=fast8 size=21985 xxh32=3c754f77 xxh64=1c7c831d003ed486 inxxh32=d32b2e99 inxxh64=da4a4d3650f8293c file=block/246.lz4
+n=131072 mp=0.90 seed=7 mode=dest size=16789 consumed=131072 xxh32=af347eed xxh64=2a7512c0e8542cca inxxh32=d32b2e99 inxxh64=da4a4d3650f8293c file=block/247.lz4
+n=131072 mp=1.00 seed=0 mode=default size=524 xxh32=5fb89b06 xxh64=5d85b5212525a475 inxxh32=f986c077 inxxh64=e12ecc387a955073 file=block/248.lz4
+n=131072 mp=1.00 seed=0 mode=fast1 size=524 xxh32=5fb89b06 xxh64=5d85b5212525a475 inxxh32=f986c077 inxxh64=e12ecc387a955073 file=block/249.lz4
+n=131072 mp=1.00 seed=0 mode=fast8 size=524 xxh32=5fb89b06 xxh64=5d85b5212525a475 inxxh32=f986c077 inxxh64=e12ecc387a955073 file=block/250.lz4
+n=131072 mp=1.00 seed=0 mode=dest size=524 consumed=131072 xxh32=5fb89b06 xxh64=5d85b5212525a475 inxxh32=f986c077 inxxh64=e12ecc387a955073 file=block/251.lz4
+n=131072 mp=1.00 seed=7 mode=default size=524 xxh32=5fb89b06 xxh64=5d85b5212525a475 inxxh32=f986c077 inxxh64=e12ecc387a955073 file=block/252.lz4
+n=131072 mp=1.00 seed=7 mode=fast1 size=524 xxh32=5fb89b06 xxh64=5d85b5212525a475 inxxh32=f986c077 inxxh64=e12ecc387a955073 file=block/253.lz4
+n=131072 mp=1.00 seed=7 mode=fast8 size=524 xxh32=5fb89b06 xxh64=5d85b5212525a475 inxxh32=f986c077 inxxh64=e12ecc387a955073 file=block/254.lz4
+n=131072 mp=1.00 seed=7 mode=dest size=524 consumed=131072 xxh32=5fb89b06 xxh64=5d85b5212525a475 inxxh32=f986c077 inxxh64=e12ecc387a955073 file=block/255.lz4
+n=0 mp=0.50 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/256.lz4
+n=1 mp=0.90 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=9cec73c4 inxxh64=26167c2af5162ca4 file=block/257.lz4
+n=255 mp=1.00 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=769746c1 inxxh64=5baf79c705ca1e7b file=block/258.lz4
+n=4096 mp=0.00 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=fc2fdd05 inxxh64=d93027eb00db934a file=block/259.lz4
+n=65535 mp=0.50 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=f0bf1c6c inxxh64=f127d3849da6da49 file=block/260.lz4
+n=65536 mp=0.90 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=7cf903fc inxxh64=05cbf98ef5fd4a64 file=block/261.lz4
+n=65537 mp=1.00 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=a4ae77cd inxxh64=9fa5da74f6ecb3f3 file=block/262.lz4
+n=131072 mp=0.00 seed=0 mode=tight size=0 xxh32=02cc5d05 xxh64=ef46db3751d8e999 inxxh32=1498b8b4 inxxh64=9ea2ebaf54626d76 file=block/263.lz4
+# dict=RDG(n=65536 mp=0.50 lp=0.00 seed=99) xxh32=059edec2 xxh64=d41565bb0ecfa4e3
+n=255 mp=0.00 seed=0 mode=dict size=257 xxh32=42be5aa6 xxh64=1fb93d0dad1a834d inxxh32=6e96b077 inxxh64=efd4dc746ff90d2e file=block/264.lz4
+n=255 mp=0.00 seed=7 mode=dict size=257 xxh32=0ed29158 xxh64=b4f125c8c1816af3 inxxh32=45fd394b inxxh64=7c8719724e691375 file=block/265.lz4
+n=255 mp=0.90 seed=0 mode=dict size=11 xxh32=387b105f xxh64=6ade35f444efe462 inxxh32=cbe2766c inxxh64=d1074591b2fa8835 file=block/266.lz4
+n=255 mp=0.90 seed=7 mode=dict size=11 xxh32=8ebfdc6d xxh64=f9f9a04a61934aaa inxxh32=e9da7969 inxxh64=e9e6f65ad9880591 file=block/267.lz4
+n=4096 mp=0.00 seed=0 mode=dict size=4114 xxh32=754fae48 xxh64=b179757c99f97c27 inxxh32=fc2fdd05 inxxh64=d93027eb00db934a file=block/268.lz4
+n=4096 mp=0.00 seed=7 mode=dict size=4114 xxh32=833d749c xxh64=eacc7240615d52b9 inxxh32=3b449358 inxxh64=560614d60dbfda09 file=block/269.lz4
+n=4096 mp=0.90 seed=0 mode=dict size=430 xxh32=7d74865a xxh64=69cf680a1dbbdcef inxxh32=f3a05cfb inxxh64=03cce69c58e99124 file=block/270.lz4
+n=4096 mp=0.90 seed=7 mode=dict size=346 xxh32=30a3b241 xxh64=10b879caee3ec6e3 inxxh32=f3fe2ced inxxh64=086503c70d062006 file=block/271.lz4
+n=65536 mp=0.00 seed=0 mode=dict size=65794 xxh32=0a92397a xxh64=5c8462a7bf58a498 inxxh32=00d020c6 inxxh64=e5445c011d57719a
+n=65536 mp=0.00 seed=7 mode=dict size=65794 xxh32=97ac44b5 xxh64=e2811b109edf46c4 inxxh32=f0915266 inxxh64=63afd095c366d56c
+n=65536 mp=0.90 seed=0 mode=dict size=8234 xxh32=c136ac72 xxh64=906c947bd934425d inxxh32=7cf903fc inxxh64=05cbf98ef5fd4a64 file=block/274.lz4
+n=65536 mp=0.90 seed=7 mode=dict size=6723 xxh32=7c9ce9ad xxh64=6742dc7714939a86 inxxh32=99ba8de1 inxxh64=3a798cd5ac65353f file=block/275.lz4
+n=65537 mp=0.50 seed=3 mode=dict size=33264 xxh32=8e344bd3 xxh64=33e51ce12311b1c1 inxxh32=f41b4e18 inxxh64=f2b3c896a454d62d file=block/276.lz4
+n=131072 mp=0.90 seed=11 mode=dict size=21159 xxh32=3beac038 xxh64=9a80ebc174b2be56 inxxh32=6d942ca2 inxxh64=0b321ffc57f0e3a2 file=block/277.lz4
+n=1 mp=1.00 seed=5 mode=dict size=2 xxh32=ec56599f xxh64=ac2fbabfc9927380 inxxh32=cf65b03e inxxh64=e934a84adb052768 file=block/278.lz4
+n=0 mp=0.00 seed=0 mode=dict size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/279.lz4

@@ -967,3 +967,388 @@ func lz4DecompressPrefixGuardConditionTest(): Unit {
         @Assert(dstB[prefixSize + 8 + i] == UInt8(0x30 + (i % 10)))                // literals 2
     }
 }
+
+/*-************************************
+*  M3 Task 2: safe_partial + usingDict + bidirectional golden closure
+**************************************/
+// Shared dictionary provenance (manifest '#' comment line): one 64KB RDG
+// dictionary (mp=0.5 lp=0.0 seed=99), independent of every row input. The C
+// harness loads it via LZ4_loadDict on a fresh stream and compresses each
+// dict-row input with LZ4_compress_fast_continue(accel=1).
+let BLOCK_DICT_XXH32: UInt32 = 0x059edec2u32
+let BLOCK_DICT_XXH64: UInt64 = 0xd41565bb0ecfa4e3u64
+
+private func blockDictBuffer(): Array<UInt8> {
+    let dict = Array<UInt8>(65536, {_ => 0u8})
+    RDG_genBuffer(dict, 65536, 0.5, 0.0, 99u32)
+    return dict
+}
+
+// dict rows of corpus/block_golden_ref.txt (rows 264..279):
+// (n, mpIndex, seed, size, xxh32, xxh64, inxxh32, inxxh64, fileRowIdx);
+// -1 = digest-only (compressed size 65794 > 65536 artifact cap)
+let BLOCK_DICT_REF: Array<(Int64, Int64, UInt32, Int32, UInt32, UInt64, UInt32, UInt64, Int64)> = [
+    (255, 0, 0u32, 257, 0x42be5aa6u32, 0x1fb93d0dad1a834du64, 0x6e96b077u32, 0xefd4dc746ff90d2eu64, 264),
+    (255, 0, 7u32, 257, 0x0ed29158u32, 0xb4f125c8c1816af3u64, 0x45fd394bu32, 0x7c8719724e691375u64, 265),
+    (255, 2, 0u32, 11, 0x387b105fu32, 0x6ade35f444efe462u64, 0xcbe2766cu32, 0xd1074591b2fa8835u64, 266),
+    (255, 2, 7u32, 11, 0x8ebfdc6du32, 0xf9f9a04a61934aaau64, 0xe9da7969u32, 0xe9e6f65ad9880591u64, 267),
+    (4096, 0, 0u32, 4114, 0x754fae48u32, 0xb179757c99f97c27u64, 0xfc2fdd05u32, 0xd93027eb00db934au64, 268),
+    (4096, 0, 7u32, 4114, 0x833d749cu32, 0xeacc7240615d52b9u64, 0x3b449358u32, 0x560614d60dbfda09u64, 269),
+    (4096, 2, 0u32, 430, 0x7d74865au32, 0x69cf680a1dbbdcefu64, 0xf3a05cfbu32, 0x03cce69c58e99124u64, 270),
+    (4096, 2, 7u32, 346, 0x30a3b241u32, 0x10b879caee3ec6e3u64, 0xf3fe2cedu32, 0x086503c70d062006u64, 271),
+    (65536, 0, 0u32, 65794, 0x0a92397au32, 0x5c8462a7bf58a498u64, 0x00d020c6u32, 0xe5445c011d57719au64, -1),
+    (65536, 0, 7u32, 65794, 0x97ac44b5u32, 0xe2811b109edf46c4u64, 0xf0915266u32, 0x63afd095c366d56cu64, -1),
+    (65536, 2, 0u32, 8234, 0xc136ac72u32, 0x906c947bd934425du64, 0x7cf903fcu32, 0x05cbf98ef5fd4a64u64, 274),
+    (65536, 2, 7u32, 6723, 0x7c9ce9adu32, 0x6742dc7714939a86u64, 0x99ba8de1u32, 0x3a798cd5ac65353fu64, 275),
+    (65537, 1, 3u32, 33264, 0x8e344bd3u32, 0x33e51ce12311b1c1u64, 0xf41b4e18u32, 0xf2b3c896a454d62du64, 276),
+    (131072, 2, 11u32, 21159, 0x3beac038u32, 0x9a80ebc174b2be56u64, 0x6d942ca2u32, 0x0b321ffc57f0e3a2u64, 277),
+    (1, 3, 5u32, 2, 0xec56599fu32, 0xac2fbabfc9927380u64, 0xcf65b03eu32, 0xe934a84adb052768u64, 278),
+    (0, 0, 0u32, 1, 0xcf65b03eu32, 0xe934a84adb052768u64, 0x02cc5d05u32, 0xef46db3751d8e999u64, 279),
+]
+
+@Test
+func lz4DecompressUsingDictGoldenTest(): Unit {
+    let dict = blockDictBuffer()
+    // dictionary provenance: regenerated dict digests match the manifest comment
+    @Assert(XXH32(dict, 65536, 0u32) == BLOCK_DICT_XXH32)
+    @Assert(XXH64(dict, 65536, 0u64) == BLOCK_DICT_XXH64)
+    var byteExact = 0
+    var digestOnly = 0
+    for ((n, mpIdx, seed, wantSize, want32, want64, wantIn32, wantIn64, fileRow) in BLOCK_DICT_REF) {
+        let buf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(buf, n, BLOCK_MPS[mpIdx], 0.0, seed)
+        // input digests close against the manifest v2 inxxh fields
+        @Assert(XXH32(buf, n, 0u32) == wantIn32)
+        @Assert(XXH64(buf, n, 0u64) == wantIn64)
+        if (fileRow < 0) {
+            // digest-only rows (mp=0.0, c=65794 > 65536): no artifact on disk
+            digestOnly += 1
+            continue
+        }
+        let art = readBlockArtifact(fileRow)
+        @Assert(art.size == Int64(wantSize))
+        let u8art = Array<UInt8>(art.size, {i => UInt8(art[i])})
+        // artifact bytes pinned by the C-side compressed digests
+        @Assert(XXH32(u8art, Int64(wantSize), 0u32) == want32)
+        @Assert(XXH64(u8art, Int64(wantSize), 0u64) == want64)
+        let out = Array<UInt8>(n, {_ => 0u8})
+        let r = LZ4_decompress_safe_usingDict(u8art, wantSize, out, Int32(n), dict, 65536)
+        if (r != Int32(n)) {
+            println("DICT n=${n} mp=${BLOCK_MPS[mpIdx]} seed=${seed} row=${fileRow}: got ${r} want ${n}")
+        }
+        @Assert(r == Int32(n))
+        var eq = true
+        for (i in 0..n) {
+            if (out[i] != buf[i]) { eq = false; break }
+        }
+        if (!eq) { println("DICT BYTES differ row=${fileRow}") }
+        @Assert(eq)
+        byteExact += 1
+    }
+    @Assert(byteExact == 14)
+    @Assert(digestOnly == 2)
+    // dict-referencing block without the dictionary must fail (C probe:
+    // partialnodict row=270 -> -134): offsets reach below the output start
+    let art270 = readBlockArtifact(270)
+    let u8art270 = Array<UInt8>(art270.size, {i => UInt8(art270[i])})
+    let out270 = Array<UInt8>(4096, {_ => 0u8})
+    @Assert(LZ4_decompress_safe(u8art270, 430, out270, 4096) == -134)
+    // dictSize=0 routes to the plain noDict path (upstream L2739-2742)
+    @Assert(LZ4_decompress_safe_usingDict(u8art270, 430, out270, 4096, dict, 0) == -134)
+    println("dict golden: ${byteExact} byte-exact + ${digestOnly} digest-only rows")
+}
+
+// Partial probe constants (gen_golden.c stderr section): rows 64 / 112 / 248
+// (plain default-mode artifacts) and dict row 270, targets {0,1,n/2,n-1,n},
+// dstCapacity = n so the effective capacity is purely target-driven.
+// (kind 0=plain 1=dict, n, mpIndex, seed, rowIdx, target, expectedRet)
+let PARTIAL_PROBE_REF: Array<(Int64, Int64, Int64, UInt32, Int64, Int32, Int32)> = [
+    (0, 255, 0, 0u32, 64, 0, 0),
+    (0, 255, 0, 0u32, 64, 1, 1),
+    (0, 255, 0, 0u32, 64, 127, 127),
+    (0, 255, 0, 0u32, 64, 254, 254),
+    (0, 255, 0, 0u32, 64, 255, 255),
+    (0, 4096, 2, 0u32, 112, 0, 0),
+    (0, 4096, 2, 0u32, 112, 1, 1),
+    (0, 4096, 2, 0u32, 112, 2048, 2048),
+    (0, 4096, 2, 0u32, 112, 4095, 4095),
+    (0, 4096, 2, 0u32, 112, 4096, 4096),
+    (0, 131072, 3, 0u32, 248, 0, 0),
+    (0, 131072, 3, 0u32, 248, 1, 1),
+    (0, 131072, 3, 0u32, 248, 65536, 65536),
+    (0, 131072, 3, 0u32, 248, 131071, 131071),
+    (0, 131072, 3, 0u32, 248, 131072, 131072),
+    (1, 4096, 2, 0u32, 270, 0, 0),
+    (1, 4096, 2, 0u32, 270, 1, 1),
+    (1, 4096, 2, 0u32, 270, 2048, 2048),
+    (1, 4096, 2, 0u32, 270, 4095, 4095),
+    (1, 4096, 2, 0u32, 270, 4096, 4096),
+]
+
+@Test
+func lz4DecompressSafePartialGoldenTest(): Unit {
+    let dict = blockDictBuffer()
+    var checked = 0
+    for ((kind, n, mpIdx, seed, row, target, wantRet) in PARTIAL_PROBE_REF) {
+        let art = readBlockArtifact(row)
+        let u8art = Array<UInt8>(art.size, {i => UInt8(art[i])})
+        let buf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(buf, n, BLOCK_MPS[mpIdx], 0.0, seed)
+        let out = Array<UInt8>(n, {_ => 0u8})
+        let r = if (kind == 1) {
+            LZ4_decompress_safe_partial_usingDict(u8art, Int32(art.size), out, Int32(n),
+                target, dict, 65536)
+        } else {
+            LZ4_decompress_safe_partial(u8art, Int32(art.size), out, Int32(n), target)
+        }
+        if (r != wantRet) {
+            println("PARTIAL row=${row} target=${target}: got ${r} want ${wantRet}")
+        }
+        @Assert(r == wantRet)
+        // upstream partial semantics: early stop, actual production <= target
+        @Assert(r <= target && r <= Int32(n))
+        var eq = true
+        for (i in 0..Int64(r)) {
+            if (out[i] != buf[i]) { eq = false; break }
+        }
+        if (!eq) { println("PARTIAL PREFIX differs row=${row} target=${target}") }
+        @Assert(eq)
+        checked += 1
+    }
+    @Assert(checked == 20)
+    println("partial golden: ${checked}/20 probe rows exact (incl. 5 dict-partial)")
+}
+
+@Test
+func lz4DecompressSafePartialSemanticsTest(): Unit {
+    let dst = Array<UInt8>(64, {_ => 0u8})
+    // literals-only block (token litLen=10 + 'a'..'j'), 11 bytes
+    let litOnly = Array<UInt8>(11, {i => if (i == 0) { 0xA0u8 } else { UInt8(96 + i) }})
+    // target beyond full content: decode stops at input end -> ret < target
+    @Assert(LZ4_decompress_safe_partial(litOnly, 11, dst, 20, 20) == 10)
+    for (i in 0..10) {
+        @Assert(dst[i] == UInt8(97 + i))
+    }
+    // target cut mid-literals: clamp to oend = target (C probe B)
+    @Assert(LZ4_decompress_safe_partial(litOnly, 11, dst, 20, 4) == 4)
+    for (i in 0..4) {
+        @Assert(dst[i] == UInt8(97 + i))
+    }
+    // dstCapacity < target: cap = MIN(target, dstCapacity) (C probe G)
+    @Assert(LZ4_decompress_safe_partial(litOnly, 11, dst, 3, 20) == 3)
+    // valid match block: 4 literals + offset-4 match(4) + 5 last literals
+    // (13 out: "abcdabcdabcde"); targets cut mid-match (C probe C-series)
+    let blk = Array<UInt8>(13, {_ => 0u8})
+    blk[0] = 0x40u8
+    blk[1] = 0x61u8; blk[2] = 0x62u8; blk[3] = 0x63u8; blk[4] = 0x64u8
+    blk[5] = 0x04u8; blk[6] = 0x00u8
+    blk[7] = 0x50u8
+    blk[8] = 0x61u8; blk[9] = 0x62u8; blk[10] = 0x63u8; blk[11] = 0x64u8; blk[12] = 0x65u8
+    // full decode is "abcdabcdabcde": 4 literals + overlap match + 5 literals
+    let wantFull = Array<UInt8>(13, {i => if (i < 12) { UInt8(97 + i % 4) } else { 101u8 }})
+    let targets: Array<Int32> = [0, 1, 6, 7, 12, 13]
+    for (t in targets) {
+        let r = LZ4_decompress_safe_partial(blk, 13, dst, 20, t)
+        if (r != t) {
+            println("PARTIAL-SEM target=${t}: got ${r} want ${t}")
+        }
+        @Assert(r == t)
+        for (i in 0..Int64(r)) {
+            @Assert(dst[i] == wantFull[i])
+        }
+    }
+    // cap < target on the match block (C probe: cap5 ret 5)
+    @Assert(LZ4_decompress_safe_partial(blk, 13, dst, 5, 10) == 5)
+    // empty block token with target > 0 -> 0 (no content)
+    let emptyBlock = Array<UInt8>(1, {_ => 0u8})
+    @Assert(LZ4_decompress_safe_partial(emptyBlock, 1, dst, 64, 5) == 0)
+    // target 0 -> immediate 0 (outputSize==0 partial special case, L2064)
+    @Assert(LZ4_decompress_safe_partial(litOnly, 11, dst, 64, 0) == 0)
+    // negative target / negative dstCapacity / empty input -> -1
+    @Assert(LZ4_decompress_safe_partial(litOnly, 11, dst, 64, -3) == -1)
+    @Assert(LZ4_decompress_safe_partial(litOnly, 11, dst, -1, 5) == -1)
+    @Assert(LZ4_decompress_safe_partial(litOnly, 0, dst, 5, 5) == -1)
+    // usingDict with dictSize=0 delegates to the noDict paths (L2739-2742,
+    // L2754-2756): C probe D0 -> 13, PD0 -> 7
+    let anyDict = Array<UInt8>(11, {_ => 0u8})
+    @Assert(LZ4_decompress_safe_usingDict(blk, 13, dst, 20, anyDict, 0) == 13)
+    @Assert(LZ4_decompress_safe_partial_usingDict(blk, 13, dst, 20, 7, anyDict, 0) == 7)
+    // dictSize > dict.size: undefined in C (assert); defensive -1
+    @Assert(LZ4_decompress_safe_usingDict(blk, 13, dst, 20, anyDict, 12) == -1)
+    @Assert(LZ4_decompress_safe_partial_usingDict(blk, 13, dst, 20, 7, anyDict, 12) == -1)
+    @Assert(LZ4_decompress_safe_usingDict(blk, 13, dst, 20, anyDict, -1) == -1)
+}
+
+// L3 input digests: manifest v2 inxxh32/inxxh64 of the 64 matrix inputs
+// (one per (n, mp, seed); the 4 mode rows of an input share the fields).
+// (n, mpIndex, seed, inxxh32, inxxh64)
+let BLOCK_IN_REF: Array<(Int64, Int64, UInt32, UInt32, UInt64)> = [
+    (0, 0, 0u32, 0x02cc5d05u32, 0xef46db3751d8e999u64),
+    (0, 0, 7u32, 0x02cc5d05u32, 0xef46db3751d8e999u64),
+    (0, 1, 0u32, 0x02cc5d05u32, 0xef46db3751d8e999u64),
+    (0, 1, 7u32, 0x02cc5d05u32, 0xef46db3751d8e999u64),
+    (0, 2, 0u32, 0x02cc5d05u32, 0xef46db3751d8e999u64),
+    (0, 2, 7u32, 0x02cc5d05u32, 0xef46db3751d8e999u64),
+    (0, 3, 0u32, 0x02cc5d05u32, 0xef46db3751d8e999u64),
+    (0, 3, 7u32, 0x02cc5d05u32, 0xef46db3751d8e999u64),
+    (1, 0, 0u32, 0x9608f5fbu32, 0x50bd57c8fab35779u64),
+    (1, 0, 7u32, 0x28d0ed78u32, 0xf8108221c3d40e21u64),
+    (1, 1, 0u32, 0x06e7e66fu32, 0x122ebd68645a7cf7u64),
+    (1, 1, 7u32, 0xfa21d689u32, 0x2c3f836a5df75b04u64),
+    (1, 2, 0u32, 0x9cec73c4u32, 0x26167c2af5162ca4u64),
+    (1, 2, 7u32, 0x68fcf025u32, 0xad4662bb7caac864u64),
+    (1, 3, 0u32, 0xcf65b03eu32, 0xe934a84adb052768u64),
+    (1, 3, 7u32, 0xcf65b03eu32, 0xe934a84adb052768u64),
+    (255, 0, 0u32, 0x6e96b077u32, 0xefd4dc746ff90d2eu64),
+    (255, 0, 7u32, 0x45fd394bu32, 0x7c8719724e691375u64),
+    (255, 1, 0u32, 0xf125f7b1u32, 0x42bbcae5695ca49eu64),
+    (255, 1, 7u32, 0x2110dfcfu32, 0x28c09d2b78a828b9u64),
+    (255, 2, 0u32, 0xcbe2766cu32, 0xd1074591b2fa8835u64),
+    (255, 2, 7u32, 0xe9da7969u32, 0xe9e6f65ad9880591u64),
+    (255, 3, 0u32, 0x769746c1u32, 0x5baf79c705ca1e7bu64),
+    (255, 3, 7u32, 0x769746c1u32, 0x5baf79c705ca1e7bu64),
+    (4096, 0, 0u32, 0xfc2fdd05u32, 0xd93027eb00db934au64),
+    (4096, 0, 7u32, 0x3b449358u32, 0x560614d60dbfda09u64),
+    (4096, 1, 0u32, 0x67fcb522u32, 0xc530a1f18ea87157u64),
+    (4096, 1, 7u32, 0x11f9c7b1u32, 0x3f129fb9d09bd2f0u64),
+    (4096, 2, 0u32, 0xf3a05cfbu32, 0x03cce69c58e99124u64),
+    (4096, 2, 7u32, 0xf3fe2cedu32, 0x086503c70d062006u64),
+    (4096, 3, 0u32, 0x475546f5u32, 0xac869b6f32d8bbdbu64),
+    (4096, 3, 7u32, 0x475546f5u32, 0xac869b6f32d8bbdbu64),
+    (65535, 0, 0u32, 0xacac7fa8u32, 0x97973365ddafb017u64),
+    (65535, 0, 7u32, 0x0d21db5cu32, 0x6fcf4b749073d583u64),
+    (65535, 1, 0u32, 0xf0bf1c6cu32, 0xf127d3849da6da49u64),
+    (65535, 1, 7u32, 0x128bbb3eu32, 0xce89b0df55295419u64),
+    (65535, 2, 0u32, 0x0bb6ca95u32, 0xbc83143838535470u64),
+    (65535, 2, 7u32, 0x3d38c793u32, 0x196e3819440e484eu64),
+    (65535, 3, 0u32, 0x705c5ed7u32, 0xbef1ace972e53997u64),
+    (65535, 3, 7u32, 0x705c5ed7u32, 0xbef1ace972e53997u64),
+    (65536, 0, 0u32, 0x00d020c6u32, 0xe5445c011d57719au64),
+    (65536, 0, 7u32, 0xf0915266u32, 0x63afd095c366d56cu64),
+    (65536, 1, 0u32, 0xc20f7bccu32, 0x197a59a7c9d2bd88u64),
+    (65536, 1, 7u32, 0x93e70ff8u32, 0x834be9316bc7c3c5u64),
+    (65536, 2, 0u32, 0x7cf903fcu32, 0x05cbf98ef5fd4a64u64),
+    (65536, 2, 7u32, 0x99ba8de1u32, 0x3a798cd5ac65353fu64),
+    (65536, 3, 0u32, 0x0f64e81cu32, 0x5983dda9f15715a4u64),
+    (65536, 3, 7u32, 0x0f64e81cu32, 0x5983dda9f15715a4u64),
+    (65537, 0, 0u32, 0x94b6c259u32, 0x8fcd923d28220cb1u64),
+    (65537, 0, 7u32, 0xe43f0302u32, 0x022ba9266b995f9eu64),
+    (65537, 1, 0u32, 0xeffc6527u32, 0xf31e6398ce4e2a55u64),
+    (65537, 1, 7u32, 0x6cd9f06bu32, 0x42f5efd30f60f947u64),
+    (65537, 2, 0u32, 0xb785f3dcu32, 0x6e16431cf522c012u64),
+    (65537, 2, 7u32, 0x818d4a31u32, 0x3b688446e0b2b94eu64),
+    (65537, 3, 0u32, 0xa4ae77cdu32, 0x9fa5da74f6ecb3f3u64),
+    (65537, 3, 7u32, 0xa4ae77cdu32, 0x9fa5da74f6ecb3f3u64),
+    (131072, 0, 0u32, 0x1498b8b4u32, 0x9ea2ebaf54626d76u64),
+    (131072, 0, 7u32, 0x78bde30fu32, 0x1c029bd61e6499cau64),
+    (131072, 1, 0u32, 0xd184759eu32, 0xc55a7b0a4dd34d71u64),
+    (131072, 1, 7u32, 0x2c97344au32, 0x9c4153ebc8cfb2a3u64),
+    (131072, 2, 0u32, 0xbf1377f2u32, 0x683af1c226081890u64),
+    (131072, 2, 7u32, 0xd32b2e99u32, 0xda4a4d3650f8293cu64),
+    (131072, 3, 0u32, 0xf986c077u32, 0xe12ecc387a955073u64),
+    (131072, 3, 7u32, 0xf986c077u32, 0xe12ecc387a955073u64),
+]
+
+@Test
+func lz4DecompressL3DigestClosureTest(): Unit {
+    // Bidirectional digest closure: (a) our RDG regenerates the C inputs
+    // byte-exactly (input digests == manifest v2 inxxh), (b) our
+    // compress_default -> decompress_safe pipeline reproduces content whose
+    // digests equal the C-recorded input digests. Covers every matrix input
+    // incl. the 131072 rows that have no on-disk artifact.
+    var closed = 0
+    for ((n, mpIdx, seed, wantIn32, wantIn64) in BLOCK_IN_REF) {
+        let buf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(buf, n, BLOCK_MPS[mpIdx], 0.0, seed)
+        let gotIn32 = XXH32(buf, n, 0u32)
+        let gotIn64 = XXH64(buf, n, 0u64)
+        if (gotIn32 != wantIn32 || gotIn64 != wantIn64) {
+            println("IN-DIGEST n=${n} mp=${BLOCK_MPS[mpIdx]} seed=${seed}: got ${blkHex32(gotIn32)}/${blkHex64(gotIn64)} want ${blkHex32(wantIn32)}/${blkHex64(wantIn64)}")
+        }
+        @Assert(gotIn32 == wantIn32)
+        @Assert(gotIn64 == wantIn64)
+        let bound = Int64(LZ4_compressBound(Int32(n)))
+        let comp = Array<UInt8>(bound, {_ => 0u8})
+        let c = LZ4_compress_default(buf, Int32(n), comp, Int32(bound))
+        @Assert(c > 0)
+        let out = Array<UInt8>(n, {_ => 0u8})
+        let r = LZ4_decompress_safe(comp, c, out, Int32(n))
+        @Assert(r == Int32(n))
+        @Assert(XXH32(out, n, 0u32) == wantIn32)
+        @Assert(XXH64(out, n, 0u64) == wantIn64)
+        closed += 1
+    }
+    @Assert(closed == 64)
+    println("L3 digest closure: ${closed}/64 inputs (compress->decompress digests == C-recorded)")
+}
+
+@Test
+func lz4DecompressL2FullRoundtripTest(): Unit {
+    // Full-matrix roundtrip over all 264 manifest rows: our compressor ->
+    // our decompressor reproduces the input (dest rows: the consumed prefix;
+    // tight rows: the full-bound encode that the size=0 retry starves).
+    var rows = 0
+    for ((n, mpIdx, seed, modeIdx, wantSize, _, _, _) in BLOCK_REF) {
+        let buf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(buf, n, BLOCK_MPS[mpIdx], 0.0, seed)
+        let bound = Int64(LZ4_compressBound(Int32(n)))
+        let comp = Array<UInt8>(bound, {_ => 0u8})
+        let c = if (modeIdx == 0) {
+            LZ4_compress_default(buf, Int32(n), comp, Int32(bound))
+        } else {
+            LZ4_compress_fast(buf, Int32(n), comp, Int32(bound), if (modeIdx == 1) { 1 } else { 8 })
+        }
+        @Assert(c == wantSize)
+        let out = Array<UInt8>(n, {_ => 0u8})
+        @Assert(LZ4_decompress_safe(comp, c, out, Int32(n)) == Int32(n))
+        var eq = true
+        for (i in 0..n) {
+            if (out[i] != buf[i]) { eq = false; break }
+        }
+        @Assert(eq)
+        rows += 1
+    }
+    for ((n, mpIdx, seed, _, wantConsumed, _, _, _) in BLOCK_DEST_REF) {
+        let buf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(buf, n, BLOCK_MPS[mpIdx], 0.0, seed)
+        let target = Int32(n * 3 / 4)
+        let bound = Int64(LZ4_compressBound(Int32(n)))
+        let comp = Array<UInt8>(bound, {_ => 0u8})
+        let (c, consumed) = LZ4_compress_destSize(buf, Int32(n), comp, target)
+        @Assert(c >= 0)
+        @Assert(consumed == wantConsumed)
+        let out = Array<UInt8>(n, {_ => 0u8})
+        if (c == 0) {
+            // target<=0 failure rows (n=0: consumed 0; n=1: preset consumed=1):
+            // empty compressed block -> -1 (L2068)
+            @Assert(LZ4_decompress_safe(comp, 0, out, consumed) == -1)
+            rows += 1
+            continue
+        }
+        @Assert(LZ4_decompress_safe(comp, c, out, consumed) == consumed)
+        var eq = true
+        for (i in 0..Int64(consumed)) {
+            if (out[i] != buf[i]) { eq = false; break }
+        }
+        @Assert(eq)
+        rows += 1
+    }
+    for ((n, mpIdx, seed) in BLOCK_TIGHT_REF) {
+        let buf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(buf, n, BLOCK_MPS[mpIdx], 0.0, seed)
+        let bound = Int64(LZ4_compressBound(Int32(n)))
+        let comp = Array<UInt8>(bound, {_ => 0u8})
+        let c = LZ4_compress_default(buf, Int32(n), comp, Int32(bound))
+        @Assert(c > 0)
+        let out = Array<UInt8>(n, {_ => 0u8})
+        @Assert(LZ4_decompress_safe(comp, c, out, Int32(n)) == Int32(n))
+        var eq = true
+        for (i in 0..n) {
+            if (out[i] != buf[i]) { eq = false; break }
+        }
+        @Assert(eq)
+        rows += 1
+    }
+    @Assert(rows == 264)
+    println("L2 roundtrip: ${rows}/264 rows byte-exact (192 default/fast + 64 dest + 8 tight)")
+}

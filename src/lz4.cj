@@ -934,3 +934,61 @@ public func LZ4_decompress_safe(src: Array<UInt8>, srcSize: Int32, dst: Array<UI
     return Int32(LZ4_decompress_generic(src, Int64(srcSize), dst, 0, Int64(dstCapacity),
         false, 0, None<Array<UInt8>>, 0, 0))
 }
+
+/* LZ4_decompress_safe_partial(lz4.c L2477-2484):dstCapacity ← MIN(target,
+   dst) 后走 partial_decode + noDict 实例化。partial 语义由 generic 内已移植
+   的分支承担(L2314-2325 字面量钳制、L2380 外字典 match 钳制、L2411-2422
+   块内 match 保险分支、L2064 outputSize==0 → 0):尽早停止,返回实际产出
+   ≤ target。target < 0 或 dstCapacity < 0 经 MIN 得负 outputSize → -1
+   (L2035);srcSize < 0 防御性同报。 */
+public func LZ4_decompress_safe_partial(src: Array<UInt8>, srcSize: Int32, dst: Array<UInt8>,
+        dstCapacity: Int32, targetOutputSize: Int32): Int32 {
+    if (srcSize < 0) {
+        return -1
+    }
+    let cap: Int32 = if (targetOutputSize < dstCapacity) { targetOutputSize } else { dstCapacity }
+    return Int32(LZ4_decompress_generic(src, Int64(srcSize), dst, 0, Int64(cap),
+        true, 0, None<Array<UInt8>>, 0, 0))
+}
+
+/* LZ4_decompress_safe_usingDict(lz4.c L2738-2752):dictSize==0 → safe 路径
+   (L2739-2742);C 的连续前缀分支(dictStart+dictSize==dest → withPrefix64k /
+   withSmallPrefix,L2743-2750)要求字典与输出缓冲内存相邻,分离数组模型下
+   结构不可达,恒映射 forceExtDict(L2510-2517)实例化:lowPrefix=dst、
+   dictStart=dict 数组首、checkOffset=dictSize<64KB。dictSize<0 或超过
+   dict.size 在 C 侧为 UB(assert(dictSize>=0) 后 size_t 下溢/越界读),
+   防御性报 -1 而非未定义行为。 */
+public func LZ4_decompress_safe_usingDict(src: Array<UInt8>, srcSize: Int32, dst: Array<UInt8>,
+        dstCapacity: Int32, dict: Array<UInt8>, dictSize: Int32): Int32 {
+    if (srcSize < 0 || dstCapacity < 0) {
+        return -1
+    }
+    if (dictSize == 0) {
+        return LZ4_decompress_safe(src, srcSize, dst, dstCapacity)
+    }
+    if (dictSize < 0 || Int64(dictSize) > dict.size) {
+        return -1
+    }
+    return Int32(LZ4_decompress_generic(src, Int64(srcSize), dst, 0, Int64(dstCapacity),
+        false, 0, Some(dict), 0, Int64(dictSize)))
+}
+
+/* LZ4_decompress_safe_partial_usingDict(lz4.c L2753-2770):MIN(target, dst)
+   + partial_decode + forceExtDict 的组合(L2754-2756 的 dictSize==0 →
+   safe_partial;分离数组模型下无前缀分支)。 */
+public func LZ4_decompress_safe_partial_usingDict(src: Array<UInt8>, srcSize: Int32, dst: Array<UInt8>,
+        dstCapacity: Int32, targetOutputSize: Int32, dict: Array<UInt8>, dictSize: Int32): Int32 {
+    if (srcSize < 0) {
+        return -1
+    }
+    let cap: Int32 = if (targetOutputSize < dstCapacity) { targetOutputSize } else { dstCapacity }
+    if (dictSize == 0) {
+        return Int32(LZ4_decompress_generic(src, Int64(srcSize), dst, 0, Int64(cap),
+            true, 0, None<Array<UInt8>>, 0, 0))
+    }
+    if (dictSize < 0 || Int64(dictSize) > dict.size) {
+        return -1
+    }
+    return Int32(LZ4_decompress_generic(src, Int64(srcSize), dst, 0, Int64(cap),
+        true, 0, Some(dict), 0, Int64(dictSize)))
+}
