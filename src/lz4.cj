@@ -1169,3 +1169,150 @@ public func LZ4_decompress_safe_partial_usingDict(src: Array<UInt8>, srcSize: In
     return Int32(LZ4_decompress_generic(src, Int64(srcSize), dst, 0, Int64(cap),
         true, 0, Some(dict), 0, Int64(dictSize)))
 }
+
+/*-************************************
+*  Streaming decode state (lz4.h L755-771; lz4.c L2580-2621)
+**************************************/
+/* 上游 LZ4_streamDecode_t_internal 四字段:{prefixSize, extDictSize,
+   prefixEnd(指针), externalDict(指针)}。仓颉侧按“缓冲引用 + 索引”对
+   建模(design §4.3 规则 4):prefixEnd → (prefixEndBuf, prefixEndIdx),
+   externalDict → (externalBuf, externalStartIdx),字典区间为
+   [externalStartIdx, externalStartIdx + extDictSize)。 */
+public class LZ4_streamDecode_t {
+    internal var prefixSize: Int64 = 0
+    internal var extDictSize: Int64 = 0
+    internal var prefixEndBuf: Option<Array<UInt8>> = None
+    internal var prefixEndIdx: Int64 = 0
+    internal var externalBuf: Option<Array<UInt8>> = None
+    internal var externalStartIdx: Int64 = 0
+}
+
+/* LZ4_createStreamDecode(lz4.c L2583-2593):零初始化状态。 */
+public func LZ4_createStreamDecode(): LZ4_streamDecode_t {
+    return LZ4_streamDecode_t()
+}
+
+/* LZ4_freeStreamDecode(lz4.c L2596-2600):C 支持对 NULL free 返回 0;
+   仓颉无空引用,GC 回收,恒 0。 */
+public func LZ4_freeStreamDecode(s: LZ4_streamDecode_t): Int32 {
+    return 0
+}
+
+/* LZ4_setStreamDecode(lz4.c L2608-2621):以外部字典初始化状态。
+   dictSize==0 合法(同无字典,prefixEnd = 字典基址 → 索引 0)。
+   返回 1;dictSize<0 或 > dict.size 在 C 侧为 size_t 回绕/越界 UB,
+   此处防御性返回 0(错误码)。 */
+public func LZ4_setStreamDecode(s: LZ4_streamDecode_t, dict: Array<UInt8>, dictSize: Int32): Int32 {
+    if (dictSize < 0 || Int64(dictSize) > dict.size) {
+        return 0
+    }
+    s.prefixSize = Int64(dictSize)
+    if (dictSize != 0) {
+        s.prefixEndBuf = Some(dict)                 /* prefixEnd = dictionary + dictSize */
+        s.prefixEndIdx = Int64(dictSize)
+    } else {
+        s.prefixEndBuf = Some(dict)                 /* prefixEnd = dictionary */
+        s.prefixEndIdx = 0
+    }
+    s.externalBuf = None
+    s.extDictSize = 0
+    return 1
+}
+
+/* LZ4_decoderRingBufferSize(lz4.c L2634-2640;宏见 lz4.h L493):
+   65536 + 14 + maxBlockSize;maxBlockSize<0 或 >LZ4_MAX_INPUT_SIZE → 0,
+   <16 提到 16。 */
+public func LZ4_decoderRingBufferSize(maxBlockSize: Int32): Int32 {
+    var mbs: Int32 = maxBlockSize
+    if (mbs < 0) { return 0 }
+    if (mbs > LZ4_MAX_INPUT_SIZE) { return 0 }
+    if (mbs < 16) { mbs = 16 }
+    return 65536 + 14 + mbs
+}
+
+/* 上游 `lz4sd->prefixEnd == (BYTE*)dest` 的指针相等判定,仓颉无引用
+   同一性比较(== 是整数组内容相等),改为“滚动窗口内容等价”谓词:
+   比较 (end1-k, end1] 与 (end2-k, end2](k = min(prefixSize, 65536))。
+   LZ4 块内 offset ≤ 65535,解码只可能引用前缀最近 65535 字节,窗口
+   等价 ⇒ 滚动路径与前缀换向路径输出恒同;C 的同缓冲判定是本谓词的
+   特例(同缓冲同位置窗口必等价)。代价上限 64KB/次,与块解码同阶。 */
+private func lz4RollingWindowEquals(b1: Array<UInt8>, end1: Int64,
+        b2: Array<UInt8>, end2: Int64, k: Int64): Bool {
+    var i: Int64 = 0
+    while (i < k) {
+        if (b1[end1 - k + i] != b2[end2 - k + i]) {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+/* LZ4_decompress_safe_continue(lz4.c L2648-2719),dest 以 (dstBuf, dstIdx)
+   位置对表达(rolling 契约:dstBuf[dstIdx-前缀, dstIdx) 为已解码内容)。
+   三场景逐行对照:
+   (a) prefixSize==0(L2650-2657):首块,noDict 解码(= safe 语义,写往
+       dstIdx 起);成功后记录 prefixSize=result、prefixEnd=dstIdx+result;
+   (b) prefixEnd==dest(L2659-2666 滚动):prefixSize ≥ 64KB-1 → withPrefix64k
+       实例化(lowPrefixIdx = dstIdx - 65536,L2502);否则 extDictSize==0 →
+       withSmallPrefix(lowPrefixIdx = dstIdx - prefixSize,L2523-2529);
+       否则双字典(小前缀 + 外字典组合,上游 doubleDict L2510-2517);
+       成功后 prefixSize/前缀末位置累进;
+   (c) 否则(L2667-2671 缓冲回绕/切换):旧前缀换向外字典
+       (externalStartIdx = prefixEndIdx - prefixSize),forceExtDict 实例化
+       (lowPrefixIdx = dstIdx);成功后 prefixSize=result 重置。
+   result ≤ 0 原样返回(L2655/L2665/L2670);错误后状态与 C 一致不担保
+   可复用((c) 已先写 extDict 字段,(a)/(b) 未动)。 */
+public func LZ4_decompress_safe_continue(s: LZ4_streamDecode_t, src: Array<UInt8>, srcSize: Int32,
+        dstBuf: Array<UInt8>, dstIdx: Int64, maxOutputSize: Int32): Int32 {
+    if (srcSize < 0 || maxOutputSize < 0 || dstIdx < 0) {
+        return -1
+    }
+    var result: Int64
+    if (s.prefixSize == 0) {
+        /* The first call, no dictionary yet(L2651;断言 extDictSize==0:
+           新态与 setStreamDecode(size=0) 均满足) */
+        result = LZ4_decompress_generic(src, Int64(srcSize), dstBuf, dstIdx,
+            Int64(maxOutputSize), false, dstIdx, None<Array<UInt8>>, 0, 0)
+        if (result <= 0) { return Int32(result) }
+        s.prefixSize = result
+        s.prefixEndBuf = Some(dstBuf)
+        s.prefixEndIdx = dstIdx + result
+        return Int32(result)
+    }
+    let k: Int64 = if (s.prefixSize < 65536) { s.prefixSize } else { 65536 }
+    let rolling: Bool = match (s.prefixEndBuf) {
+        case Some(b) => s.prefixEndIdx == dstIdx && lz4RollingWindowEquals(b, s.prefixEndIdx, dstBuf, dstIdx, k)
+        case None => false
+    }
+    if (rolling) {
+        /* They're rolling the current segment(L2659) */
+        if (s.prefixSize >= 65536 - 1) {
+            result = LZ4_decompress_generic(src, Int64(srcSize), dstBuf, dstIdx,
+                Int64(maxOutputSize), false, dstIdx - 65536, None<Array<UInt8>>, 0, 0)
+        } else if (s.extDictSize == 0) {
+            result = LZ4_decompress_generic(src, Int64(srcSize), dstBuf, dstIdx,
+                Int64(maxOutputSize), false, dstIdx - s.prefixSize, None<Array<UInt8>>, 0, 0)
+        } else {
+            result = LZ4_decompress_generic(src, Int64(srcSize), dstBuf, dstIdx,
+                Int64(maxOutputSize), false, dstIdx - s.prefixSize,
+                s.externalBuf, s.externalStartIdx, s.extDictSize)
+        }
+        if (result <= 0) { return Int32(result) }
+        s.prefixSize += result
+        s.prefixEndIdx += result
+    } else {
+        /* The buffer wraps around, or they're switching to another buffer(L2667) */
+        s.extDictSize = s.prefixSize
+        s.externalBuf = s.prefixEndBuf
+        s.externalStartIdx = s.prefixEndIdx - s.prefixSize
+        result = LZ4_decompress_generic(src, Int64(srcSize), dstBuf, dstIdx,
+            Int64(maxOutputSize), false, dstIdx,
+            s.externalBuf, s.externalStartIdx, s.extDictSize)
+        if (result <= 0) { return Int32(result) }
+        s.prefixSize = result
+        s.prefixEndBuf = Some(dstBuf)
+        s.prefixEndIdx = dstIdx + result
+    }
+    return Int32(result)
+}

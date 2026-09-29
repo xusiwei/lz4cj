@@ -1878,6 +1878,258 @@ func lz4DecompressDifferentialCorruptTest(): Unit {
     println("differential corrupt: ${cases} cases (${neg} both-negative, ${cases - neg} identical-positive)")
 }
 
+/*-************************************
+*  M3 Task 4: streaming decode family (continue + ring buffer)
+**************************************/
+// stream rows of corpus/block_golden_ref.txt (rows 280..287): 2 RDG buffers
+// of 4x40960 bytes (mp=0.50 seed=101 / mp=0.90 seed=202) sliced into 8
+// blocks, compressed C-side with one persistent stream so offsets cross
+// block boundaries; decode rolls through a single 327680-byte buffer.
+// (seq, size, ret, pre32, pre64, xxh32, xxh64, inxxh32, inxxh64, fileRowIdx)
+let STREAM_REF: Array<(Int64, Int32, Int32, UInt32, UInt64, UInt32, UInt64, UInt32, UInt64, Int64)> = [
+    (0, 22944, 40960, 0x85cd4e41u32, 0xcb21ca1806189b47u64, 0xb896805du32, 0x0af182be98f1809bu64, 0x85cd4e41u32, 0xcb21ca1806189b47u64, 280),
+    (1, 24221, 40960, 0xf741ec7eu32, 0x40f26586694162e5u64, 0x52bc8d79u32, 0x554d37c380412ec7u64, 0xd975001fu32, 0xc168a4034cac48e6u64, 281),
+    (2, 24046, 40960, 0xce121972u32, 0x4ecdd71ac11a9e19u64, 0xecea7e10u32, 0xae31cff5d3257d42u64, 0xedc3640eu32, 0x5d0f7277edad9118u64, 282),
+    (3, 25309, 40960, 0x176149b6u32, 0xcd6358b71d648628u64, 0x8e083202u32, 0x2c6fe8c63653acbeu64, 0x8407078bu32, 0xfff3957384e47dcau64, 283),
+    (4, 4190, 40960, 0x34843684u32, 0xece2c7afcaebf8d4u64, 0xa1213195u32, 0xc38983712fa5cc90u64, 0xa8d80f33u32, 0xfce4402ca6ecf103u64, 284),
+    (5, 6364, 40960, 0xc3359c76u32, 0xfe6152f56fa03437u64, 0xdc4f4c34u32, 0x525545fbca12d0a9u64, 0x6c078d2cu32, 0x906f4564a7180cdbu64, 285),
+    (6, 7863, 40960, 0x29eae430u32, 0x7ac43abe9bd9f688u64, 0x1cb725eau32, 0x0dff848db1134d53u64, 0x5dee2a46u32, 0xcfa93b28369fd30eu64, 286),
+    (7, 7976, 40960, 0xa00350d4u32, 0x2b7da5ba705302ddu64, 0x304852f9u32, 0x89c36503e7c3bed4u64, 0xf227e642u32, 0xbacc3c598ddf80dau64, 287),
+]
+
+private func streamSourceBuffer(half: Int64): Array<UInt8> {
+    let buf = Array<UInt8>(4 * 40960, {_ => 0u8})
+    if (half == 0) {
+        RDG_genBuffer(buf, 4 * 40960, 0.5, 0.0, 101u32)
+    } else {
+        RDG_genBuffer(buf, 4 * 40960, 0.9, 0.0, 202u32)
+    }
+    return buf
+}
+
+// digest of buf[off, off+len) via the streaming states (one-shot XXH32/64
+// have no offset parameter)
+private func sliceXXH32(buf: Array<UInt8>, off: Int64, len: Int64): UInt32 {
+    let st = XXH32_createState()
+    XXH32_reset(st, 0u32)
+    XXH32_update(st, buf, len, offset: off)
+    let h = XXH32_digest(st)
+    XXH32_freeState(st)
+    return h
+}
+
+private func sliceXXH64(buf: Array<UInt8>, off: Int64, len: Int64): UInt64 {
+    let st = XXH64_createState()
+    XXH64_reset(st, 0u64)
+    XXH64_update(st, buf, len, offset: off)
+    let h = XXH64_digest(st)
+    XXH64_freeState(st)
+    return h
+}
+
+@Test
+func lz4DecompressSafeContinueGoldenTest(): Unit {
+    let dst = Array<UInt8>(8 * 40960, {_ => 0u8})
+    let sd = LZ4_createStreamDecode()
+    var pos: Int64 = 0
+    for ((seq, wantSize, wantRet, wantPre32, wantPre64, want32, want64, wantIn32, wantIn64, fileRow) in STREAM_REF) {
+        let art = readBlockArtifact(fileRow)
+        @Assert(art.size == Int64(wantSize))
+        let u8art = Array<UInt8>(art.size, {i => UInt8(art[i])})
+        // artifact + slice provenance pinned by the C-side digests
+        @Assert(XXH32(u8art, Int64(wantSize), 0u32) == want32)
+        @Assert(XXH64(u8art, Int64(wantSize), 0u64) == want64)
+        let srcBuf = streamSourceBuffer(seq / 4)
+        let sliceOff = (seq % 4) * 40960
+        @Assert(sliceXXH32(srcBuf, sliceOff, 40960) == wantIn32)
+        @Assert(sliceXXH64(srcBuf, sliceOff, 40960) == wantIn64)
+        let r = LZ4_decompress_safe_continue(sd, u8art, wantSize, dst, pos, 40960)
+        if (r != wantRet) {
+            println("STREAM seq=${seq}: got ${r} want ${wantRet}")
+        }
+        @Assert(r == wantRet)
+        // decoded block bytes byte-exact against the regenerated slice
+        var eq = true
+        var i = sliceOff
+        while (i < sliceOff + 40960) {
+            if (dst[pos + (i - sliceOff)] != srcBuf[i]) { eq = false; break }
+            i += 1
+        }
+        if (!eq) { println("STREAM BYTES differ seq=${seq}") }
+        @Assert(eq)
+        pos += Int64(r)
+        // rolling-buffer content pinned by the cumulative prefix digests
+        @Assert(XXH32(dst, pos, 0u32) == wantPre32)
+        @Assert(XXH64(dst, pos, 0u64) == wantPre64)
+    }
+    @Assert(LZ4_freeStreamDecode(sd) == 0)
+    println("stream golden: 8 continue blocks rolled byte-exact, prefix digests closed")
+}
+
+// ring rows (rows 288..297): one RDG buffer of 10x16384 bytes
+// (mp=0.50 seed=303); ring buffer sized by LZ4_decoderRingBufferSize(16384)
+// = 81934. Lap: seq 0-4 at pos 0/16K/32K/48K/64K (prefix graduates
+// smallPrefix -> withPrefix64k), 14 bytes left < 16384 -> seq 5 wraps to 0
+// (extDict swap), seq 6-9 roll with small prefix + extDict (doubleDict).
+// (seq, pos, size, xxh32, xxh64, inxxh32, inxxh64, fileRowIdx)
+let RING_REF: Array<(Int64, Int64, Int32, UInt32, UInt64, UInt32, UInt64, Int64)> = [
+    (0, 0, 8616, 0x71b21677u32, 0xa0254e3979d27fcau64, 0x054b5473u32, 0x3dfb491179367e10u64, 288),
+    (1, 16384, 8554, 0xce3c9b71u32, 0x9cb08d10f42ccac3u64, 0x14bf68d7u32, 0xcff3b0f832df047bu64, 289),
+    (2, 32768, 8939, 0x4e2b3c3bu32, 0x8eb750a364523d6fu64, 0xb6b03f43u32, 0xe6472fc4869ef87eu64, 290),
+    (3, 49152, 10521, 0x0172bc10u32, 0xc8df68dd96c0219cu64, 0x6ea45548u32, 0x00a0db85fdc1ac08u64, 291),
+    (4, 65536, 9044, 0xd4b2b7f5u32, 0x7f209f93eb945a87u64, 0xf0c401e7u32, 0xdf91222b4dea3939u64, 292),
+    (5, 0, 9581, 0x4f6c1ec8u32, 0x222924eb3111679du64, 0x971cf0e1u32, 0x1047edba29074b7eu64, 293),
+    (6, 16384, 9839, 0x2d6d3cfcu32, 0x8ef42ff1a4f0b34du64, 0xb8877179u32, 0x4fe3389c7ebedb23u64, 294),
+    (7, 32768, 8357, 0x8269bcc9u32, 0x045006ad21120a38u64, 0x01d3ad17u32, 0xc9aca01d3a3b5c41u64, 295),
+    (8, 49152, 10473, 0x2dabe9b6u32, 0x48f14654819794d0u64, 0x46819214u32, 0x40d34583c4a0a887u64, 296),
+    (9, 65536, 9206, 0x63c4a85du32, 0x36c53f760f254da6u64, 0x4e0016f8u32, 0xa68d7d43a7714747u64, 297),
+]
+
+@Test
+func lz4DecompressRingBufferGoldenTest(): Unit {
+    // ring size contract (upstream lz4.c L2634-2640)
+    @Assert(LZ4_decoderRingBufferSize(16384) == 81934)
+    let ringSize: Int64 = Int64(LZ4_decoderRingBufferSize(16384))
+    let ring = Array<UInt8>(ringSize, {_ => 0u8})
+    let src = Array<UInt8>(10 * 16384, {_ => 0u8})
+    RDG_genBuffer(src, 10 * 16384, 0.5, 0.0, 303u32)
+    let sd = LZ4_createStreamDecode()
+    var pos: Int64 = 0
+    for ((seq, wantPos, wantSize, want32, want64, wantIn32, wantIn64, fileRow) in RING_REF) {
+        if (ringSize - pos < 16384) { pos = 0 }
+        @Assert(pos == wantPos)   // exact wrap schedule from the C harness
+        let art = readBlockArtifact(fileRow)
+        @Assert(art.size == Int64(wantSize))
+        let u8art = Array<UInt8>(art.size, {i => UInt8(art[i])})
+        @Assert(XXH32(u8art, Int64(wantSize), 0u32) == want32)
+        @Assert(XXH64(u8art, Int64(wantSize), 0u64) == want64)
+        let sliceOff = seq * 16384
+        @Assert(sliceXXH32(src, sliceOff, 16384) == wantIn32)
+        @Assert(sliceXXH64(src, sliceOff, 16384) == wantIn64)
+        let r = LZ4_decompress_safe_continue(sd, u8art, wantSize, ring, pos, 16384)
+        if (r != 16384) {
+            println("RING seq=${seq}: got ${r}")
+        }
+        @Assert(r == 16384)
+        var eq = true
+        var i = sliceOff
+        while (i < sliceOff + 16384) {
+            if (ring[pos + (i - sliceOff)] != src[i]) { eq = false; break }
+            i += 1
+        }
+        if (!eq) { println("RING BYTES differ seq=${seq} pos=${pos}") }
+        @Assert(eq)
+        pos += Int64(r)
+    }
+    @Assert(LZ4_freeStreamDecode(sd) == 0)
+    println("ring golden: 10 blocks across the 64KB boundary + wrap, byte-exact")
+}
+
+// setdict rows (rows 298..299): LZ4_setStreamDecode external dictionary
+// (dict = RDG(65536, mp=0.50, seed=77)); source = RDG(81920, mp=0.90,
+// seed=88) in 2 blocks of 40960. Block 0 decodes into a FRESH buffer
+// (prefixEnd=dict end != dest -> extDict swap -> forceExtDict); block 1
+// rolls at dstIdx=40960 with extDictSize!=0 and small prefix -> doubleDict.
+let SETDICT_DICT_XXH32: UInt32 = 0x7b19c37du32
+let SETDICT_DICT_XXH64: UInt64 = 0x59f6b3f3a2fd2c1au64
+// (seq, size, ret, pre32, pre64, xxh32, xxh64, inxxh32, inxxh64, fileRowIdx)
+let SETDICT_REF: Array<(Int64, Int32, Int32, UInt32, UInt64, UInt32, UInt64, UInt32, UInt64, Int64)> = [
+    (0, 3282, 40960, 0x37258e24u32, 0x0858de551feab56au64, 0xda449cfeu32, 0xa54faa19002ead7fu64, 0x37258e24u32, 0x0858de551feab56au64, 298),
+    (1, 7355, 40960, 0x73868952u32, 0x09453aa6fd5934bfu64, 0x4b0cabe3u32, 0x1ad2592f0285a4a9u64, 0x2d99ba2du32, 0x27c0ef47d69a6136u64, 299),
+]
+
+@Test
+func lz4DecompressSetStreamDecodeGoldenTest(): Unit {
+    let dict = Array<UInt8>(65536, {_ => 0u8})
+    RDG_genBuffer(dict, 65536, 0.5, 0.0, 77u32)
+    @Assert(XXH32(dict, 65536, 0u32) == SETDICT_DICT_XXH32)
+    @Assert(XXH64(dict, 65536, 0u64) == SETDICT_DICT_XXH64)
+    let src = Array<UInt8>(81920, {_ => 0u8})
+    RDG_genBuffer(src, 81920, 0.9, 0.0, 88u32)
+    let dst = Array<UInt8>(81920, {_ => 0u8})
+    let sd = LZ4_createStreamDecode()
+    // external dictionary injection; invalid sizes are rejected (C: caller
+    // error / UB, defended here -> 0), dictSize=0 is legal (no dictionary)
+    @Assert(LZ4_setStreamDecode(sd, dict, 65536) == 1)
+    @Assert(LZ4_setStreamDecode(sd, dict, -1) == 0)
+    @Assert(LZ4_setStreamDecode(sd, dict, 65537) == 0)
+    @Assert(LZ4_setStreamDecode(sd, dict, 0) == 1)
+    // re-inject the real dictionary after the probes above
+    @Assert(LZ4_setStreamDecode(sd, dict, 65536) == 1)
+    var pos: Int64 = 0
+    for ((seq, wantSize, wantRet, wantPre32, wantPre64, want32, want64, wantIn32, wantIn64, fileRow) in SETDICT_REF) {
+        let art = readBlockArtifact(fileRow)
+        @Assert(art.size == Int64(wantSize))
+        let u8art = Array<UInt8>(art.size, {i => UInt8(art[i])})
+        @Assert(XXH32(u8art, Int64(wantSize), 0u32) == want32)
+        @Assert(XXH64(u8art, Int64(wantSize), 0u64) == want64)
+        let sliceOff = seq * 40960
+        @Assert(sliceXXH32(src, sliceOff, 40960) == wantIn32)
+        @Assert(sliceXXH64(src, sliceOff, 40960) == wantIn64)
+        let r = LZ4_decompress_safe_continue(sd, u8art, wantSize, dst, pos, 40960)
+        if (r != wantRet) {
+            println("SETDICT seq=${seq}: got ${r} want ${wantRet}")
+        }
+        @Assert(r == wantRet)
+        var eq = true
+        var i = sliceOff
+        while (i < sliceOff + 40960) {
+            if (dst[pos + (i - sliceOff)] != src[i]) { eq = false; break }
+            i += 1
+        }
+        if (!eq) { println("SETDICT BYTES differ seq=${seq}") }
+        @Assert(eq)
+        pos += Int64(r)
+        @Assert(XXH32(dst, pos, 0u32) == wantPre32)
+        @Assert(XXH64(dst, pos, 0u64) == wantPre64)
+    }
+    @Assert(LZ4_freeStreamDecode(sd) == 0)
+    println("setdict golden: fresh-buffer forceExtDict + rolling doubleDict byte-exact")
+}
+
+@Test
+func lz4DecompressContinueErrorTest(): Unit {
+    // decoderRingBufferSize edges (lz4.c L2634-2640)
+    @Assert(LZ4_decoderRingBufferSize(-1) == 0)
+    @Assert(LZ4_decoderRingBufferSize(0) == 65536 + 14 + 16)
+    @Assert(LZ4_decoderRingBufferSize(15) == 65536 + 14 + 16)
+    @Assert(LZ4_decoderRingBufferSize(16) == 65536 + 14 + 16)
+    @Assert(LZ4_decoderRingBufferSize(LZ4_MAX_INPUT_SIZE) == 65536 + 14 + LZ4_MAX_INPUT_SIZE)
+    @Assert(LZ4_decoderRingBufferSize(LZ4_MAX_INPUT_SIZE + 1) == 0)
+    // entry validation on continue: negative sizes -> -1 before any state use
+    let sd = LZ4_createStreamDecode()
+    let src = Array<UInt8>(64, {_ => 0u8})
+    let dst = Array<UInt8>(256, {_ => 0u8})
+    @Assert(LZ4_decompress_safe_continue(sd, src, -1, dst, 0, 64) == -1)
+    @Assert(LZ4_decompress_safe_continue(sd, src, 64, dst, 0, -1) == -1)
+    @Assert(LZ4_decompress_safe_continue(sd, src, 64, dst, -1, 64) == -1)
+    // a failed first block (empty input) must return negative and leave the
+    // state usable as "first call" (C: result <= 0 returned as-is, state
+    // untouched while prefixSize == 0)
+    @Assert(LZ4_decompress_safe_continue(sd, src, 0, dst, 0, 64) == -1)
+    // corrupt middle block: replay the golden stream but flip bytes inside
+    // the seq=3 artifact; the decode must go negative (error propagation),
+    // and per C semantics the state is then undefined - no reuse afterwards
+    let dst2 = Array<UInt8>(8 * 40960, {_ => 0u8})
+    var pos: Int64 = 0
+    for ((seq, wantSize, _, _, _, _, _, _, _, fileRow) in STREAM_REF) {
+        let art = readBlockArtifact(fileRow)
+        let u8art = Array<UInt8>(art.size, {i => UInt8(art[i])})
+        if (seq == 3) {
+            u8art[Int64(wantSize) / 2] = u8art[Int64(wantSize) / 2] ^ 0xFFu8
+            let r = LZ4_decompress_safe_continue(sd, u8art, wantSize, dst2, pos, 40960)
+            if (r >= 0) { println("CORRUPT STREAM seq=3: got ${r}") }
+            @Assert(r < 0)
+            break
+        }
+        let r = LZ4_decompress_safe_continue(sd, u8art, wantSize, dst2, pos, 40960)
+        @Assert(r == 40960)
+        pos += 40960
+    }
+    @Assert(LZ4_freeStreamDecode(sd) == 0)
+    println("continue error propagation: corrupt middle block -> negative")
+}
+
 @Test
 func lz4DecompressPerfSmokeTest(): Unit {
     // 4MB datagen corpora, forced-safe vs forced-fast (dispatch build), no gate

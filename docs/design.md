@@ -112,7 +112,7 @@ lz4cj/
 | `int* srcSizePtr`(in/out 参数) | 并入返回值元组 | 见 4.3 |
 | `const char*`(版本/错误名) | `String` | |
 
-### 4.3 签名调整规则(共三条,全局统一)
+### 4.3 签名调整规则(共四条,全局统一)
 
 1. **in/out 指针参数 → 返回值元组**。仓颉无引用参数,受影响函数:
    - `LZ4_compress_destSize(src, dst, srcSizePtr, targetDstSize)` → 返回 `(ret: Int32, srcConsumed: Int32)`
@@ -120,6 +120,7 @@ lz4cj/
    - `LZ4F_decompress(dctx, dst, src, srcSizePtr, dOptPtr)` → 返回 `(ret: Int64, srcConsumed: Int64, dstWritten: Int64)`
 2. **可 NULL 的结构体指针 → `Option<T>`**;其余指针一律映射为非空 `Array<UInt8>` 或类实例。
 3. **C 指针前移 → 具名可选参数 `offset!: Int64`(默认 0)**:用于 `XXH*_update` 等需要从缓冲中部继续的场景;后续 frame/流式 API 沿用此惯例。
+4. **C 滚动解码指针 `dest` → `(dstBuf: Array<UInt8>, dstIdx: Int64)` 缓冲-位置对**(M3 流式解码确立):用于 `LZ4_decompress_safe_continue` 等滚动/流式解压 API。契约:调用方保证 `dstBuf[dstIdx-前缀, dstIdx)` 已持有先前解码内容(rolling 场景)或指向新缓冲区(缓冲切换场景)。C 侧 `lz4sd->prefixEnd == dest` 的指针相等分派,仓颉无引用同一性比较(`==` 为内容相等),以"滚动窗口内容等价"谓词实现(比较前缀末尾 `min(prefixSize, 65536)` 字节;offset ≤ 65535 保证窗口等价 ⇒ 与指针判定输出恒同);状态内的 `prefixEnd`/`externalDict` 指针以 `(缓冲引用, 索引)` 对表达。后续 frame 解压的环缓冲路径沿用本规则。
 
 ### 4.4 状态对象模型
 
@@ -128,7 +129,7 @@ C 侧 opaque 上下文(堆分配 + 内部字段经由 `void*` 别名访问)统�
 | C 类型 | 仓颉类 | 内部对应 |
 |---|---|---|
 | `LZ4_stream_t`(hashTable[16384] + 字典区 + tableType) | `public class LZ4_stream_t` | `lz4.cj` |
-| `LZ4_streamDecode_t`(字典环缓冲) | `public class LZ4_streamDecode_t` | `lz4_stream.cj` |
+| `LZ4_streamDecode_t`(字典环缓冲) | `public class LZ4_streamDecode_t` | `lz4.cj`(M3 落地;流式压缩状态迁入 `lz4_stream.cj` 时一并迁移) |
 | `LZ4_streamHC_t`(chainTable + next 优化区) | `public class LZ4_streamHC_t` | `lz4hc.cj` |
 | `LZ4F_cctx` / `LZ4F_dctx` | `public class LZ4F_cctx` / `LZ4F_dctx` | `lz4frame*.cj` |
 | `LZ4F_CDict` | `public class LZ4F_CDict` | `lz4frame.cj` |
