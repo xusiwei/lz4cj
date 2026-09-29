@@ -120,7 +120,7 @@ lz4cj/
    - `LZ4F_decompress(dctx, dst, src, srcSizePtr, dOptPtr)` → 返回 `(ret: Int64, srcConsumed: Int64, dstWritten: Int64)`
 2. **可 NULL 的结构体指针 → `Option<T>`**;其余指针一律映射为非空 `Array<UInt8>` 或类实例。
 3. **C 指针前移 → 具名可选参数 `offset!: Int64`(默认 0)**:用于 `XXH*_update` 等需要从缓冲中部继续的场景;后续 frame/流式 API 沿用此惯例。
-4. **C 滚动解码指针 `dest` → `(dstBuf: Array<UInt8>, dstIdx: Int64)` 缓冲-位置对**(M3 流式解码确立):用于 `LZ4_decompress_safe_continue` 等滚动/流式解压 API。契约:调用方保证 `dstBuf[dstIdx-前缀, dstIdx)` 已持有先前解码内容(rolling 场景)或指向新缓冲区(缓冲切换场景)。C 侧 `lz4sd->prefixEnd == dest` 的指针相等分派,仓颉无引用同一性比较(`==` 为内容相等),以"滚动窗口内容等价"谓词实现(比较前缀末尾 `min(prefixSize, 65536)` 字节;offset ≤ 65535 保证窗口等价 ⇒ 与指针判定输出恒同);状态内的 `prefixEnd`/`externalDict` 指针以 `(缓冲引用, 索引)` 对表达。后续 frame 解压的环缓冲路径沿用本规则。
+4. **C 滚动解码指针 `dest` → `(dstBuf: Array<UInt8>, dstIdx: Int64)` 缓冲-位置对**(M3 流式解码确立):用于 `LZ4_decompress_safe_continue` 等滚动/流式解压 API。契约:调用方保证 `dstBuf[dstIdx-前缀, dstIdx)` 已持有先前解码内容(rolling 场景)或指向新缓冲区(缓冲切换场景)。C 侧 `lz4sd->prefixEnd == dest` 的指针相等分派,仓颉无引用同一性比较(`==` 为内容相等),以"滚动窗口内容等价"谓词实现(比较前缀末尾 `min(prefixSize, 65536)` 字节);状态内的 `prefixEnd`/`externalDict` 指针以 `(缓冲引用, 索引)` 对表达。后续 frame 解压的环缓冲路径沿用本规则。**等价性限定**:该内容等价替换对 extDictSize==0 的状态与同缓冲换位场景输出等价;存在一个窄分歧角——调用方中途把窗口字节复制到**不同** Array(同 idx、窗口字节相同)且状态仍有活跃外字典(extDictSize≠0)且块内 offset 深于前缀时,C(指针不等 → 换向)丢弃旧字典并报解码错误,本移植(滚动 doubleDict)保留旧字典而可能成功;需要在该角精确复刻 C 语义的调用方须经 `setStreamDecode` 重新注入字典。
 
 ### 4.4 状态对象模型
 

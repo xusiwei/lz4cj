@@ -1233,9 +1233,12 @@ public func LZ4_decoderRingBufferSize(maxBlockSize: Int32): Int32 {
 /* 上游 `lz4sd->prefixEnd == (BYTE*)dest` 的指针相等判定,仓颉无引用
    同一性比较(== 是整数组内容相等),改为“滚动窗口内容等价”谓词:
    比较 (end1-k, end1] 与 (end2-k, end2](k = min(prefixSize, 65536))。
-   LZ4 块内 offset ≤ 65535,解码只可能引用前缀最近 65535 字节,窗口
-   等价 ⇒ 滚动路径与前缀换向路径输出恒同;C 的同缓冲判定是本谓词的
-   特例(同缓冲同位置窗口必等价)。代价上限 64KB/次,与块解码同阶。 */
+   LZ4 块内 offset ≤ 65535,解码只可能引用前缀最近 65535 字节,故对
+   extDictSize==0 状态与同缓冲换位,本谓词与 C 指针判定输出等价。
+   窄分歧角:窗口字节被复制到不同 Array(同 idx)且状态仍有活跃外
+   字典(extDictSize≠0)且块内 offset 深于前缀时,C 走换向并报错、
+   本侧走 doubleDict 或成功;须精确复刻 C 的调用方用 setStreamDecode
+   重注入。代价上限 64KB/次,与块解码同阶。 */
 private func lz4RollingWindowEquals(b1: Array<UInt8>, end1: Int64,
         b2: Array<UInt8>, end2: Int64, k: Int64): Bool {
     var i: Int64 = 0
