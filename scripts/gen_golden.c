@@ -7,12 +7,17 @@
 // + M3 decompression extensions: manifest v2 input digests, dict rows and a
 // partial probe. Emits corpus/block_golden_ref.txt plus corpus/block/<idx>.lz4
 // artifacts.
+// + M3 Task 4 streaming-decode extensions: mode=stream (rolling
+// LZ4_decompress_safe_continue over K=8 consecutive blocks in one buffer),
+// mode=ring (decoder-ring-buffer decode with wraparound), mode=setdict
+// (LZ4_setStreamDecode external-dictionary scenarios) => rows 280..299.
 //
 // Matrix: sizes {0,1,255,4096,65535,65536,65537,131072} x mp {0.0,0.5,0.9,1.0}
 //         x lp {0.0} x seeds {0,7}; modes default / fast1 / fast8 / dest
 //         (dest target = n*3/4) => 64 inputs x 4 modes = 256 manifest rows,
 //         plus 8 tight rows (seed=0, mp cycled, dstCapacity = c-1 => size=0),
-//         plus 16 mode=dict rows (see the dict section below) => 280 rows.
+//         plus 16 mode=dict rows (see the dict section below) => 280 rows,
+//         plus 20 streaming rows (8 stream + 10 ring + 2 setdict) => 300 rows.
 //
 // Manifest line format (contract for M2 Tasks 3/4 and M3 - follow exactly):
 //   n=<n> mp=<mp> seed=<seed> mode=<mode> size=<c> [consumed=<k> ]xxh32=<h32> xxh64=<h64> inxxh32=<h32> inxxh64=<h64>[ file=block/<idx>.lz4]
@@ -23,9 +28,22 @@
 //   digests must equal the recorded input digests) for digest-only rows
 // - file= is appended at end of line when the compressed output c <= 65536
 //   (larger outputs are digest-only); manifest stays one line per case
-// - artifact name = 3-digit sequential row index in manifest order (000..279)
+// - artifact name = 3-digit sequential row index in manifest order (000..299)
 // - a leading '#' comment line (not a data row) precedes the dict rows and
 //   records the shared dictionary provenance (params + digests)
+//
+// Streaming rows (Task 4) extend the line format:
+//   n=<n> mp=<mp> seed=<seed> mode=<stream|ring|setdict> seq=<k> [pos=<p> ]size=<c> ret=<r> [pre32=<h32> pre64=<h64> ]xxh32=... inxxh32=... [ file=...]
+// - seq= is the 0-based block index within the scenario (directly after mode=)
+// - pos= (mode=ring only) is the decode start offset within the ring buffer
+//   (the wraparound schedule the Cangjie test must replicate exactly)
+// - ret= is the LZ4_decompress_safe_continue return for that block
+// - pre32=/pre64= (mode=stream and mode=setdict) digest the cumulative
+//   decoded prefix dst[0..pos_after_block), seed 0 - the rolling-buffer
+//   content check; ring rows are byte-compared against the regenerated
+//   source slices instead (inxxh fields pin those slices)
+// - mp/seed describe the RDG buffer the block was sliced from (one buffer per
+//   scenario half; see the '#' provenance comments in the manifest)
 //
 // Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs \
 //          scripts/gen_golden.c $HOME/lz4/tests/datagen.c $HOME/lz4/lib/lz4.c \
@@ -41,6 +59,22 @@ static const size_t kSizes[] = {0, 1, 255, 4096, 65535, 65536, 65537, 131072};
 static const double kMps[] = {0.0, 0.5, 0.9, 1.0};
 static const unsigned kSeeds[] = {0, 7};
 static const char* kModes[] = {"default", "fast1", "fast8", "dest"};
+
+/* Task 4 streaming sections: write corpus/block/<idx>.lz4 and (on success)
+   print " file=block/<idx>.lz4". Mirrors the inline artifact code above. */
+static void writeArtifact(const unsigned char* out, int c, int idx) {
+    if (c >= 0 && c <= 65536) {
+        char path[64];
+        snprintf(path, sizeof(path), "corpus/block/%03d.lz4", idx);
+        FILE* f = fopen(path, "wb");
+        if (!f || fwrite(out, 1, (size_t)c, f) != (size_t)c) {
+            fprintf(stderr, "write %s failed\n", path);
+            exit(1);
+        }
+        fclose(f);
+        printf(" file=block/%03d.lz4", idx);
+    }
+}
 
 int main(void) {
     int idx = 0;
@@ -279,6 +313,184 @@ int main(void) {
             free(dst);
         }
         free(dictBuf);
+    }
+    /* streaming rows (M3 Task 4): three scenarios exercising
+       LZ4_decompress_safe_continue state machine (lz4.c L2650-2720).
+       Compression side is always a persistent LZ4_stream_t +
+       LZ4_compress_fast_continue over consecutive slices of larger RDG
+       buffers, so emitted offsets reference previous slices inside the 64KB
+       window; the Cangjie side cannot produce such blocks yet (noDict-only
+       compressor), hence golden artifacts.
+       Scenario stream: 2 RDG buffers of 4*40960 bytes (mp=0.50 seed=101 /
+       mp=0.90 seed=202), sliced into 8 blocks; decode rolls forward through
+       one 327680-byte buffer (first call = plain safe; then rolling with
+       small prefix (<64KB-1) graduating to withPrefix64k). */
+    {
+        const size_t kBlock = 40960;
+        const unsigned kK = 8;
+        const size_t kHalf = kBlock * 4;
+        unsigned char* srcs[2];
+        unsigned seeds[2] = {101, 202};
+        double mps[2] = {0.50, 0.90};
+        unsigned char* dst = (unsigned char*)malloc(kBlock * kK);
+        if (!dst) { fprintf(stderr, "oom\n"); return 1; }
+        for (unsigned h = 0; h < 2; h++) {
+            srcs[h] = (unsigned char*)malloc(kHalf);
+            if (!srcs[h]) { fprintf(stderr, "oom\n"); return 1; }
+            RDG_genBuffer(srcs[h], kHalf, mps[h], 0.0, seeds[h]);
+        }
+        printf("# stream=2xRDG(n=163840 block=40960 mp=0.50/0.90 lp=0.00 seed=101/202) "
+               "rolling LZ4_decompress_safe_continue into one 327680-byte buffer\n");
+        LZ4_stream_t* cs = LZ4_createStream();
+        LZ4_streamDecode_t* sd = LZ4_createStreamDecode();
+        if (!cs || !sd) { fprintf(stderr, "stream alloc failed\n"); return 1; }
+        int bound = LZ4_compressBound((int)kBlock);
+        unsigned char* out = (unsigned char*)malloc((size_t)bound);
+        if (!out) { fprintf(stderr, "oom\n"); return 1; }
+        size_t pos = 0;
+        for (unsigned k = 0; k < kK; k++) {
+            const unsigned char* slice = srcs[k / 4] + (k % 4) * kBlock;
+            int c = LZ4_compress_fast_continue(cs, (const char*)slice, (char*)out,
+                                               (int)kBlock, bound, 1);
+            if (c <= 0) { fprintf(stderr, "stream: compress failed k=%u\n", k); return 1; }
+            int r = LZ4_decompress_safe_continue(sd, (const char*)out, (char*)(dst + pos),
+                                                 c, (int)kBlock);
+            if (r != (int)kBlock || memcmp(dst + pos, slice, kBlock) != 0) {
+                fprintf(stderr, "stream: decode mismatch k=%u r=%d\n", k, r);
+                return 1;
+            }
+            pos += (size_t)r;
+            printf("n=%zu mp=%.2f seed=%u mode=stream seq=%u size=%d ret=%d "
+                   "pre32=%08x pre64=%016llx xxh32=%08x xxh64=%016llx "
+                   "inxxh32=%08x inxxh64=%016llx",
+                   kBlock, mps[k / 4], seeds[k / 4], k, c, r,
+                   XXH32(dst, pos, 0), (unsigned long long)XXH64(dst, pos, 0),
+                   XXH32(out, (size_t)c, 0), (unsigned long long)XXH64(out, (size_t)c, 0),
+                   XXH32(slice, kBlock, 0), (unsigned long long)XXH64(slice, kBlock, 0));
+            writeArtifact(out, c, idx);
+            printf("\n");
+            idx++;
+        }
+        LZ4_freeStream(cs);
+        LZ4_freeStreamDecode(sd);
+        free(out); free(dst); free(srcs[0]); free(srcs[1]);
+    }
+    /* Scenario ring: decoder-ring-buffer decode (lz4.h LZ4_decoderRingBufferSize
+       contract). One RDG buffer of 10*16384 bytes (mp=0.50 seed=303) sliced
+       into 10 blocks; ring sized LZ4_decoderRingBufferSize(16384) = 81934.
+       Lap layout: blocks 0-4 fill [0,81920) (prefix graduates smallPrefix ->
+       withPrefix64k at block 4? prefix=49152 stays small at block 4 start...
+       block 4 starts at 65536 with prefix 65536 >= 64KB-1 -> withPrefix64k),
+       14 bytes remain < 16384 -> block 5 wraps to 0 (prefix becomes extDict,
+       forceExtDict instantiation), blocks 6-9 roll again (small prefix +
+       extDict = doubleDict). pos= records the exact schedule. */
+    {
+        const size_t kBlock = 16384;
+        const unsigned kK = 10;
+        const size_t kTotal = kBlock * kK;
+        int ringSize = LZ4_decoderRingBufferSize((int)kBlock);
+        if (ringSize != 65536 + 14 + (int)kBlock) {
+            fprintf(stderr, "ring: unexpected ring size %d\n", ringSize);
+            return 1;
+        }
+        unsigned char* src = (unsigned char*)malloc(kTotal);
+        unsigned char* ring = (unsigned char*)malloc((size_t)ringSize);
+        if (!src || !ring) { fprintf(stderr, "oom\n"); return 1; }
+        RDG_genBuffer(src, kTotal, 0.50, 0.0, 303);
+        printf("# ring=RDG(n=163840 block=16384 mp=0.50 lp=0.00 seed=303) "
+               "ring=%d=decoderRingBufferSize(16384) wrap decode\n", ringSize);
+        LZ4_stream_t* cs = LZ4_createStream();
+        LZ4_streamDecode_t* sd = LZ4_createStreamDecode();
+        if (!cs || !sd) { fprintf(stderr, "ring alloc failed\n"); return 1; }
+        int bound = LZ4_compressBound((int)kBlock);
+        unsigned char* out = (unsigned char*)malloc((size_t)bound);
+        if (!out) { fprintf(stderr, "oom\n"); return 1; }
+        size_t pos = 0;
+        for (unsigned k = 0; k < kK; k++) {
+            if ((size_t)ringSize - pos < kBlock) { pos = 0; }
+            const unsigned char* slice = src + k * kBlock;
+            int c = LZ4_compress_fast_continue(cs, (const char*)slice, (char*)out,
+                                               (int)kBlock, bound, 1);
+            if (c <= 0) { fprintf(stderr, "ring: compress failed k=%u\n", k); return 1; }
+            int r = LZ4_decompress_safe_continue(sd, (const char*)out, (char*)(ring + pos),
+                                                 c, (int)kBlock);
+            if (r != (int)kBlock || memcmp(ring + pos, slice, kBlock) != 0) {
+                fprintf(stderr, "ring: decode mismatch k=%u pos=%zu r=%d\n", k, pos, r);
+                return 1;
+            }
+            printf("n=%zu mp=0.50 seed=303 mode=ring seq=%u pos=%zu size=%d ret=%d "
+                   "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+                   kBlock, k, pos, c, r,
+                   XXH32(out, (size_t)c, 0), (unsigned long long)XXH64(out, (size_t)c, 0),
+                   XXH32(slice, kBlock, 0), (unsigned long long)XXH64(slice, kBlock, 0));
+            writeArtifact(out, c, idx);
+            printf("\n");
+            idx++;
+            pos += (size_t)r;
+        }
+        LZ4_freeStream(cs);
+        LZ4_freeStreamDecode(sd);
+        free(out); free(ring); free(src);
+    }
+    /* Scenario setdict: LZ4_setStreamDecode external dictionary (lz4.c L2608).
+       dict = RDG(65536, mp=0.50, seed=77); source = RDG(81920, mp=0.90,
+       seed=88) sliced into 2 blocks. Decode into a FRESH 81920-byte buffer:
+       block 0 hits the "buffer switch" branch (prefixEnd=dict end != dest ->
+       extDict swap -> forceExtDict); block 1 rolls at dstIdx=40960 with
+       extDictSize!=0 and small prefix -> doubleDict. */
+    {
+        const size_t kDict = 65536;
+        const size_t kBlock = 40960;
+        const unsigned kK = 2;
+        unsigned char* dict = (unsigned char*)malloc(kDict);
+        unsigned char* src = (unsigned char*)malloc(kBlock * kK);
+        unsigned char* dst = (unsigned char*)malloc(kBlock * kK);
+        if (!dict || !src || !dst) { fprintf(stderr, "oom\n"); return 1; }
+        RDG_genBuffer(dict, kDict, 0.50, 0.0, 77);
+        RDG_genBuffer(src, kBlock * kK, 0.90, 0.0, 88);
+        printf("# setdict=dict=RDG(n=65536 mp=0.50 lp=0.00 seed=77) xxh32=%08x xxh64=%016llx "
+               "src=RDG(n=81920 block=40960 mp=0.90 lp=0.00 seed=88) fresh-buffer decode\n",
+               XXH32(dict, kDict, 0), (unsigned long long)XXH64(dict, kDict, 0));
+        LZ4_stream_t* cs = LZ4_createStream();
+        if (!cs) { fprintf(stderr, "setdict alloc failed\n"); return 1; }
+        if (LZ4_loadDict(cs, (const char*)dict, (int)kDict) != (int)kDict) {
+            fprintf(stderr, "setdict: loadDict failed\n"); return 1;
+        }
+        LZ4_streamDecode_t* sd = LZ4_createStreamDecode();
+        if (!sd) { fprintf(stderr, "setdict alloc failed\n"); return 1; }
+        if (!LZ4_setStreamDecode(sd, (const char*)dict, (int)kDict)) {
+            fprintf(stderr, "setdict: setStreamDecode failed\n"); return 1;
+        }
+        int bound = LZ4_compressBound((int)kBlock);
+        unsigned char* out = (unsigned char*)malloc((size_t)bound);
+        if (!out) { fprintf(stderr, "oom\n"); return 1; }
+        size_t pos = 0;
+        for (unsigned k = 0; k < kK; k++) {
+            const unsigned char* slice = src + k * kBlock;
+            int c = LZ4_compress_fast_continue(cs, (const char*)slice, (char*)out,
+                                               (int)kBlock, bound, 1);
+            if (c <= 0) { fprintf(stderr, "setdict: compress failed k=%u\n", k); return 1; }
+            int r = LZ4_decompress_safe_continue(sd, (const char*)out, (char*)(dst + pos),
+                                                 c, (int)kBlock);
+            if (r != (int)kBlock || memcmp(dst + pos, slice, kBlock) != 0) {
+                fprintf(stderr, "setdict: decode mismatch k=%u r=%d\n", k, r);
+                return 1;
+            }
+            pos += (size_t)r;
+            printf("n=%zu mp=0.90 seed=88 mode=setdict seq=%u size=%d ret=%d "
+                   "pre32=%08x pre64=%016llx xxh32=%08x xxh64=%016llx "
+                   "inxxh32=%08x inxxh64=%016llx",
+                   kBlock, k, c, r,
+                   XXH32(dst, pos, 0), (unsigned long long)XXH64(dst, pos, 0),
+                   XXH32(out, (size_t)c, 0), (unsigned long long)XXH64(out, (size_t)c, 0),
+                   XXH32(slice, kBlock, 0), (unsigned long long)XXH64(slice, kBlock, 0));
+            writeArtifact(out, c, idx);
+            printf("\n");
+            idx++;
+        }
+        LZ4_freeStream(cs);
+        LZ4_freeStreamDecode(sd);
+        free(out); free(dst); free(src); free(dict);
     }
     fprintf(stderr, "cases=%d\n", idx);
     return 0;

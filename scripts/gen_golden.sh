@@ -18,8 +18,10 @@ cd "$ROOT"
 scripts/gen_golden | tee corpus/block_golden_ref.txt
 
 # sanity: 64 inputs x 4 modes = 256 rows + 8 tight rows + 16 dict rows
-# = 280 data rows, plus 1 leading '#' provenance comment for the dict section
-[ "$(wc -l < corpus/block_golden_ref.txt)" -eq 281 ] \
-    || { echo "ERROR: expected 281 golden lines (280 rows + 1 comment)" >&2; exit 1; }
-[ "$(grep -c '^#' corpus/block_golden_ref.txt)" -eq 1 ] \
-    || { echo "ERROR: expected exactly 1 comment line" >&2; exit 1; }
+#         + 8 stream rows + 10 ring rows + 2 setdict rows
+# = 300 data rows, plus 4 leading '#' provenance comments
+#   (dict / stream / ring / setdict sections)
+[ "$(wc -l < corpus/block_golden_ref.txt)" -eq 304 ] \
+    || { echo "ERROR: expected 304 golden lines (300 rows + 4 comments)" >&2; exit 1; }
+[ "$(grep -c '^#' corpus/block_golden_ref.txt)" -eq 4 ] \
+    || { echo "ERROR: expected exactly 4 comment lines" >&2; exit 1; }

@@ -279,3 +279,26 @@ n=65537 mp=0.50 seed=3 mode=dict size=33264 xxh32=8e344bd3 xxh64=33e51ce12311b1c
 n=131072 mp=0.90 seed=11 mode=dict size=21159 xxh32=3beac038 xxh64=9a80ebc174b2be56 inxxh32=6d942ca2 inxxh64=0b321ffc57f0e3a2 file=block/277.lz4
 n=1 mp=1.00 seed=5 mode=dict size=2 xxh32=ec56599f xxh64=ac2fbabfc9927380 inxxh32=cf65b03e inxxh64=e934a84adb052768 file=block/278.lz4
 n=0 mp=0.00 seed=0 mode=dict size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/279.lz4
+# stream=2xRDG(n=163840 block=40960 mp=0.50/0.90 lp=0.00 seed=101/202) rolling LZ4_decompress_safe_continue into one 327680-byte buffer
+n=40960 mp=0.50 seed=101 mode=stream seq=0 size=22944 ret=40960 pre32=85cd4e41 pre64=cb21ca1806189b47 xxh32=b896805d xxh64=0af182be98f1809b inxxh32=85cd4e41 inxxh64=cb21ca1806189b47 file=block/280.lz4
+n=40960 mp=0.50 seed=101 mode=stream seq=1 size=24221 ret=40960 pre32=f741ec7e pre64=40f26586694162e5 xxh32=52bc8d79 xxh64=554d37c380412ec7 inxxh32=d975001f inxxh64=c168a4034cac48e6 file=block/281.lz4
+n=40960 mp=0.50 seed=101 mode=stream seq=2 size=24046 ret=40960 pre32=ce121972 pre64=4ecdd71ac11a9e19 xxh32=ecea7e10 xxh64=ae31cff5d3257d42 inxxh32=edc3640e inxxh64=5d0f7277edad9118 file=block/282.lz4
+n=40960 mp=0.50 seed=101 mode=stream seq=3 size=25309 ret=40960 pre32=176149b6 pre64=cd6358b71d648628 xxh32=8e083202 xxh64=2c6fe8c63653acbe inxxh32=8407078b inxxh64=fff3957384e47dca file=block/283.lz4
+n=40960 mp=0.90 seed=202 mode=stream seq=4 size=4190 ret=40960 pre32=34843684 pre64=ece2c7afcaebf8d4 xxh32=a1213195 xxh64=c38983712fa5cc90 inxxh32=a8d80f33 inxxh64=fce4402ca6ecf103 file=block/284.lz4
+n=40960 mp=0.90 seed=202 mode=stream seq=5 size=6364 ret=40960 pre32=c3359c76 pre64=fe6152f56fa03437 xxh32=dc4f4c34 xxh64=525545fbca12d0a9 inxxh32=6c078d2c inxxh64=906f4564a7180cdb file=block/285.lz4
+n=40960 mp=0.90 seed=202 mode=stream seq=6 size=7863 ret=40960 pre32=29eae430 pre64=7ac43abe9bd9f688 xxh32=1cb725ea xxh64=0dff848db1134d53 inxxh32=5dee2a46 inxxh64=cfa93b28369fd30e file=block/286.lz4
+n=40960 mp=0.90 seed=202 mode=stream seq=7 size=7976 ret=40960 pre32=a00350d4 pre64=2b7da5ba705302dd xxh32=304852f9 xxh64=89c36503e7c3bed4 inxxh32=f227e642 inxxh64=bacc3c598ddf80da file=block/287.lz4
+# ring=RDG(n=163840 block=16384 mp=0.50 lp=0.00 seed=303) ring=81934=decoderRingBufferSize(16384) wrap decode
+n=16384 mp=0.50 seed=303 mode=ring seq=0 pos=0 size=8616 ret=16384 xxh32=71b21677 xxh64=a0254e3979d27fca inxxh32=054b5473 inxxh64=3dfb491179367e10 file=block/288.lz4
+n=16384 mp=0.50 seed=303 mode=ring seq=1 pos=16384 size=8554 ret=16384 xxh32=ce3c9b71 xxh64=9cb08d10f42ccac3 inxxh32=14bf68d7 inxxh64=cff3b0f832df047b file=block/289.lz4
+n=16384 mp=0.50 seed=303 mode=ring seq=2 pos=32768 size=8939 ret=16384 xxh32=4e2b3c3b xxh64=8eb750a364523d6f inxxh32=b6b03f43 inxxh64=e6472fc4869ef87e file=block/290.lz4
+n=16384 mp=0.50 seed=303 mode=ring seq=3 pos=49152 size=10521 ret=16384 xxh32=0172bc10 xxh64=c8df68dd96c0219c inxxh32=6ea45548 inxxh64=00a0db85fdc1ac08 file=block/291.lz4
+n=16384 mp=0.50 seed=303 mode=ring seq=4 pos=65536 size=9044 ret=16384 xxh32=d4b2b7f5 xxh64=7f209f93eb945a87 inxxh32=f0c401e7 inxxh64=df91222b4dea3939 file=block/292.lz4
+n=16384 mp=0.50 seed=303 mode=ring seq=5 pos=0 size=9581 ret=16384 xxh32=4f6c1ec8 xxh64=222924eb3111679d inxxh32=971cf0e1 inxxh64=1047edba29074b7e file=block/293.lz4
+n=16384 mp=0.50 seed=303 mode=ring seq=6 pos=16384 size=9839 ret=16384 xxh32=2d6d3cfc xxh64=8ef42ff1a4f0b34d inxxh32=b8877179 inxxh64=4fe3389c7ebedb23 file=block/294.lz4
+n=16384 mp=0.50 seed=303 mode=ring seq=7 pos=32768 size=8357 ret=16384 xxh32=8269bcc9 xxh64=045006ad21120a38 inxxh32=01d3ad17 inxxh64=c9aca01d3a3b5c41 file=block/295.lz4
+n=16384 mp=0.50 seed=303 mode=ring seq=8 pos=49152 size=10473 ret=16384 xxh32=2dabe9b6 xxh64=48f14654819794d0 inxxh32=46819214 inxxh64=40d34583c4a0a887 file=block/296.lz4
+n=16384 mp=0.50 seed=303 mode=ring seq=9 pos=65536 size=9206 ret=16384 xxh32=63c4a85d xxh64=36c53f760f254da6 inxxh32=4e0016f8 inxxh64=a68d7d43a7714747 file=block/297.lz4
+# setdict=dict=RDG(n=65536 mp=0.50 lp=0.00 seed=77) xxh32=7b19c37d xxh64=59f6b3f3a2fd2c1a src=RDG(n=81920 block=40960 mp=0.90 lp=0.00 seed=88) fresh-buffer decode
+n=40960 mp=0.90 seed=88 mode=setdict seq=0 size=3282 ret=40960 pre32=37258e24 pre64=0858de551feab56a xxh32=da449cfe xxh64=a54faa19002ead7f inxxh32=37258e24 inxxh64=0858de551feab56a file=block/298.lz4
+n=40960 mp=0.90 seed=88 mode=setdict seq=1 size=7355 ret=40960 pre32=73868952 pre64=09453aa6fd5934bf xxh32=4b0cabe3 xxh64=1ad2592f0285a4a9 inxxh32=2d99ba2d inxxh64=27c0ef47d69a6136 file=block/299.lz4
