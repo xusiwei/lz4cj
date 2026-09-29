@@ -169,6 +169,14 @@ internal const LZ4_OUTPUT_NOT_LIMITED: Int32 = 0
 internal const LZ4_OUTPUT_LIMITED: Int32 = 1
 internal const LZ4_OUTPUT_FILL: Int32 = 2
 
+/* 上游 dict_directive 枚举(lz4.c L751:{noDict=0, withPrefix64k, usingExtDict,
+   usingDictCtx})。dictIssue_directive(L752:{noDictIssue=0, dictSmall})沿既有
+   先例以 Bool 承载(dictSmall)。M3b:压缩核心字典分支(fast_continue 消费)。 */
+internal const LZ4_DICT_NODICT: Int32 = 0
+internal const LZ4_DICT_PREFIX64K: Int32 = 1
+internal const LZ4_DICT_EXTDICT: Int32 = 2
+internal const LZ4_DICT_DICTCTX: Int32 = 3
+
 /*-************************************
 *  Internal byte helpers ((p, i) idiom, common.cj style)
 **************************************/
@@ -234,6 +242,49 @@ internal func LZ4_count(src: CPointer<UInt8>, pIn: Int64, pMatch: Int64, pInLimi
     return pin - pStart
 }
 
+/* LZ4_count 的双缓冲变体(跨段 match 计数,L1182):序列 A = 当前块(ip 侧,
+   srcQ 基),序列 B = 字典尾(match 侧,dictQ 基),推进限界 iLimit 作用于 A 侧
+   —— 与 C 的 LZ4_count(ip+MINMATCH, match+MINMATCH, limit) 逐行同构,仅
+   两个读指针分属不同缓冲。读界:iLimit ≤ min(offset, matchlimit) 推导
+   B 侧读末端 ≤ dictQ+0(字典尾锚),绝不越过字典末尾(见核心注释)。 */
+internal func LZ4_count2(a: CPointer<UInt8>, ia: Int64, b: CPointer<UInt8>, ib: Int64,
+        iLimit: Int64): Int64 {
+    let pStart = ia
+    var pin = ia
+    var pm = ib
+    if (pin < iLimit - 7) {                                          /* L693 */
+        let diff = LZ4_readLE64(b, pm) ^ LZ4_readLE64(a, pin)
+        if (diff == 0u64) {
+            pin += 8
+            pm += 8
+        } else {
+            return LZ4_nbCommonBytes(diff)                           /* L698 */
+        }
+    }
+    while (pin < iLimit - 7) {                                       /* L701 */
+        let diff = LZ4_readLE64(b, pm) ^ LZ4_readLE64(a, pin)
+        if (diff == 0u64) {
+            pin += 8
+            pm += 8
+            continue
+        }
+        pin += LZ4_nbCommonBytes(diff)                               /* L704 */
+        return pin - pStart
+    }
+    if ((pin < iLimit - 3) && (LZ4_readLE32(b, pm) == LZ4_readLE32(a, pin))) {   /* L708 */
+        pin += 4
+        pm += 4
+    }
+    if ((pin < iLimit - 1) && (LZ4_readLE16(b, pm) == LZ4_readLE16(a, pin))) {   /* L709 */
+        pin += 2
+        pm += 2
+    }
+    if ((pin < iLimit) && (LZ4_read8(b, pm) == LZ4_read8(a, pin))) {             /* L710 */
+        pin += 1
+    }
+    return pin - pStart
+}
+
 /*-************************************
 *  Hashing (lz4.c L786-815, 64-bit little-endian build)
 **************************************/
@@ -284,43 +335,82 @@ internal func lz4ClearHash(table: Array<UInt32>, h: UInt32, byU16: Bool): Unit {
 }
 
 /*-************************************
-*  Compression core (lz4.c L939-1347, noDict paths)
+*  Compression core (lz4.c L939-1347, noDict + dict branches)
 **************************************/
-/* LZ4_compress_generic_validated 的 noDict 移植:byU16/byU32 × outputDirective
-    (notLimited/limitedOutput/fillOutput,lz4.c L330-333)。C 的 const 参数宏展开改用
-    Int32 指令 + Bool 显式分支,语义逐行对照;fillOutput 专属分支(目标 dst 恰好填满,
-    读入 src 前缀):L994 提前失败、L1127-1131/L1156-1161 中途退回 last_literals、
-    L1198-1216 match 缩短 + 哈希清除、L1316-1320 lastRun 收缩。
-    返回 (压缩字节数, srcConsumed):consumed 上游仅在 fillOutput 下写出(L1340-1342),
-    此处统一返回 ip 终值(= anchor + lastRun,L1336,对非 fill 模式即完整 srcSize),
-    由调用方按模式取用。
-    位置模型:ip/matchPos 为相对 src 基指针的 Int64 索引;哈希表登记/查询的是
-    绝对索引 startIndex + i(L956: base = source - startIndex)——one-shot 新态
-    startIndex=0 即 0 基索引。表内绝对 matchIndex 映射回本块:matchPos =
-    matchIndex - startIndex(候选必 ≥ 0:fastReset 复用路径由 dictSmall 前缀界
-    过滤陈旧登记,byU32 复用由 64KB gap 后的 too-far 检查过滤,见 prepareTable)。
-    dictSmall(L973 prefixIdxLimit = startIndex - dictSize;fastReset byU16 复用
-    传入):matchIndex < prefixIdxLimit 的候选(陈旧登记与空槽 0)跳过。对
-    本 API 其拒收与全新状态下的失败 read32 比较输出等价(空槽 0 候选恒不命中:
-    首字节登记占据同哈希槽),输出恒与全新压缩一致——保真复刻仍按上游逐条件。
-    goto _last_literals / _next_match 用标志位 + 标签循环重排,控制流等价。 */
-internal func LZ4_compress_generic_noDict(
-        state: LZ4_stream_t, src: CPointer<UInt8>, n: Int64,
+/* LZ4_compress_generic_validated 的移植:M3b 起覆盖上游全部四个 dict 分支
+    (noDict / withPrefix64k / usingExtDict / usingDictCtx,lz4.c L751)× 
+    byU16/byU32 × outputDirective(notLimited/limitedOutput/fillOutput)。C 的
+    const 参数宏展开改用 Int32 指令 + Bool 显式分支,语义逐行对照;fillOutput
+    专属分支(目标 dst 恰好填满,读入 src 前缀):L994 提前失败、L1127-1131/
+    L1156-1161 中途退回 last_literals、L1198-1216 match 缩短 + 哈希清除、
+    L1316-1320 lastRun 收缩。返回 (压缩字节数, srcConsumed):consumed 上游仅
+    在 fillOutput 下写出(L1340-1342),此处统一返回 ip 终值(= anchor +
+    lastRun,L1336,对非 fill 模式即完整 srcSize),由调用方按模式取用。
+    位置模型:ip/matchPos 为相对本块基指针(srcQ = srcBuf 基 + srcIdx)的
+    Int64 索引;哈希表登记/查询的是绝对索引 startIndex + i(L956: base =
+    source - startIndex)。表内绝对 matchIndex 映射回当前坐标:
+      matchPos = matchIndex - startIndex
+    —— matchIndex ≥ startIndex 的候选位于本块内(matchPos ∈ [0, ip)); 
+    matchIndex < startIndex 的候选位于前缀/字典(-k 处,k = startIndex -
+    matchIndex 字节回溯):
+      withPrefix64k(前缀同缓冲,dictEndIdx == srcIdx):单段读
+        srcQ[matchPos](matchPos ∈ [-dictSize, 0) 落在 srcBuf[srcIdx-dictSize,
+        srcIdx) 内,由 prefix 连续性保证界内);
+      usingExtDict:字典侧读 dictQ[matchPos](dictQ = 自家字典缓冲基 +
+        dictEndIdx,matchPos ∈ [-dictSize, 0) 即字典区间 [dictStartIdx,
+        dictEndIdx));
+      usingDictCtx:自家表未命中(matchIndex < startIndex,含空槽 0)时咨询
+        dictCtx 表(L1071):mIdx(字典流坐标)→ matchPos = mIdx -
+        dictCtx.currentOffset(dictCtx 字典尾锚定),matchIndex = mIdx +
+        dictDelta(startIndex - dictCtx.currentOffset,L965)可比化后参与
+        dictSmall/too-far 检查与 offset 计算(ip - matchPos == current -
+        matchIndex,与上游 L1167 (U16)offset 逐字节一致)。
+    读界不变量(上游守卫的精确复刻,UB-输入除外):
+      too-far 检查(L1099/L1295:matchIndex + DISTANCE_MAX ≥ current)保留
+      ≤ 65535 回溯;dictSmall 前缀界(L1097/L1294:matchIndex ≥ startIndex -
+      dictSize)拒绝字典窗口之外的陈旧登记;noDictIssue 路径的不变量
+      (dictSize ≥ 64KB 或 ≥ currentOffset)同样保证 startIndex - matchIndex
+      ≤ dictSize。故字典侧/前缀侧读恒落在 [dictStartIdx, dictEndIdx) 内。
+    跨段 match 延伸(L1177-1188):limit = ip + (dictEnd - match) = ip -
+    matchPos(两量在 catch-up 中同步递减,保持恒等;数值上即 offset)→ 
+    min(limit, matchlimit) 处切段,第二段自本块 0 位起单缓冲计数(L1185:
+    match = source)。withPrefix64k 不切段(L1177 首条件限定 extDict/dictCtx)。
+    goto _last_literals / _next_match 用标志位 + 标签循环重排,控制流等价。
+    noDict 路径(M2 既有 48 测试的回归基线)与旧实现逐语句一致:新增分支均
+    以 dictDirective 门控,无字典调用下 matchInDict 恒 false、lowPos 恒 0、
+    候选读恒走 srcQ。 */
+internal func LZ4_compress_generic_validated(
+        state: LZ4_stream_t, srcQ: CPointer<UInt8>, n: Int64,
         dst: CPointer<UInt8>, dstCapacity: Int64,
         byU16: Bool, outputDirective: Int32, acceleration: Int64,
-        dictSmall: Bool): (Int64, Int64) {
+        dictDirective: Int32, dictSmall: Bool,
+        dictQ: CPointer<UInt8>, dictEntrySize: Int64,
+        ctxDictQ: CPointer<UInt8>, ctxDictSize: Int64,
+        ctxTable: Array<UInt32>, ctxCurrentOffset: UInt32): (Int64, Int64) {
     var ip: Int64 = 0                                  /* L953: ip = source */
-    let startIndex: UInt32 = state.currentOffset       /* L955(one-shot 恒 0) */
-    /* L973: prefixIdxLimit = startIndex - dictSize(dictSize 取入口值,
-       L1003 的 dictSize += inputSize 在其后;prepareTable 已清 0 → 复用路径
-       即 startIndex) */
-    let prefixIdxLimit: UInt32 = startIndex - UInt32(state.dictSize & 0xFFFFFFFFi64)
+    let startIndex: UInt32 = state.currentOffset       /* L955 */
+    /* L962-963:字典大小按指令取自家入口值(dictEntrySize)或 dictCtx 字典
+        (ctxDictSize);dictEntrySize 为调用时冻结的入口值,先于 L1006 的
+        dictSize += inputSize。 */
+    let dictSizeL: Int64 = if (dictDirective == LZ4_DICT_DICTCTX) { ctxDictSize } else { dictEntrySize }
+    /* L965:dictDelta = startIndex - dictCtx->currentOffset(U32 回绕) */
+    let dictDelta: UInt32 = startIndex - ctxCurrentOffset
+    let prefixMode: Bool = dictDirective == LZ4_DICT_PREFIX64K
+    /* 字典侧候选的读指针:usingDictCtx 读 dictCtx 字典尾,其余读自家字典尾
+        (noDict 下不被解引用;withPrefix64k 的负位读走 srcQ 单段) */
+    let dictReadQ: CPointer<UInt8> = if (dictDirective == LZ4_DICT_DICTCTX) { ctxDictQ } else { dictQ }
+    /* L968: prefixIdxLimit = startIndex - dictSize(dictSize 取入口值,
+        L1003/L1006 的 dictSize 更新在其后;prepareTable 已清 0 → 复用路径
+        即 startIndex) */
+    let prefixIdxLimit: UInt32 = startIndex - UInt32(dictSizeL & 0xFFFFFFFFi64)
     var anchor: Int64 = 0                              /* L970 */
     let iend: Int64 = n                                /* L971 */
     let mflimitPlusOne: Int64 = iend - LZ4_MFLIMIT + 1 /* L972 */
     let matchlimit: Int64 = iend - LZ4_LASTLITERALS    /* L973 */
     var op: Int64 = 0                                  /* L982: op = dest */
     let olimit: Int64 = dstCapacity                    /* L983 */
+    var matchPos: Int64 = 0                            /* match = base + matchIndex */
+    var matchInDict: Bool = false                      /* ⟺ C lowLimit == dictionary */
     var forwardH: UInt32 = 0
     /* C 的真值判断 if (outputDirective) 预展开 */
     let limited: Bool = outputDirective != LZ4_OUTPUT_NOT_LIMITED
@@ -330,9 +420,15 @@ internal func LZ4_compress_generic_noDict(
         return (0, 0)
     }
 
-    /* L999-1009: 更新上下文(noDict 分支 dictSize += inputSize;tableType
-       枚举值沿上游 {clearedTable=0, byPtr, byU32, byU16} → byU32=2 / byU16=3) */
-    state.dictSize += n
+    /* L999-1009: 更新上下文(usingDictCtx:dictCtx 摘除 + dictSize 重置为
+        inputSize,L1003-1004;其余分支 dictSize += inputSize,L1006;tableType
+        枚举值沿上游 {clearedTable=0, byPtr, byU32, byU16} → byU32=2 / byU16=3) */
+    if (dictDirective == LZ4_DICT_DICTCTX) {
+        state.dictCtx = None
+        state.dictSize = n
+    } else {
+        state.dictSize += n
+    }
     state.currentOffset = startIndex + UInt32(n)
     state.tableType = if (byU16) { LZ4_TABLE_BYU16 } else { LZ4_TABLE_BYU32 }
 
@@ -340,21 +436,20 @@ internal func LZ4_compress_generic_noDict(
     var goLastLiterals = false
     if (n >= LZ4_minLength) {                          /* L1011: 小输入全 literal */
         /* First Byte (L1013-1020) */
-        let h0 = LZ4_hashPosition(src, ip, byU16)
+        let h0 = LZ4_hashPosition(srcQ, ip, byU16)
         lz4PutIndexOnHash(state.hashTable, startIndex, h0, byU16)   /* L1018 */
         ip += 1
-        forwardH = LZ4_hashPosition(src, ip, byU16)    /* L1020 */
+        forwardH = LZ4_hashPosition(srcQ, ip, byU16)    /* L1020 */
 
         while (runMain) {                              /* L1023 Main Loop */
             /* Find a match(L1049-1110,byU32/byU16 搜索分支) */
             var forwardIp: Int64 = ip                  /* L1051 */
             var step: Int64 = 1                        /* L1052 */
             var searchMatchNb: Int64 = acceleration << LZ4_skipTrigger   /* L1053 */
-            var matchPos: Int64 = 0
             do {
                 let h: UInt32 = forwardH                /* L1055 */
                 let current: UInt32 = startIndex + UInt32(forwardIp)   /* L1056(绝对索引) */
-                let matchIndex: UInt32 = lz4GetIndexOnHash(state.hashTable, h, byU16)  /* L1057 */
+                var matchIndex: UInt32 = lz4GetIndexOnHash(state.hashTable, h, byU16)  /* L1057 */
                 ip = forwardIp                          /* L1060 */
                 forwardIp += step                       /* L1061 */
                 step = searchMatchNb >> LZ4_skipTrigger /* L1062: step = searchMatchNb++ >> skipTrigger */
@@ -363,20 +458,47 @@ internal func LZ4_compress_generic_noDict(
                     goLastLiterals = true
                     break
                 }
-                matchPos = Int64(matchIndex) - Int64(startIndex)   /* L1091: match = base + matchIndex */
-                forwardH = LZ4_hashPosition(src, forwardIp, byU16)      /* L1093 */
+                /* L1067-1092: 候选解析 —— match = base/dictBase + matchIndex,
+                    lowLimit 随候选落点改写(字典侧 = dictionary,本块侧 =
+                    source;仓颉以 matchInDict + lowPos 表达) */
+                if (dictDirective == LZ4_DICT_DICTCTX) {
+                    if (matchIndex < startIndex) {      /* L1068: 自家表未命中 → 查 dictCtx 表 */
+                        let mIdx: UInt32 = lz4GetIndexOnHash(ctxTable, h, byU16)   /* L1071 */
+                        matchInDict = true              /* L1074: lowLimit = dictionary */
+                        matchIndex = mIdx + dictDelta   /* L1073: 可比化 */
+                        matchPos = Int64(mIdx) - Int64(ctxCurrentOffset)
+                    } else {
+                        matchInDict = false             /* L1077: lowLimit = source */
+                        matchPos = Int64(matchIndex) - Int64(startIndex)
+                    }
+                } else if (dictDirective == LZ4_DICT_EXTDICT) {
+                    matchInDict = matchIndex < startIndex   /* L1080/L1085 */
+                    matchPos = Int64(matchIndex) - Int64(startIndex)
+                } else {
+                    /* L1091: 单段(noDict / withPrefix64k;后者的 matchPos
+                        可为负 = 前缀内位置,读仍走 srcQ) */
+                    matchInDict = false
+                    matchPos = Int64(matchIndex) - Int64(startIndex)
+                }
+                forwardH = LZ4_hashPosition(srcQ, forwardIp, byU16)      /* L1093 */
                 lz4PutIndexOnHash(state.hashTable, current, h, byU16)    /* L1094 */
                 /* L1097: dictSmall —— matchIndex < prefixIdxLimit 的候选
-                   (陈旧登记与空槽 0)在有效区之外,跳过 */
+                    (陈旧登记与空槽 0)在有效区之外,跳过 */
                 if (dictSmall && matchIndex < prefixIdxLimit) {
                     continue
                 }
                 /* L1099-1102: too far——byU16 豁免(DISTANCE_MAX==ABSOLUTE_MAX),
-                   byU32 跳过 matchIndex + 65535 < current 的候选 */
+                    byU32 跳过 matchIndex + 65535 < current 的候选 */
                 if ((!byU16) && (matchIndex + LZ4_DISTANCE_MAX < current)) {
                     continue
                 }
-                if (LZ4_readLE32(src, matchPos) == LZ4_readLE32(src, ip)) {  /* L1105 */
+                /* L1105: read32 候选比较(字典侧候选读字典尾锚指针) */
+                let candLE32: UInt32 = if (matchInDict) {
+                    LZ4_readLE32(dictReadQ, matchPos)
+                } else {
+                    LZ4_readLE32(srcQ, matchPos)
+                }
+                if (candLE32 == LZ4_readLE32(srcQ, ip)) {
                     break                               /* L1107: match found */
                 }
             } while (true)
@@ -385,17 +507,22 @@ internal func LZ4_compress_generic_noDict(
             }
 
             /* L1114: filledIp = ip —— 本轮主循环已登记进哈希表的最远位置,
-               fillOutput 缩短 match 后清除越界登记的上界(L1204-1215) */
+                fillOutput 缩短 match 后清除越界登记的上界(L1204-1215) */
             let filledIp: Int64 = ip
 
-            /* Catch up(L1113-1118;noDict lowLimit = source → 索引 0,L997;
-               matchPos > 0 ⟺ 上游 match > source(绝对 matchIndex > startIndex)) */
-            if ((matchPos > 0) && (LZ4_read8(src, ip - 1) == LZ4_read8(src, matchPos - 1))) {
+            /* Catch up(L1113-1118;lowLimit = source - (withPrefix64k ?
+                dictSize : 0)(L997)——块相对坐标即前缀侧候选边界 -dictSizeL;
+                字典侧候选的 lowLimit = dictionary(dict 缓冲底)同为
+                -dictSizeL;本块侧候选 lowLimit = source → 0。noDict 下
+                matchPos > 0 与上游 match > source 逐位一致) */
+            let lowPos: Int64 = if (matchInDict || prefixMode) { -dictSizeL } else { 0 }
+            let matchReadQ: CPointer<UInt8> = if (matchInDict) { dictReadQ } else { srcQ }
+            if ((matchPos > lowPos) && (LZ4_read8(matchReadQ, matchPos - 1) == LZ4_read8(srcQ, ip - 1))) {
                 do {
                     ip -= 1
                     matchPos -= 1
-                } while ((ip > anchor) && (matchPos > 0) &&
-                    (LZ4_read8(src, ip - 1) == LZ4_read8(src, matchPos - 1)))
+                } while ((ip > anchor) && (matchPos > lowPos) &&
+                    (LZ4_read8(matchReadQ, matchPos - 1) == LZ4_read8(srcQ, ip - 1)))
             }
 
             /* Encode Literals(L1120-1145) */
@@ -428,7 +555,7 @@ internal func LZ4_compress_generic_noDict(
             } else {
                 LZ4_write8(dst, tokenIdx, UInt8(litLength << LZ4_ML_BITS))   /* L1138 */
             }
-            LZ4_wildCopy8(dst, op, src, anchor, litLength)                    /* L1141 */
+            LZ4_wildCopy8(dst, op, srcQ, anchor, litLength)                    /* L1141 */
             op += litLength                                                   /* L1142 */
 
             /* _next_match(L1147):offset + match length;"test next position"
@@ -445,14 +572,38 @@ internal func LZ4_compress_generic_noDict(
                     break
                 }
 
-                /* Encode Offset(L1163-1172;maybe_extMem == false → 同段偏移) */
-                LZ4_writeLE16(dst, op, UInt16(ip - matchPos))                    /* L1171 */
+                /* Encode Offset(L1163-1172):maybe_extMem 路径写 find 时算得
+                    的 offset(= current - matchIndex),同段路径写 ip - match;
+                    两者在本位置模型下同为 ip - matchPos(catch-up 同步增减,
+                    恒等于 find 时的 offset),单一表达式覆盖全部分支 */
+                LZ4_writeLE16(dst, op, UInt16(ip - matchPos))                    /* L1167/L1171 */
                 op += 2
 
                 /* Encode MatchLength(L1174-1235) */
-                var matchCode: Int64 = LZ4_count(src, ip + LZ4_MINMATCH,
-                    matchPos + LZ4_MINMATCH, matchlimit)                         /* L1191 */
-                ip += matchCode + LZ4_MINMATCH                                /* L1192 */
+                var matchCode: Int64
+                if (matchInDict) {
+                    /* L1177-1188:跨段 match(起点在外字典)—— 字典内段计数至
+                        limit = ip + (dictEnd - match) = ip - matchPos(即 offset,
+                        字典耗尽的对齐位置),截到 matchlimit;恰好吃尽则第二段
+                        自本块 0 位继续(L1185: match = source,与本块起点对齐
+                        即 distance-offset 处) */
+                    var limitPos: Int64 = ip - matchPos
+                    if (limitPos > matchlimit) {
+                        limitPos = matchlimit
+                    }
+                    matchCode = LZ4_count2(srcQ, ip + LZ4_MINMATCH,
+                        dictReadQ, matchPos + LZ4_MINMATCH, limitPos)            /* L1182 */
+                    ip += matchCode + LZ4_MINMATCH                               /* L1183 */
+                    if (ip == limitPos) {
+                        let more: Int64 = LZ4_count(srcQ, limitPos, 0, matchlimit)   /* L1185 */
+                        matchCode += more
+                        ip += more
+                    }
+                } else {
+                    matchCode = LZ4_count(srcQ, ip + LZ4_MINMATCH,
+                        matchPos + LZ4_MINMATCH, matchlimit)                     /* L1191 */
+                    ip += matchCode + LZ4_MINMATCH                               /* L1192 */
+                }
                 if (limited &&                                               /* L1196-1197 */
                         (op + (1 + LZ4_LASTLITERALS) + (matchCode + 240) / 255 > olimit)) {
                     if (outputDirective == LZ4_OUTPUT_FILL) {
@@ -466,7 +617,7 @@ internal func LZ4_compress_generic_noDict(
                                避免表中残留超前索引(状态复用时会误匹配) */
                             var ptr: Int64 = ip
                             while (ptr <= filledIp) {
-                                let hClear = LZ4_hashPosition(src, ptr, byU16)
+                                let hClear = LZ4_hashPosition(srcQ, ptr, byU16)
                                 lz4ClearHash(state.hashTable, hClear, byU16)
                                 ptr += 1
                             }
@@ -500,20 +651,42 @@ internal func LZ4_compress_generic_noDict(
                 }
 
                 /* Fill table(L1244-1251):位置 ip-2(绝对索引,L1248 idx = (ip-2)-base) */
-                let hFill = LZ4_hashPosition(src, ip - 2, byU16)
+                let hFill = LZ4_hashPosition(srcQ, ip - 2, byU16)
                 lz4PutIndexOnHash(state.hashTable, startIndex + UInt32(ip - 2), hFill, byU16)
 
                 /* Test next position(L1253-1303,byU32/byU16 分支) */
-                let hNext = LZ4_hashPosition(src, ip, byU16)                  /* L1264 */
+                let hNext = LZ4_hashPosition(srcQ, ip, byU16)                  /* L1264 */
                 let current2: UInt32 = startIndex + UInt32(ip)                /* L1265(绝对索引) */
-                let matchIndex2: UInt32 = lz4GetIndexOnHash(state.hashTable, hNext, byU16)  /* L1266 */
+                var matchIndex2: UInt32 = lz4GetIndexOnHash(state.hashTable, hNext, byU16)  /* L1266 */
+                /* L1268-1291:候选解析(与搜索循环 L1067-1092 同构) */
+                if (dictDirective == LZ4_DICT_DICTCTX) {
+                    if (matchIndex2 < startIndex) {
+                        let mIdx2: UInt32 = lz4GetIndexOnHash(ctxTable, hNext, byU16)   /* L1272 */
+                        matchInDict = true               /* L1274: lowLimit = dictionary */
+                        matchIndex2 = mIdx2 + dictDelta  /* L1275 */
+                        matchPos = Int64(mIdx2) - Int64(ctxCurrentOffset)
+                    } else {
+                        matchInDict = false              /* L1278: lowLimit = source */
+                        matchPos = Int64(matchIndex2) - Int64(startIndex)
+                    }
+                } else if (dictDirective == LZ4_DICT_EXTDICT) {
+                    matchInDict = matchIndex2 < startIndex
+                    matchPos = Int64(matchIndex2) - Int64(startIndex)          /* L1283/L1286 */
+                } else {
+                    matchInDict = false
+                    matchPos = Int64(matchIndex2) - Int64(startIndex)          /* L1290 */
+                }
                 lz4PutIndexOnHash(state.hashTable, current2, hNext, byU16)    /* L1292 */
-                matchPos = Int64(matchIndex2) - Int64(startIndex)             /* L1290: match = base + matchIndex */
                 /* L1294-1296:dictSmall 前缀界检查;byU16 距离检查恒真(表内索引
-                   本就 < 65536),byU32 要求 matchIndex + 65535 >= current */
+                    本就 < 65536),byU32 要求 matchIndex + 65535 >= current */
+                let cand2LE32: UInt32 = if (matchInDict) {
+                    LZ4_readLE32(dictReadQ, matchPos)
+                } else {
+                    LZ4_readLE32(srcQ, matchPos)
+                }
                 if ((!dictSmall || matchIndex2 >= prefixIdxLimit) &&
                         (byU16 || (matchIndex2 + LZ4_DISTANCE_MAX >= current2)) &&
-                        (LZ4_readLE32(src, matchPos) == LZ4_readLE32(src, ip))) {
+                        (cand2LE32 == LZ4_readLE32(srcQ, ip))) {
                     tokenIdx = op                                              /* L1297: token = op++ */
                     op += 1
                     LZ4_write8(dst, tokenIdx, 0u8)                             /* L1298: *token = 0 */
@@ -522,7 +695,7 @@ internal func LZ4_compress_generic_noDict(
 
                 /* Prepare next loop(L1307) */
                 ip += 1
-                forwardH = LZ4_hashPosition(src, ip, byU16)
+                forwardH = LZ4_hashPosition(srcQ, ip, byU16)
                 inMatch = false
             }
             if (goLastLiterals) {                /* fillOutput L1160 的中途退出 */
@@ -561,19 +734,23 @@ internal func LZ4_compress_generic_noDict(
         LZ4_write8(dst, op, UInt8(lastRun << LZ4_ML_BITS))   /* L1333 */
         op += 1
     }
-    LZ4_memcpyPtr(dst, op, src, anchor, lastRun)             /* L1335 */
+    LZ4_memcpyPtr(dst, op, srcQ, anchor, lastRun)             /* L1335 */
     ip = anchor + lastRun                                   /* L1336(上游无条件) */
     op += lastRun
     return (op, ip)                                         /* L1340-1343(consumed 即 ip) */
 }
 
 /* LZ4_compress_generic 包装(lz4.c L1353-1388):srcSize 校验与空输入特判。
-   返回 (压缩字节数, srcConsumed)(consumed 仅 fillOutput 有意义,L1376-1379)。
-   指针上下文由公开 API 的单一 unsafe 块提供(指针三律)。 */
-internal func lz4CompressDispatch(state: LZ4_stream_t, src: CPointer<UInt8>, srcSize: Int64,
+    返回 (压缩字节数, srcConsumed)(consumed 仅 fillOutput 有意义,L1376-1379)。
+    字典参数原样透传(指针上下文由公开 API 的单一 unsafe 块提供,指针三律;
+    noDict 调用传 LZ4_DICT_NODICT + 占位指针,核内不被解引用)。 */
+internal func lz4CompressDispatch(state: LZ4_stream_t, srcQ: CPointer<UInt8>, srcSize: Int64,
         dst: CPointer<UInt8>, dstCapacity: Int64,
         byU16: Bool, outputDirective: Int32, acceleration: Int64,
-        dictSmall: Bool): (Int64, Int64) {
+        dictSmall: Bool, dictDirective: Int32,
+        dictQ: CPointer<UInt8>, dictEntrySize: Int64,
+        ctxDictQ: CPointer<UInt8>, ctxDictSize: Int64,
+        ctxTable: Array<UInt32>, ctxCurrentOffset: UInt32): (Int64, Int64) {
     if (srcSize < 0 || srcSize > Int64(LZ4_MAX_INPUT_SIZE)) {   /* L1369(无符号比较语义) */
         return (0, 0)
     }
@@ -584,8 +761,10 @@ internal func lz4CompressDispatch(state: LZ4_stream_t, src: CPointer<UInt8>, src
         LZ4_write8(dst, 0, 0u8)                                  /* L1375: 空块 = 单字节 0x00 */
         return (1, 0)                                            /* L1376-1380(fillOutput consumed=0) */
     }
-    return LZ4_compress_generic_noDict(state, src, srcSize, dst,
-        dstCapacity, byU16, outputDirective, acceleration, dictSmall)
+    return LZ4_compress_generic_validated(state, srcQ, srcSize, dst,
+        dstCapacity, byU16, outputDirective, acceleration,
+        dictDirective, dictSmall, dictQ, dictEntrySize,
+        ctxDictQ, ctxDictSize, ctxTable, ctxCurrentOffset)
 }
 
 /* extState 公共尾部(上游 L1391-1412 / L1423-1459 共形):加速度钳制 +
@@ -619,7 +798,9 @@ private func lz4CompressExtStateBody(state: LZ4_stream_t, src: Array<UInt8>, src
         let sh = acquireArrayRawData<UInt8>(src)
         let dh = acquireArrayRawData<UInt8>(dst)
         let (r, _) = lz4CompressDispatch(state, sh.pointer, Int64(srcSize), dh.pointer,
-            Int64(dstCapacity), byU16, outputDirective, Int64(accel), dictSmall)
+            Int64(dstCapacity), byU16, outputDirective, Int64(accel), dictSmall,
+            LZ4_DICT_NODICT, sh.pointer, state.dictSize,
+            sh.pointer, 0, state.hashTable, 0u32)
         releaseArrayRawData<UInt8>(sh)
         releaseArrayRawData<UInt8>(dh)
         return Int32(r)
@@ -660,16 +841,16 @@ public func LZ4_compress_default(src: Array<UInt8>, srcSize: Int32, dst: Array<U
 }
 
 /* LZ4_compress_destSize_extState_internal(lz4.c L1490-1504):target ≥ compressBound
-   时压缩必成,委托常规路径(不写 *srcSizePtr → consumed 保持调用方初值);
-   否则走 fillOutput 核心,consumed 由核心写出。失败(r == 0)时 C 不触碰
-   *srcSizePtr,按调用方初值约定(= srcSize,与 gen_golden/lz4 CLI 一致)返回。
-   注:上游警告 destSize 会留下脏流状态(L1487-1489),此处每次新建/初始化
-   one-shot 状态,无复用问题;destSize_extState 公开包装属 M4+ 流式范畴。 */
+    时压缩必成,委托常规路径(不写 *srcSizePtr → consumed 保持调用方初值);
+    否则走 fillOutput 核心,consumed 由核心写出。失败(r == 0)时 C 不触碰
+    *srcSizePtr,按调用方初值约定(= srcSize,与 gen_golden/lz4 CLI 一致)返回。
+    入口 initStream(L1492);出口清态由公开包装 LZ4_compress_destSize_extState
+    负责(L1510),one-shot LZ4_compress_destSize 用后即弃无需清态。 */
 private func lz4CompressDestSizeInternal(state: LZ4_stream_t, src: Array<UInt8>, srcSize: Int32,
-        dst: Array<UInt8>, targetDstSize: Int32): (Int32, Int32) {
+        dst: Array<UInt8>, targetDstSize: Int32, acceleration: Int32): (Int32, Int32) {
     LZ4_initStream(state)                                       /* L1492 */
     if (targetDstSize >= LZ4_compressBound(srcSize)) {          /* L1495 */
-        let c = lz4CompressExtStateBody(state, src, srcSize, dst, targetDstSize, 1, false)
+        let c = lz4CompressExtStateBody(state, src, srcSize, dst, targetDstSize, acceleration, false)
         if (c == 0) {
             return (0, srcSize)                                 /* srcSizePtr 未触碰 */
         }
@@ -680,7 +861,9 @@ private func lz4CompressDestSizeInternal(state: LZ4_stream_t, src: Array<UInt8>,
         let sh = acquireArrayRawData<UInt8>(src)
         let dh = acquireArrayRawData<UInt8>(dst)
         let (r, consumed) = lz4CompressDispatch(state, sh.pointer, Int64(srcSize), dh.pointer,
-            Int64(targetDstSize), byU16, LZ4_OUTPUT_FILL, 1, false)   /* L1499-1502,acceleration=1(L1525) */
+            Int64(targetDstSize), byU16, LZ4_OUTPUT_FILL, Int64(acceleration), false,
+            LZ4_DICT_NODICT, sh.pointer, state.dictSize,
+            sh.pointer, 0, state.hashTable, 0u32)   /* L1499-1502 */
         releaseArrayRawData<UInt8>(sh)
         releaseArrayRawData<UInt8>(dh)
         if (r == 0) {
@@ -696,7 +879,372 @@ private func lz4CompressDestSizeInternal(state: LZ4_stream_t, src: Array<UInt8>,
 public func LZ4_compress_destSize(src: Array<UInt8>, srcSize: Int32, dst: Array<UInt8>,
         targetDstSize: Int32): (Int32, Int32) {
     let ctx = LZ4_stream_t()                                    /* L1521-1522: 栈上临时 ctx */
-    return lz4CompressDestSizeInternal(ctx, src, srcSize, dst, targetDstSize)
+    return lz4CompressDestSizeInternal(ctx, src, srcSize, dst, targetDstSize, 1)   /* L1525: accel=1 */
+}
+
+/* LZ4_compress_destSize_extState(lz4.c L1506-1512):带外部状态的 destSize;
+    internal 后无条件 initStream 清态(L1510,上游注释:destSize 留下脏流,
+    包装器保证出口干净——复用脏 state 的后续调用不继承 4KB 加速位点等残留)。
+    返回 (压缩字节数, srcConsumed) 元组(§4.3 规则 1:*srcSizePtr 并入返回值;
+    委托路径不触碰 → consumed = 调用方 srcSize;fillOutput 路径核心写出)。 */
+public func LZ4_compress_destSize_extState(state: LZ4_stream_t, src: Array<UInt8>, srcSize: Int32,
+        dst: Array<UInt8>, targetDstSize: Int32, acceleration: Int32): (Int32, Int32) {
+    let r = lz4CompressDestSizeInternal(state, src, srcSize, dst, targetDstSize, acceleration)
+    LZ4_initStream(state)                                       /* L1510: clean the state on exit */
+    return r
+}
+
+/*-************************************
+*  Streaming compression (lz4.c L1596-1843)
+**************************************/
+/* 同一分配判定(别名探针):仓颉无引用同一性比较(=== 不存在;CPointer 无
+    ==/</-/equals/toIntNative,逐一探针证伪),而流式压缩的分支抉择
+    (L1755 dictEnd == source 的指针相等)依赖"字典与本块是否同一缓冲"。
+    探针:经 d1 写入瞬态哨兵字节、经 d2 读回、即刻复原——同一底层对象则
+    写入可见。读写间仅有整数异或与数组访问,不分配、不可抛出(下标界内:
+    k=0 < d1.size),单线程契约下与 C 指针相等语义严格一致(同一分配 ⟺
+    可见)。内容相等的不同分配(twin 缓冲)判 false —— 这是与"内容窗口
+    相等"替代案(M3a 解码侧先例)的本质差异:压缩侧内容判定会在
+    savedict/extdict 场景产生错误的状态演化(内容等价仅保证当次输出,
+    prefix 分支的 dictSize 累积 vs extDict 分支的重置会改变后续块的
+    dictSmall 抉择与字典区间,且 dictSize 越过 safeBuffer 容量时读越界),
+    已被 M3b golden(savedict seq=1 / extdict zig-zag)排除。 */
+internal func lz4SameBuffer(d1: Array<UInt8>, d2: Array<UInt8>): Bool {
+    if (d1.size != d2.size || d1.size == 0) {
+        return false                    /* 尺寸不同必非同一分配 */
+    }
+    let save: UInt8 = d1[0]
+    let sent: UInt8 = save ^ 0xFFu8     /* 必不同于原值 */
+    d1[0] = sent
+    let visible: Bool = (d2[0] == sent)
+    d1[0] = save
+    return visible
+}
+
+/* LZ4_renormDictT(lz4.c L1696-1713):currentOffset + nextSize 越过 2GB 时的
+    表刻度重整 —— 全表条目减去 (currentOffset - 64KB)(小于该 delta 的清 0),
+    currentOffset 归位 64KB,字典截尾至 64KB 并前移 dictStartIdx 使 dictEnd
+    不变(60 位指针差的溢出防护,64 位构建不可达但按上游保留)。 */
+internal func lz4RenormDictT(state: LZ4_stream_t, nextSize: Int64): Unit {
+    if (state.currentOffset + UInt32(nextSize & 0xFFFFFFFFi64) > 0x80000000u32) {   /* L1699 */
+        let delta: UInt32 = state.currentOffset - 65536u32                          /* L1701 */
+        let dictEndIdx: Int64 = state.dictStartIdx + state.dictSize                 /* L1702 */
+        var i: Int64 = 0
+        while (i < state.hashTable.size) {                                          /* L1705 */
+            if (state.hashTable[i] < delta) {
+                state.hashTable[i] = 0u32
+            } else {
+                state.hashTable[i] -= delta
+            }
+            i += 1
+        }
+        state.currentOffset = 65536u32                                              /* L1709 */
+        if (state.dictSize > 65536) {
+            state.dictSize = 65536                                                  /* L1710 */
+        }
+        state.dictStartIdx = dictEndIdx - state.dictSize                            /* L1711 */
+    }
+}
+
+/* LZ4_loadDict_internal(lz4.c L1596-1655,_ld_fast/_ld_slow):
+    1) 全量 resetStream(注释 L1608-1611:不能只 prepareTable,防溢出的
+       matchIndex);2) currentOffset += 64KB —— 保证窗口内只有合法 offset,
+       fast_continue 得以在字典不足 64KB 时仍走 noDictIssue(见 L1614-1619
+       注释与 L1765-1770);3) dictSize < HASH_UNIT(64 位 reg_t = 8)早退 0;
+    4) 超过 64KB 截尾(只留最后 64KB);5) _ld_fast:从 (currentOffset-
+    dictSize) 起每 3 字节入表(覆盖式,偏向字典尾);6) _ld_slow 追加第二
+    遍:逐字节,仅当槽内现值 ≤ currentOffset - 64KB(空/太旧)才入表
+    (非覆盖式,偏向字典头)—— 两策略产生不同表,golden dictfast/dictslow
+    分别锚定。返回字典有效长度(截尾后)。
+    字典记 (dictBuf, dictStartIdx, dictSize) 引用对,不拷贝(调用方保证
+    存活期,与 C 生命周期契约一致);dictSize > dictionary.size 在 C 侧为
+    越界读 UB,防御性同 < HASH_UNIT 早退 0。 */
+internal func lz4LoadDictInternal(dictState: LZ4_stream_t, dictionary: Array<UInt8>,
+        dictSize: Int32, slow: Bool): Int32 {
+    LZ4_resetStream(dictState)                                   /* L1612 */
+    dictState.currentOffset += 65536u32                          /* L1620 */
+    if (dictSize < 8 /* HASH_UNIT = sizeof(reg_t), 64 位 */ || Int64(dictSize) > dictionary.size) {
+        return 0                                                 /* L1622 */
+    }
+    var p: Int64 = 0
+    let dictEnd: Int64 = Int64(dictSize)                         /* L1603 */
+    if (dictEnd - p > 65536) {
+        p = dictEnd - 65536                                      /* L1626: 截尾至最后 64KB */
+    }
+    dictState.dictBuf = Some(dictionary)                         /* L1627 */
+    dictState.dictStartIdx = p
+    dictState.dictSize = dictEnd - p                             /* L1628 */
+    dictState.tableType = LZ4_TABLE_BYU32                        /* L1629 */
+    var idx32: UInt32 = dictState.currentOffset - UInt32(dictState.dictSize)   /* L1630 */
+    unsafe {
+        let dh = acquireArrayRawData<UInt8>(dictionary)
+        while (p <= dictEnd - 8) {                               /* L1632 */
+            let h = LZ4_hashPosition(dh.pointer, p, false)
+            lz4PutIndexOnHash(dictState.hashTable, idx32, h, false)   /* L1635: 覆盖式 */
+            p += 3
+            idx32 += 3
+        }
+        if (slow) {                                              /* L1639-1652 */
+            p = dictState.dictStartIdx
+            idx32 = dictState.currentOffset - UInt32(dictState.dictSize)
+            while (p <= dictEnd - 8) {
+                let h = LZ4_hashPosition(dh.pointer, p, false)
+                let limit: UInt32 = dictState.currentOffset - 65536u32   /* L1645 */
+                if (lz4GetIndexOnHash(dictState.hashTable, h, false) <= limit) {
+                    lz4PutIndexOnHash(dictState.hashTable, idx32, h, false)   /* L1648: 非覆盖式 */
+                }
+                p += 1
+                idx32 += 1
+            }
+        }
+        releaseArrayRawData<UInt8>(dh)
+    }
+    return Int32(dictState.dictSize)                             /* L1654 */
+}
+
+/* LZ4_loadDict(lz4.c L1657-1660) */
+public func LZ4_loadDict(dictState: LZ4_stream_t, dictionary: Array<UInt8>, dictSize: Int32): Int32 {
+    return lz4LoadDictInternal(dictState, dictionary, dictSize, false)
+}
+
+/* LZ4_loadDictSlow(lz4.c L1662-1665) */
+public func LZ4_loadDictSlow(dictState: LZ4_stream_t, dictionary: Array<UInt8>, dictSize: Int32): Int32 {
+    return lz4LoadDictInternal(dictState, dictionary, dictSize, true)
+}
+
+/* LZ4_attach_dictionary(lz4.c L1667-1693):把 loadDict 产出的字典流挂为
+    workingStream 的 dictCtx(只读咨询,L1067-1074)。workingStream 的
+    currentOffset 为 0 时先抬到 64KB(L1682-1684:offset 0 下自家表永远
+    "未命中"不存在,dictCtx 无从触发);空字典不挂接(L1688-1690)。
+    C 的 dictionaryStream == NULL(摘除)在仓颉无空引用,不可达;上游无
+    tableType 兼容检查(0774d055 版),逐字对照。 */
+public func LZ4_attach_dictionary(workingStream: LZ4_stream_t, dictionaryStream: LZ4_stream_t): Unit {
+    if (workingStream.currentOffset == 0u32) {
+        workingStream.currentOffset = 65536u32                   /* L1683 */
+    }
+    if (dictionaryStream.dictSize == 0) {
+        workingStream.dictCtx = None                             /* L1689: 空字典不挂 */
+    } else {
+        workingStream.dictCtx = Some(dictionaryStream)           /* L1692 */
+    }
+}
+
+/* fast_continue 的单一 unsafe 域(指针三律:acquire → 分派 → release,域内
+    不分配):按分支 acquire 源/目的/辅助字典(EXTDICT = 自家字典缓冲,
+    DICTCTX = dictCtx 字典缓冲,前缀/无字典 = 无辅助句柄),dictQ/ctxDictQ
+    同传 auxQ(字典尾锚 = 缓冲基 + auxEndIdx),核内按指令取用。 */
+private func lz4ContinueRun(state: LZ4_stream_t,
+        srcBuf: Array<UInt8>, srcIdx: Int64, n: Int64,
+        dst: Array<UInt8>, dstCapacity: Int64, accel: Int64,
+        dictDirective: Int32, dictSmall: Bool,
+        auxArr: Option<Array<UInt8>>, auxEndIdx: Int64, dictEntrySize: Int64,
+        ctxDictSize: Int64, ctxTable: Array<UInt32>, ctxCurrentOffset: UInt32): Int32 {
+    unsafe {
+        let sh = acquireArrayRawData<UInt8>(srcBuf)
+        let dh = acquireArrayRawData<UInt8>(dst)
+        let srcQ = sh.pointer + srcIdx
+        var r: Int64 = 0
+        match (auxArr) {
+            case Some(a) =>
+                let ah = acquireArrayRawData<UInt8>(a)
+                let auxQ = ah.pointer + auxEndIdx
+                let (v, _) = lz4CompressDispatch(state, srcQ, n, dh.pointer, dstCapacity,
+                    false, LZ4_OUTPUT_LIMITED, accel, dictSmall, dictDirective,
+                    auxQ, dictEntrySize, auxQ, ctxDictSize, ctxTable, ctxCurrentOffset)
+                r = v
+                releaseArrayRawData<UInt8>(ah)
+            case None =>
+                let (v, _) = lz4CompressDispatch(state, srcQ, n, dh.pointer, dstCapacity,
+                    false, LZ4_OUTPUT_LIMITED, accel, dictSmall, dictDirective,
+                    srcQ, dictEntrySize, srcQ, ctxDictSize, ctxTable, ctxCurrentOffset)
+                r = v
+        }
+        releaseArrayRawData<UInt8>(dh)
+        releaseArrayRawData<UInt8>(sh)
+        return Int32(r)
+    }
+}
+
+/* LZ4_compress_fast_continue(lz4.c L1716-1792):流式续压。
+    块位置:仓颉签名以 (srcBuf, srcIdx) 缓冲-位置对表达本块
+    srcBuf[srcIdx, srcIdx+srcSize)(M3a 流式解码 (dstBuf, dstIdx) 先例,
+    设计 §4.3 规则 4 同族;C 的 source 指针前移无 6 参等价表达 —— 块起点
+    不可从状态推导:extdict twin 场景要求跨缓冲换位后块起点 40960,而
+    dict 场景新缓冲块起点 0,几何不可区分,必须显式传递)。
+    场景分派(逐行对照上游):
+      L1723 dictEnd 局部量 = dictSize ? dictionary+dictSize : NULL(仓颉:
+        dictEndValid + dictEndL + 同一分配判定 lz4SameBuffer);
+      L1727 renormDictT;L1728-29 加速度钳制;
+      L1731-42 微字典失效(dictSize<4 且 dictEnd≠source 且 n>0 且无
+        dictCtx → dictionary=(srcBuf, srcIdx), dictSize=0 → prefix);
+      L1744-52 输入/字典重叠收缩(跨分配指针比较在 C 为未定义,仅在
+        同一分配下执行:state.dictSize=dictEnd-sourceEnd 截 64KB,<4 归 0,
+        dictStartIdx 前移;局部 dictEndL 不更新 —— 上游同用陈旧局部值);
+      L1755 prefix 分支(dictEnd == source ⟺ 同一分配 && dictEndIdx ==
+        srcIdx):withPrefix64k,dictSmall = dictSize<64KB && dictSize<
+        currentOffset;直接返回(generic 内 dictSize 累积、dictionary 不动);
+      L1762-91 外字典分支:dictCtx 在且 n≤4KB → usingDictCtx(自家表 +
+        dictCtx 表回退);dictCtx 在且 n>4KB → 整状态拷贝自 dictCtx(表/
+        currentOffset/字典引用,L1776 memcpy)后 usingExtDict(仅查一表);
+        无 dictCtx → usingExtDict,dictSmall 同 prefix 判式。事后统一
+        dictionary=(srcBuf, srcIdx)、dictSize=inputSize(L1788-89)。
+    prefix vs extDict 的输出等价性(内容窗口论证,勿混淆于分支判定):
+    同一分配前缀连续时,前缀读(本块负位)与 extDict 读(字典尾锚)字节
+    相同 → 两种实现的候选/计数/offset 完全一致;本实现按 C 原分支执行
+    (prefix 走单段读,不依赖该等价性),等价性仅作为 twin 缓冲等极端
+    场景的失败安全网。 */
+public func LZ4_compress_fast_continue(state: LZ4_stream_t, srcBuf: Array<UInt8>, srcIdx: Int64,
+        srcSize: Int32, dst: Array<UInt8>, dstCapacity: Int32, acceleration: Int32): Int32 {
+    /* 校验:C 侧 srcSize 经 generic 的 (U32) 比较(>MAX_INPUT_SIZE → 0);
+    srcIdx/缓冲关系为仓颉块位置参数的防御检查(C 为调用方指针契约) */
+    if (srcSize < 0 || Int64(srcSize) > Int64(LZ4_MAX_INPUT_SIZE)) {
+        return 0
+    }
+    if (srcIdx < 0 || srcIdx + Int64(srcSize) > srcBuf.size) {
+        return 0
+    }
+    let n: Int64 = Int64(srcSize)
+    var accel: Int32 = acceleration
+    if (accel < 1) {
+        accel = LZ4_ACCELERATION_DEFAULT                        /* L1728 */
+    }
+    if (accel > LZ4_ACCELERATION_MAX) {
+        accel = LZ4_ACCELERATION_MAX                            /* L1729 */
+    }
+
+    /* L1723:dictEnd 局部量(renorm 之前取值,与上游顺序一致) */
+    var dictEndL: Int64 = 0
+    var dictEndValid: Bool = false
+    var dictSameBuf: Bool = false
+    match (state.dictBuf) {
+        case Some(d) =>
+            if (state.dictSize != 0) {
+                dictEndValid = true
+                dictEndL = state.dictStartIdx + state.dictSize
+                dictSameBuf = lz4SameBuffer(d, srcBuf)
+            }
+        case None => ()
+    }
+    /* L1755 的指针相等判定 ⟺ 有效字典尾 && 同一分配 && 字典尾 == 本块起点 */
+    var prefixCont: Bool = dictEndValid && dictSameBuf && (dictEndL == srcIdx)
+
+    lz4RenormDictT(state, n)                                     /* L1727 */
+
+    /* L1731-1742: 微字典失效 */
+    if ((state.dictSize < 4) && (!prefixCont) && (n > 0) && (state.dictCtx.isNone())) {
+        state.dictBuf = Some(srcBuf)
+        state.dictStartIdx = srcIdx
+        state.dictSize = 0
+        dictEndValid = true
+        dictEndL = srcIdx
+        dictSameBuf = true
+        prefixCont = true
+    }
+
+    /* L1744-1752: 输入/字典重叠收缩(仅同一分配下有定义) */
+    let sourceEnd: Int64 = srcIdx + n
+    if (dictEndValid && dictSameBuf && (sourceEnd > state.dictStartIdx) && (sourceEnd < dictEndL)) {
+        state.dictSize = dictEndL - sourceEnd
+        if (state.dictSize > 65536) {
+            state.dictSize = 65536
+        }
+        if (state.dictSize < 4) {
+            state.dictSize = 0
+        }
+        state.dictStartIdx = dictEndL - state.dictSize
+    }
+
+    if (prefixCont) {
+        /* L1755-1759: prefix 模式 —— source 数据接续字典(同一分配连续) */
+        let dSmall: Bool = (state.dictSize < 65536) && (state.dictSize < Int64(state.currentOffset))
+        return lz4ContinueRun(state, srcBuf, srcIdx, n, dst, Int64(dstCapacity), Int64(accel),
+            LZ4_DICT_PREFIX64K, dSmall, None<Array<UInt8>>, 0, state.dictSize,
+            0, state.hashTable, 0u32)
+    }
+
+    /* L1762-1791: 外字典模式 */
+    var result: Int32 = 0
+    match (state.dictCtx) {
+        case Some(dc) =>
+            if (n > 4096) {
+                /* L1771-1777: 大块 —— 拷贝 dictCtx 整内部状态(表 + 偏移 +
+                    字典引用;loadDict 保证其表条目全部落在字典区间,拷贝后
+                    usingExtDict 可安全 noDictIssue),压缩循环只查一张表 */
+                var i: Int64 = 0
+                while (i < state.hashTable.size) {
+                    state.hashTable[i] = dc.hashTable[i]
+                    i += 1
+                }
+                state.currentOffset = dc.currentOffset
+                state.tableType = dc.tableType
+                state.dictBuf = dc.dictBuf
+                state.dictStartIdx = dc.dictStartIdx
+                state.dictSize = dc.dictSize
+                state.dictCtx = dc.dictCtx
+                let endIdx: Int64 = state.dictStartIdx + state.dictSize
+                result = lz4ContinueRun(state, srcBuf, srcIdx, n, dst, Int64(dstCapacity),
+                    Int64(accel), LZ4_DICT_EXTDICT, false,
+                    state.dictBuf, endIdx, state.dictSize, 0, state.hashTable, 0u32)
+            } else {
+                /* L1779: usingDictCtx —— 自家表 + dictCtx 表回退(noDictIssue,
+                    L1765-1770 注释:loadDict 的 64KB 偏移保证字典区间无越界) */
+                var ctxEndIdx: Int64 = 0
+                match (dc.dictBuf) {
+                    case Some(cd) => ctxEndIdx = dc.dictStartIdx + dc.dictSize
+                    case None => ()
+                }
+                result = lz4ContinueRun(state, srcBuf, srcIdx, n, dst, Int64(dstCapacity),
+                    Int64(accel), LZ4_DICT_DICTCTX, false,
+                    dc.dictBuf, ctxEndIdx, state.dictSize,
+                    dc.dictSize, dc.hashTable, dc.currentOffset)
+            }
+        case None =>
+            /* L1781-1786: 小数据/无 dictCtx 的外字典 */
+            let dSmall: Bool = (state.dictSize < 65536) && (state.dictSize < Int64(state.currentOffset))
+            let endIdx: Int64 = state.dictStartIdx + state.dictSize
+            result = lz4ContinueRun(state, srcBuf, srcIdx, n, dst, Int64(dstCapacity),
+                Int64(accel), LZ4_DICT_EXTDICT, dSmall,
+                state.dictBuf, endIdx, state.dictSize, 0, state.hashTable, 0u32)
+    }
+    state.dictBuf = Some(srcBuf)                                 /* L1788 */
+    state.dictStartIdx = srcIdx
+    state.dictSize = n                                           /* L1789 */
+    return result
+}
+
+/* LZ4_saveDict(lz4.c L1823-1843):把字典末尾 min(dictSize, 64KB, 可用)
+    显式拷贝到 safeBuffer[0..saved)(本家族唯一拷贝点),状态改指 safeBuffer
+    —— 此后缓冲原址失效亦不影响续压。返回实际保存长度;dictSize 入参的
+    无符号钳制逐行复刻((U32)dictSize > 64KB → 64KB;> 可用 → 可用)。
+    前向拷贝恒安全:目的区间自 0 起,源区间自 dictEndIdx-saved 起
+    (≥ dictStartIdx ≥ 0),交叠时必为 dst < src 的经典安全向。 */
+public func LZ4_saveDict(state: LZ4_stream_t, safeBuffer: Array<UInt8>, dictSize: Int32): Int32 {
+    var ds: Int32 = dictSize
+    if (UInt32(ds) > 65536u32) {                                 /* L1829(无符号比较) */
+        ds = 65536
+    }
+    if (UInt32(ds) > UInt32(state.dictSize & 0xFFFFFFFFi64)) {   /* L1830 */
+        ds = Int32(state.dictSize)
+    }
+    if (ds > 0) {
+        let dictEndIdx: Int64 = state.dictStartIdx + state.dictSize
+        let fromIdx: Int64 = dictEndIdx - Int64(ds)
+        unsafe {
+            let sh = acquireArrayRawData<UInt8>(safeBuffer)
+            match (state.dictBuf) {
+                case Some(d) =>
+                    let kh = acquireArrayRawData<UInt8>(d)
+                    LZ4_memcpyPtr(sh.pointer, 0, kh.pointer, fromIdx, Int64(ds))   /* L1836 memmove */
+                    releaseArrayRawData<UInt8>(kh)
+                case None => ()
+            }
+            releaseArrayRawData<UInt8>(sh)
+        }
+    }
+    state.dictBuf = Some(safeBuffer)                             /* L1839 */
+    state.dictStartIdx = 0
+    state.dictSize = Int64(ds)                                   /* L1840 */
+    return ds
 }
 
 /*-************************************
