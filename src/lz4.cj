@@ -1199,7 +1199,8 @@ public func LZ4_freeStreamDecode(s: LZ4_streamDecode_t): Int32 {
 }
 
 /* LZ4_setStreamDecode(lz4.c L2608-2621):以外部字典初始化状态。
-   dictSize==0 合法(同无字典,prefixEnd = 字典基址 → 索引 0)。
+   prefixEnd = dictionary + dictSize(单次赋值;dictSize==0 时即字典基址
+   索引 0,prefixSize==0 → 后续 continue 首块走 noDict 路径,等价无字典)。
    返回 1;dictSize<0 或 > dict.size 在 C 侧为 size_t 回绕/越界 UB,
    此处防御性返回 0(错误码)。 */
 public func LZ4_setStreamDecode(s: LZ4_streamDecode_t, dict: Array<UInt8>, dictSize: Int32): Int32 {
@@ -1207,13 +1208,8 @@ public func LZ4_setStreamDecode(s: LZ4_streamDecode_t, dict: Array<UInt8>, dictS
         return 0
     }
     s.prefixSize = Int64(dictSize)
-    if (dictSize != 0) {
-        s.prefixEndBuf = Some(dict)                 /* prefixEnd = dictionary + dictSize */
-        s.prefixEndIdx = Int64(dictSize)
-    } else {
-        s.prefixEndBuf = Some(dict)                 /* prefixEnd = dictionary */
-        s.prefixEndIdx = 0
-    }
+    s.prefixEndBuf = Some(dict)                 /* prefixEnd = dictionary + dictSize */
+    s.prefixEndIdx = Int64(dictSize)
     s.externalBuf = None
     s.extDictSize = 0
     return 1

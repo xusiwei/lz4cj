@@ -8,6 +8,7 @@ package lz4
 import std.unittest.*
 import std.fs.*
 import std.time.MonoTime
+import std.env.getVariable
 
 @Test
 func lz4VersionTest(): Unit {
@@ -1930,6 +1931,9 @@ private func sliceXXH64(buf: Array<UInt8>, off: Int64, len: Int64): UInt64 {
 @Test
 func lz4DecompressSafeContinueGoldenTest(): Unit {
     let dst = Array<UInt8>(8 * 40960, {_ => 0u8})
+    // generate each 4-block source half once (RDG regeneration is
+    // deterministic; hoisted out of the row loop)
+    let srcHalves = [streamSourceBuffer(0), streamSourceBuffer(1)]
     let sd = LZ4_createStreamDecode()
     var pos: Int64 = 0
     for ((seq, wantSize, wantRet, wantPre32, wantPre64, want32, want64, wantIn32, wantIn64, fileRow) in STREAM_REF) {
@@ -1939,7 +1943,7 @@ func lz4DecompressSafeContinueGoldenTest(): Unit {
         // artifact + slice provenance pinned by the C-side digests
         @Assert(XXH32(u8art, Int64(wantSize), 0u32) == want32)
         @Assert(XXH64(u8art, Int64(wantSize), 0u64) == want64)
-        let srcBuf = streamSourceBuffer(seq / 4)
+        let srcBuf = srcHalves[seq / 4]
         let sliceOff = (seq % 4) * 40960
         @Assert(sliceXXH32(srcBuf, sliceOff, 40960) == wantIn32)
         @Assert(sliceXXH64(srcBuf, sliceOff, 40960) == wantIn64)
@@ -2132,6 +2136,11 @@ func lz4DecompressContinueErrorTest(): Unit {
 
 @Test
 func lz4DecompressPerfSmokeTest(): Unit {
+    // opt-out hook for the ~1.5GB decode workload (default: run)
+    if (let Some(_) <- getVariable("LZ4_SKIP_PERF")) {
+        println("perf smoke: LZ4_SKIP_PERF set, skipped")
+        return
+    }
     // 4MB datagen corpora, forced-safe vs forced-fast (dispatch build), no gate
     let n: Int64 = 4 * 1024 * 1024
     let mps: Array<Float64> = [0.0, 0.5, 1.0]
@@ -2150,6 +2159,7 @@ func lz4DecompressPerfSmokeTest(): Unit {
             if (chk[i] != buf[i]) { eq = false; break }
         }
         @Assert(eq)
+        // timing: best-of-2 rounds x 12 iterations per path
         let iters: Int64 = 12
         var bestS: Float64 = 0.0
         var bestF: Float64 = 0.0
@@ -2179,4 +2189,106 @@ func lz4DecompressPerfSmokeTest(): Unit {
         }
         println("perf smoke mp=${mp} n=4MB c=${c}: safe=${bestS} MB/s, fast=${bestF} MB/s")
     }
+}
+
+/*-************************************
+*  M3 Task 5: extDict boundary-spanning match copies (C-probe pinned)
+**************************************/
+// Handcrafted streams against dict "ABCDEFGH" exercising the match that
+// starts in the external dictionary and stretches into the current block
+// (lz4.c L2199-2208 fast / L2389-2403 safe): sequence = 2 literals,
+// offset 4 (match = 2 bytes before lowPrefix -> dict[6]), matchLen 5/8,
+// tail "12345". Expected outputs/returns pinned by an upstream-C probe
+// (commit 0774d055): full "xyGHxyG12345" (ml=5) / "xyGHxyGHxy12345"
+// (ml=8, overlap byte-copy since restSize 6 > op-lowPrefix 4); partial
+// targets clamp mid-match; cap 12/13 leave < MFLIMIT output margin so a
+// non-final literals run fails last-run validation (-2); ml=8 at cap 14
+// violates the match restriction op+length > oend-LASTLITERALS (-6).
+private func spanStream(mlNibble: UInt8): Array<UInt8> {
+    let s = Array<UInt8>(11, {_ => 0u8})
+    s[0] = (2u8 << 4) | mlNibble                                // litLen 2, ml 4+nib
+    s[1] = 0x78u8; s[2] = 0x79u8                                // 'x','y'
+    s[3] = 0x04u8; s[4] = 0x00u8                                // offset 4
+    s[5] = 0x50u8                                               // last lits: 5
+    for (i in 0..5) { s[6 + i] = UInt8(49 + i) }                // "12345"
+    return s
+}
+
+private func spanDecode(dict: Array<UInt8>, s: Array<UInt8>, n: Int64, cap: Int32): (Int32, Array<UInt8>) {
+    let d = Array<UInt8>(Int64(cap), {_ => 0u8})
+    let r = LZ4_decompress_safe_usingDict(s, Int32(n), d, cap, dict, 8)
+    return (r, d)
+}
+
+@Test
+func lz4DecompressExtDictSpanningTest(): Unit {
+    let dict = Array<UInt8>(8, {i => UInt8(65 + i)})            // "ABCDEFGH"
+    let s5 = spanStream(1u8)                                    // ml = 5
+    let s8 = spanStream(4u8)                                    // ml = 8
+    // "xyGHxyG12345" / "xyGHxyGHxy12345"
+    let want5: Array<UInt8> = [0x78u8, 0x79u8, 0x47u8, 0x48u8, 0x78u8, 0x79u8, 0x47u8,
+        0x31u8, 0x32u8, 0x33u8, 0x34u8, 0x35u8]
+    let want8: Array<UInt8> = [0x78u8, 0x79u8, 0x47u8, 0x48u8, 0x78u8, 0x79u8, 0x47u8,
+        0x48u8, 0x78u8, 0x79u8, 0x31u8, 0x32u8, 0x33u8, 0x34u8, 0x35u8]
+    // fast loop (cap >= 64), safe loop (cap 14..63), and the minimal-margin
+    // safe case: identical outputs on both spanning-copy variants
+    let caps: Array<Int32> = [128, 63, 14]
+    for (cap in caps) {
+        let (r5, d5) = spanDecode(dict, s5, 11, cap)
+        if (r5 != 12) { println("SPAN5 cap=${cap}: got ${r5}") }
+        @Assert(r5 == 12)
+        for (i in 0..12) { @Assert(d5[i] == want5[i]) }
+    }
+    let caps8: Array<Int32> = [128, 31]
+    for (cap in caps8) {
+        let (r8, d8) = spanDecode(dict, s8, 11, cap)
+        if (r8 != 15) { println("SPAN8 cap=${cap}: got ${r8}") }
+        @Assert(r8 == 15)
+        for (i in 0..15) { @Assert(d8[i] == want8[i]) }
+    }
+    // must-be-last-run input rule: oend-MFLIMIT margin violated at literals
+    @Assert(spanDecode(dict, s5, 11, 13)[0] == -2)
+    @Assert(spanDecode(dict, s5, 11, 12)[0] == -2)
+    // match-restriction error: ml=8 needs op+len 10 <= oend-5 at cap 14
+    @Assert(spanDecode(dict, s8, 11, 14)[0] == -6)
+    // short-tail stream (< LASTLITERALS after match) -> -2 at any capacity
+    let bad = Array<UInt8>(9, {_ => 0u8})
+    bad[0] = 0x21u8; bad[1] = 0x78u8; bad[2] = 0x79u8
+    bad[3] = 0x04u8; bad[4] = 0x00u8
+    bad[5] = 0x30u8; bad[6] = 0x31u8; bad[7] = 0x32u8; bad[8] = 0x33u8
+    @Assert(LZ4_decompress_safe_usingDict(bad, 9, Array<UInt8>(72, {_ => 0u8}), 72, dict, 8) == -2)
+    // partial + extDict: target clamps mid-match (length = min(ml, oend-op))
+    let p = Array<UInt8>(128, {_ => 0u8})
+    @Assert(LZ4_decompress_safe_partial_usingDict(s8, 11, p, 128, 6, dict, 8) == 6)
+    @Assert(p[0] == 0x78u8 && p[1] == 0x79u8 && p[2] == 0x47u8 && p[3] == 0x48u8 &&
+        p[4] == 0x78u8 && p[5] == 0x79u8)                       // "xyGHxy"
+    @Assert(LZ4_decompress_safe_partial_usingDict(s5, 11, p, 128, 4, dict, 8) == 4)
+    @Assert(p[2] == 0x47u8 && p[3] == 0x48u8)                   // "xyGH"
+    // first-sequence spanning match with op == 0 (restSize 6 > op 2): the
+    // overlap byte-copy inside the fast loop's extDict branch (L2203-2206).
+    // Stream: token(litLen 0, ml 8), offset 2, tail 0xF0/ext 25 + 40 lits.
+    let v3 = Array<UInt8>(45, {_ => 0u8})
+    v3[0] = 0x04u8
+    v3[1] = 0x02u8; v3[2] = 0x00u8
+    v3[3] = 0xF0u8; v3[4] = 25u8
+    for (i in 0..40) { v3[5 + i] = UInt8(97 + (i % 26)) }
+    // "GHGHGHGH" + 'a'..'z' + 'a'..'n'
+    let wantV3: Array<UInt8> = Array<UInt8>(48, {i =>
+        if (i < 8) { UInt8(71 + (i % 2)) } else { UInt8(97 + ((i - 8) % 26)) }})
+    let capsV3: Array<Int32> = [128, 63]
+    for (cap in capsV3) {
+        let (rv, dv) = spanDecode(dict, v3, 45, cap)
+        if (rv != 48) { println("SPANV3 cap=${cap}: got ${rv}") }
+        @Assert(rv == 48)
+        for (i in 0..48) { @Assert(dv[i] == wantV3[i]) }
+    }
+    // 48 bytes cannot fit cap 31: error at the last-run stage
+    @Assert(spanDecode(dict, v3, 45, 31)[0] < 0)
+    // entry validation on the dict/partial variants (defensive -1)
+    let d = Array<UInt8>(16, {_ => 0u8})
+    @Assert(LZ4_decompress_safe_partial(s5, -1, d, 16, 8) == -1)
+    @Assert(LZ4_decompress_safe_usingDict(s5, -1, d, 16, dict, 8) == -1)
+    @Assert(LZ4_decompress_safe_usingDict(s5, 11, d, -1, dict, 8) == -1)
+    @Assert(LZ4_decompress_safe_partial_usingDict(s5, -1, d, 16, 8, dict, 8) == -1)
+    println("extDict spanning: fast/safe loops + partial clamp + errors pinned")
 }

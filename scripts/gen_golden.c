@@ -378,12 +378,11 @@ int main(void) {
     /* Scenario ring: decoder-ring-buffer decode (lz4.h LZ4_decoderRingBufferSize
        contract). One RDG buffer of 10*16384 bytes (mp=0.50 seed=303) sliced
        into 10 blocks; ring sized LZ4_decoderRingBufferSize(16384) = 81934.
-       Lap layout: blocks 0-4 fill [0,81920) (prefix graduates smallPrefix ->
-       withPrefix64k at block 4? prefix=49152 stays small at block 4 start...
-       block 4 starts at 65536 with prefix 65536 >= 64KB-1 -> withPrefix64k),
-       14 bytes remain < 16384 -> block 5 wraps to 0 (prefix becomes extDict,
-       forceExtDict instantiation), blocks 6-9 roll again (small prefix +
-       extDict = doubleDict). pos= records the exact schedule. */
+       Lap layout: blocks 0-4 fill [0,81920) linearly; block 4 starts at pos
+       65536 with prefix 65536 >= 64KB-1 (withPrefix64k); 14 bytes remain
+       < 16384 -> block 5 wraps to 0 (prefix becomes extDict, forceExtDict
+       instantiation), blocks 6-9 roll again (small prefix + extDict =
+       doubleDict). pos= records the exact schedule. */
     {
         const size_t kBlock = 16384;
         const unsigned kK = 10;
