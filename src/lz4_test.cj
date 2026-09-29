@@ -7,6 +7,7 @@ package lz4
 
 import std.unittest.*
 import std.fs.*
+import std.time.MonoTime
 
 @Test
 func lz4VersionTest(): Unit {
@@ -1351,4 +1352,579 @@ func lz4DecompressL2FullRoundtripTest(): Unit {
     }
     @Assert(rows == 264)
     println("L2 roundtrip: ${rows}/264 rows byte-exact (192 default/fast + 64 dest + 8 tight)")
+}
+
+/*-************************************
+*  M3 Task 3: fast decode loop — safe/fast differential validation
+**************************************/
+// Knuth-style LCG for parameter sweeps (content still via RDG_genBuffer).
+private func diffLcgNext(x: UInt64): UInt64 {
+    return x * 6364136223846793005u64 + 1442695040888963407u64
+}
+
+// forced-safe decompression (LZ4_FAST_DEC_LOOP=0 build equivalent)
+private func diffSafe(comp: Array<UInt8>, c: Int64, out: Array<UInt8>, n: Int64): Int64 {
+    return LZ4_decompress_generic_forced(comp, c, out, 0, n, false, 0, None<Array<UInt8>>, 0, 0, true)
+}
+
+// forced-fast decompression (upstream x86-64/aarch64 default build: fast loop
+// whenever oend-op >= FASTLOOP_SAFE_DISTANCE)
+private func diffFast(comp: Array<UInt8>, c: Int64, out: Array<UInt8>, n: Int64): Int64 {
+    return LZ4_decompress_generic_forced(comp, c, out, 0, n, false, 0, None<Array<UInt8>>, 0, 0, false)
+}
+
+private func diffSafeDict(comp: Array<UInt8>, c: Int64, out: Array<UInt8>, n: Int64,
+        dict: Array<UInt8>, dictSize: Int64): Int64 {
+    return LZ4_decompress_generic_forced(comp, c, out, 0, n, false, 0, Some(dict), 0, dictSize, true)
+}
+
+private func diffFastDict(comp: Array<UInt8>, c: Int64, out: Array<UInt8>, n: Int64,
+        dict: Array<UInt8>, dictSize: Int64): Int64 {
+    return LZ4_decompress_generic_forced(comp, c, out, 0, n, false, 0, Some(dict), 0, dictSize, false)
+}
+
+// 合成流编码器:序列(litLen 0..10, offset ∈ [1, min(65535, op+dictHist)],
+// matchLen 4..15) + 尾部 ≥5 字面量(精确吃尽)。dictHist = 解码时可用的
+// 输出前历史(in-block 前缀或外字典尺寸);仅要求流合法,输出无外部参考,
+// 以 safe 路径(golden 已验证)为差分基准。
+private func diffSynthStream(n: Int64, dictHist: Int64, r0: UInt64): (Array<UInt8>, Int64) {
+    let bound = n + n / 255 + 64
+    let comp = Array<UInt8>(bound, {_ => 0u8})
+    var c: Int64 = 0
+    var op: Int64 = 0
+    var r = r0
+    while (n - op > 40) {
+        let litLen = Int64(r % 11u64)
+        r = diffLcgNext(r)
+        let ml = Int64(r % 12u64) + 4
+        r = diffLcgNext(r)
+        let histLim: Int64 = op + dictHist
+        let maxOff: Int64 = if (histLim > 65535) { 65535 } else { histLim }
+        if (maxOff < 1) {
+            // 无历史:纯字面量步进
+            let fill = if (n - op - 40 < 10) { n - op - 40 } else { 10 }
+            comp[c] = UInt8(fill << 4)
+            c += 1
+            var i: Int64 = 0
+            while (i < fill) {
+                comp[c] = UInt8(r % 251u64)
+                r = diffLcgNext(r)
+                c += 1
+                i += 1
+            }
+            op += fill
+            continue
+        }
+        let off = Int64(r % UInt64(maxOff)) + 1
+        r = diffLcgNext(r)
+        comp[c] = UInt8((litLen << 4) | (ml - 4))
+        c += 1
+        var i: Int64 = 0
+        while (i < litLen) {
+            comp[c] = UInt8(r % 251u64)
+            r = diffLcgNext(r)
+            c += 1
+            i += 1
+        }
+        comp[c] = UInt8(off % 256)
+        comp[c + 1] = UInt8(off / 256)
+        c += 2
+        op += litLen + ml
+    }
+    // 尾部字面量 run(此处 last ≥ 16 ≥ LASTLITERALS)
+    let last = n - op
+    if (last >= 15) {
+        var len = last - 15
+        comp[c] = 0xF0u8
+        c += 1
+        while (len >= 255) {
+            comp[c] = 255u8
+            c += 1
+            len -= 255
+        }
+        comp[c] = UInt8(len)
+        c += 1
+    } else {
+        comp[c] = UInt8(last << 4)
+        c += 1
+    }
+    var i: Int64 = 0
+    while (i < last) {
+        comp[c] = UInt8(r % 251u64)
+        r = diffLcgNext(r)
+        c += 1
+        i += 1
+    }
+    return (comp, c)
+}
+
+@Test
+func lz4DecompressDifferentialGoldenTest(): Unit {
+    var rows = 0
+    // 192 default/fast rows: on-disk artifact via both paths; digest-only rows
+    // (no artifact) use our compress_default output as the stream.
+    for ((n, mpIdx, seed, modeIdx, wantSize, _, _, fileRow) in BLOCK_REF) {
+        let buf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(buf, n, BLOCK_MPS[mpIdx], 0.0, seed)
+        let u8: Array<UInt8>
+        let c: Int64
+        if (fileRow >= 0) {
+            let art = readBlockArtifact(fileRow)
+            @Assert(art.size == Int64(wantSize))
+            u8 = Array<UInt8>(art.size, {i => UInt8(art[i])})
+            c = Int64(wantSize)
+        } else {
+            let bound = Int64(LZ4_compressBound(Int32(n)))
+            let comp = Array<UInt8>(bound, {_ => 0u8})
+            let cc: Int32 = if (modeIdx == 0) {
+                LZ4_compress_default(buf, Int32(n), comp, Int32(bound))
+            } else {
+                LZ4_compress_fast(buf, Int32(n), comp, Int32(bound), if (modeIdx == 1) { 1 } else { 8 })
+            }
+            @Assert(cc == wantSize)
+            u8 = comp
+            c = Int64(cc)
+        }
+        let outS = Array<UInt8>(n, {_ => 0u8})
+        let outF = Array<UInt8>(n, {_ => 0u8})
+        let rS = diffSafe(u8, c, outS, n)
+        let rF = diffFast(u8, c, outF, n)
+        if (rS != rF || rS != n) {
+            println("DIFF row=${fileRow} n=${n} mode=${modeIdx}: safe=${rS} fast=${rF}")
+        }
+        @Assert(rS == rF && rS == n)
+        var eq = true
+        for (i in 0..n) {
+            if (outS[i] != outF[i]) { eq = false; break }
+        }
+        if (!eq) { println("DIFF BYTES row=${fileRow} n=${n}") }
+        @Assert(eq)
+        rows += 1
+    }
+    // 64 dest rows: artifact (fileRow >= 0) decodes to the consumed prefix;
+    // digest-only rows self-compress via LZ4_compress_destSize (L2 pattern)
+    for ((n, mpIdx, seed, wantSize, wantConsumed, _, _, fileRow) in BLOCK_DEST_REF) {
+        let u8: Array<UInt8>
+        let c: Int64
+        let expect: Int64
+        if (fileRow >= 0) {
+            let art = readBlockArtifact(fileRow)
+            u8 = Array<UInt8>(art.size, {i => UInt8(art[i])})
+            c = Int64(wantSize)
+            expect = Int64(wantConsumed)
+        } else {
+            let buf = Array<UInt8>(n, {_ => 0u8})
+            RDG_genBuffer(buf, n, BLOCK_MPS[mpIdx], 0.0, seed)
+            let target = Int32(n * 3 / 4)
+            let bound = Int64(LZ4_compressBound(Int32(n)))
+            let comp = Array<UInt8>(bound, {_ => 0u8})
+            let (cc, consumed) = LZ4_compress_destSize(buf, Int32(n), comp, target)
+            @Assert(cc >= 0)
+            u8 = comp
+            c = Int64(cc)
+            expect = Int64(consumed)
+        }
+        let outS = Array<UInt8>(n, {_ => 0u8})
+        let outF = Array<UInt8>(n, {_ => 0u8})
+        let rS = diffSafe(u8, c, outS, n)
+        let rF = diffFast(u8, c, outF, n)
+        if (wantSize == 0) {
+            // empty artifacts: srcSize 0 -> both -1 (L2068)
+            @Assert(rS == -1 && rF == -1)
+        } else {
+            if (rS != rF || rS != expect) {
+                println("DIFF-DEST row=${fileRow} n=${n}: safe=${rS} fast=${rF} want=${expect}")
+            }
+            @Assert(rS == rF && rS == expect)
+            var eq = true
+            for (i in 0..expect) {
+                if (outS[i] != outF[i]) { eq = false; break }
+            }
+            @Assert(eq)
+        }
+        rows += 1
+    }
+    // 8 tight rows: our full-bound encode (no artifact on disk)
+    for ((n, mpIdx, seed) in BLOCK_TIGHT_REF) {
+        let buf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(buf, n, BLOCK_MPS[mpIdx], 0.0, seed)
+        let bound = Int64(LZ4_compressBound(Int32(n)))
+        let comp = Array<UInt8>(bound, {_ => 0u8})
+        let c = LZ4_compress_default(buf, Int32(n), comp, Int32(bound))
+        @Assert(c > 0)
+        let outS = Array<UInt8>(n, {_ => 0u8})
+        let outF = Array<UInt8>(n, {_ => 0u8})
+        let rS = diffSafe(comp, Int64(c), outS, n)
+        let rF = diffFast(comp, Int64(c), outF, n)
+        @Assert(rS == rF && rS == n)
+        var eq = true
+        for (i in 0..n) {
+            if (outS[i] != outF[i]) { eq = false; break }
+        }
+        @Assert(eq)
+        rows += 1
+    }
+    // 16 dict rows: 14 artifacts via forced extDict both paths; 2 digest-only
+    // rows (no artifact) use our plain compress_default stream with the dict
+    // attached (extDict instantiation active, stream never references it).
+    let dict = blockDictBuffer()
+    for ((n, mpIdx, seed, wantSize, _, _, _, _, fileRow) in BLOCK_DICT_REF) {
+        let u8: Array<UInt8>
+        let c: Int64
+        if (fileRow >= 0) {
+            let art = readBlockArtifact(fileRow)
+            @Assert(art.size == Int64(wantSize))
+            u8 = Array<UInt8>(art.size, {i => UInt8(art[i])})
+            c = Int64(wantSize)
+        } else {
+            let buf = Array<UInt8>(n, {_ => 0u8})
+            RDG_genBuffer(buf, n, BLOCK_MPS[mpIdx], 0.0, seed)
+            let bound = Int64(LZ4_compressBound(Int32(n)))
+            let comp = Array<UInt8>(bound, {_ => 0u8})
+            let cc = LZ4_compress_default(buf, Int32(n), comp, Int32(bound))
+            @Assert(cc > 0)
+            u8 = comp
+            c = Int64(cc)
+        }
+        let outS = Array<UInt8>(n, {_ => 0u8})
+        let outF = Array<UInt8>(n, {_ => 0u8})
+        let rS = diffSafeDict(u8, c, outS, n, dict, 65536)
+        let rF = diffFastDict(u8, c, outF, n, dict, 65536)
+        if (rS != rF || rS != n) {
+            println("DIFF-DICT row=${fileRow} n=${n}: safe=${rS} fast=${rF}")
+        }
+        @Assert(rS == rF && rS == n)
+        var eq = true
+        for (i in 0..n) {
+            if (outS[i] != outF[i]) { eq = false; break }
+        }
+        @Assert(eq)
+        rows += 1
+    }
+    @Assert(rows == 280)
+    // 20 partial probes: forced partial both paths, ret + prefix equality
+    var partRows = 0
+    for ((kind, n, _, _, row, target, _) in PARTIAL_PROBE_REF) {
+        let art = readBlockArtifact(row)
+        let u8 = Array<UInt8>(art.size, {i => UInt8(art[i])})
+        let cap: Int64 = if (Int64(target) < n) { Int64(target) } else { n }
+        let outS = Array<UInt8>(n, {_ => 0u8})
+        let outF = Array<UInt8>(n, {_ => 0u8})
+        let rS: Int64 = if (kind == 1) {
+            LZ4_decompress_generic_forced(u8, Int64(art.size), outS, 0, cap, true, 0, Some(dict), 0, 65536, true)
+        } else {
+            LZ4_decompress_generic_forced(u8, Int64(art.size), outS, 0, cap, true, 0, None<Array<UInt8>>, 0, 0, true)
+        }
+        let rF: Int64 = if (kind == 1) {
+            LZ4_decompress_generic_forced(u8, Int64(art.size), outF, 0, cap, true, 0, Some(dict), 0, 65536, false)
+        } else {
+            LZ4_decompress_generic_forced(u8, Int64(art.size), outF, 0, cap, true, 0, None<Array<UInt8>>, 0, 0, false)
+        }
+        if (rS != rF) {
+            println("DIFF-PARTIAL row=${row} target=${target}: safe=${rS} fast=${rF}")
+        }
+        @Assert(rS == rF)
+        var eq = true
+        for (i in 0..rS) {
+            if (outS[i] != outF[i]) { eq = false; break }
+        }
+        @Assert(eq)
+        partRows += 1
+    }
+    @Assert(partRows == 20)
+    println("differential golden: ${rows}/280 manifest rows + ${partRows} partial probes safe==fast (byte-exact, ret-exact)")
+}
+
+@Test
+func lz4DecompressDifferentialRandomTest(): Unit {
+    var rng: UInt64 = 0x4D33536BEA15C9B7u64
+    var plain = 0
+    // 525 LCG cases: mp sweep 0.00..1.00 (21 values) x 25 sizes (1..64KB),
+    // our compressor -> forced safe vs forced fast
+    let sizes: Array<Int64> =
+        [1, 2, 3, 15, 16, 17, 31, 32, 33, 63, 64, 65, 100, 127, 128, 255, 256, 511, 1000, 4095, 4096, 16384, 32768, 65535, 65536]
+    for (mi in 0..21) {
+        let mp = Float64(mi) * 0.05
+        for (n in sizes) {
+            rng = diffLcgNext(rng)
+            let buf = Array<UInt8>(n, {_ => 0u8})
+            RDG_genBuffer(buf, n, mp, 0.0, UInt32(rng % 4294967291u64))
+            let bound = Int64(LZ4_compressBound(Int32(n)))
+            let comp = Array<UInt8>(bound, {_ => 0u8})
+            let c = LZ4_compress_default(buf, Int32(n), comp, Int32(bound))
+            @Assert(c > 0)
+            let outS = Array<UInt8>(n, {_ => 0u8})
+            let outF = Array<UInt8>(n, {_ => 0u8})
+            let rS = diffSafe(comp, Int64(c), outS, n)
+            let rF = diffFast(comp, Int64(c), outF, n)
+            if (rS != rF || rS != n) {
+                println("DIFF-RND mp=${mp} n=${n}: safe=${rS} fast=${rF}")
+            }
+            @Assert(rS == rF && rS == n)
+            var eq = true
+            for (i in 0..n) {
+                if (outS[i] != outF[i]) { eq = false; break }
+            }
+            @Assert(eq)
+            plain += 1
+        }
+    }
+    // patterned inputs: small-offset overlap matches (offset<16 fast path)
+    let patSrcs: Array<Array<UInt8>> = [
+        Array<UInt8>(4096, {_ => 0u8}),
+        Array<UInt8>(1000, {_ => 0xAAu8}),
+        Array<UInt8>(5000, {i => UInt8(i % 2)}),
+        Array<UInt8>(3000, {i => UInt8(i % 3)}),
+        Array<UInt8>(2000, {i => UInt8(i % 7)}),
+        Array<UInt8>(65536, {i => UInt8(i % 17)}),
+    ]
+    for (buf in patSrcs) {
+        let n = buf.size
+        let bound = Int64(LZ4_compressBound(Int32(n)))
+        let comp = Array<UInt8>(bound, {_ => 0u8})
+        let c = LZ4_compress_default(buf, Int32(n), comp, Int32(bound))
+        @Assert(c > 0)
+        let outS = Array<UInt8>(n, {_ => 0u8})
+        let outF = Array<UInt8>(n, {_ => 0u8})
+        @Assert(diffSafe(comp, Int64(c), outS, n) == n)
+        @Assert(diffFast(comp, Int64(c), outF, n) == n)
+        var eq = true
+        for (i in 0..n) {
+            if (outS[i] != outF[i]) { eq = false; break }
+        }
+        @Assert(eq)
+        plain += 1
+    }
+    // 40 synthetic extDict streams (dict-referencing + in-block mixed matches)
+    var synth = 0
+    let dictSizes: Array<Int64> = [100, 65535, 65536, 70000]
+    let synthNs: Array<Int64> = [200, 1000, 5000, 20000, 64000]
+    for (dsz in dictSizes) {
+        let dict = Array<UInt8>(dsz, {i => UInt8((i * 31 + 7) % 251)})
+        for (n in synthNs) {
+            rng = diffLcgNext(rng)
+            let (comp, c) = diffSynthStream(n, dsz, rng)
+            let outS = Array<UInt8>(n, {_ => 0u8})
+            let outF = Array<UInt8>(n, {_ => 0u8})
+            let rS = diffSafeDict(comp, c, outS, n, dict, dsz)
+            let rF = diffFastDict(comp, c, outF, n, dict, dsz)
+            if (rS != rF || rS != n) {
+                println("DIFF-SYNTH dict=${dsz} n=${n}: safe=${rS} fast=${rF}")
+            }
+            @Assert(rS == rF && rS == n)
+            var eq = true
+            for (i in 0..n) {
+                if (outS[i] != outF[i]) { eq = false; break }
+            }
+            @Assert(eq)
+            synth += 1
+        }
+    }
+    // 20 synthetic withPrefix64k cases: 65535-byte in-buffer prefix, offsets
+    // span prefix and produced region (fast loop prefix exemption territory)
+    var pref = 0
+    let prefNs: Array<Int64> = [64, 100, 1000, 5000, 20000]
+    for (n in prefNs) {
+        for (_ in 0..4) {
+            rng = diffLcgNext(rng)
+            let (comp, c) = diffSynthStream(n, 65535, rng)
+            let dstS = Array<UInt8>(65535 + n, {_ => 0u8})
+            let dstF = Array<UInt8>(65535 + n, {_ => 0u8})
+            for (i in 0..65535) {
+                dstS[i] = UInt8((i * 13 + 5) % 251)
+                dstF[i] = UInt8((i * 13 + 5) % 251)
+            }
+            let rS = LZ4_decompress_generic_forced(comp, c, dstS, 65535, n, false, 0,
+                None<Array<UInt8>>, 0, 0, true)
+            let rF = LZ4_decompress_generic_forced(comp, c, dstF, 65535, n, false, 0,
+                None<Array<UInt8>>, 0, 0, false)
+            if (rS != rF || rS != n) {
+                println("DIFF-PREF n=${n}: safe=${rS} fast=${rF}")
+            }
+            @Assert(rS == rF && rS == n)
+            var eq = true
+            for (i in 0..Int64(n)) {
+                if (dstS[65535 + i] != dstF[65535 + i]) { eq = false; break }
+            }
+            @Assert(eq)
+            pref += 1
+        }
+    }
+    // 40 random partial cases (random targets incl. sub-64 clamps)
+    var part = 0
+    for (_ in 0..40) {
+        rng = diffLcgNext(rng)
+        let mp = Float64(rng % 21u64) * 0.05
+        rng = diffLcgNext(rng)
+        let n = sizes[Int64(rng % 25u64)]
+        rng = diffLcgNext(rng)
+        let buf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(buf, n, mp, 0.0, UInt32(rng % 4294967291u64))
+        let bound = Int64(LZ4_compressBound(Int32(n)))
+        let comp = Array<UInt8>(bound, {_ => 0u8})
+        let c = LZ4_compress_default(buf, Int32(n), comp, Int32(bound))
+        @Assert(c > 0)
+        rng = diffLcgNext(rng)
+        let target = Int64(rng % UInt64(n + 1))
+        let outS = Array<UInt8>(n, {_ => 0u8})
+        let outF = Array<UInt8>(n, {_ => 0u8})
+        let rS = LZ4_decompress_generic_forced(comp, Int64(c), outS, 0, target, true, 0,
+            None<Array<UInt8>>, 0, 0, true)
+        let rF = LZ4_decompress_generic_forced(comp, Int64(c), outF, 0, target, true, 0,
+            None<Array<UInt8>>, 0, 0, false)
+        if (rS != rF) {
+            println("DIFF-RNDPART n=${n} target=${target}: safe=${rS} fast=${rF}")
+        }
+        @Assert(rS == rF)
+        var eq = true
+        for (i in 0..rS) {
+            if (outS[i] != outF[i]) { eq = false; break }
+        }
+        @Assert(eq)
+        part += 1
+    }
+    @Assert(plain == 531)
+    @Assert(synth == 20)
+    @Assert(pref == 20)
+    @Assert(part == 40)
+    println("differential random: ${plain} plain + ${synth} extDict-synth + ${pref} prefix64k-synth + ${part} partial, all safe==fast")
+}
+
+@Test
+func lz4DecompressDifferentialCorruptTest(): Unit {
+    var rng: UInt64 = 0x5EED1F0CA7E57A11u64
+    var cases = 0
+    var neg = 0
+    // bases: real artifacts (plain + dict) plus our-compressed patterned inputs
+    let art64 = readBlockArtifact(64)
+    let b64 = Array<UInt8>(art64.size, {i => UInt8(art64[i])})
+    let art112 = readBlockArtifact(112)
+    let b112 = Array<UInt8>(art112.size, {i => UInt8(art112[i])})
+    let art270 = readBlockArtifact(270)
+    let b270 = Array<UInt8>(art270.size, {i => UInt8(art270[i])})
+    let dict = blockDictBuffer()
+    // our-compressed bases
+    let zbuf = Array<UInt8>(1000, {_ => 0u8})
+    let zcomp = Array<UInt8>(Int64(LZ4_compressBound(1000)), {_ => 0u8})
+    let zc = Int64(LZ4_compress_default(zbuf, 1000, zcomp, LZ4_compressBound(1000)))
+    let rbuf = Array<UInt8>(5000, {_ => 0u8})
+    RDG_genBuffer(rbuf, 5000, 0.9, 0.0, 5u32)
+    let rcomp = Array<UInt8>(Int64(LZ4_compressBound(5000)), {_ => 0u8})
+    let rc = Int64(LZ4_compress_default(rbuf, 5000, rcomp, LZ4_compressBound(5000)))
+    // (stream, c, outN, isDict)
+    let bases: Array<(Array<UInt8>, Int64, Int64, Bool)> = [
+        (b64, art64.size, 255, false),
+        (b112, art112.size, 4096, false),
+        (b270, art270.size, 4096, true),
+        (zcomp, zc, 1000, false),
+        (rcomp, rc, 5000, false),
+    ]
+    for ((base, c, outN, isDict) in bases) {
+        var ops = 0
+        while (ops < 20) {
+            rng = diffLcgNext(rng)
+            let mod: Array<UInt8> = Array<UInt8>(c, {i => base[i]})
+            var mc = c
+            var kind = Int64(rng % 3u64)
+            if (kind == 0) {
+                // bit flip at a random position
+                rng = diffLcgNext(rng)
+                let pos = Int64(rng % UInt64(c))
+                rng = diffLcgNext(rng)
+                mod[pos] = mod[pos] ^ UInt8(1 << Int64(rng % 8u64))
+            } else if (kind == 1) {
+                // overwrite a byte with 0xFF
+                rng = diffLcgNext(rng)
+                let pos = Int64(rng % UInt64(c))
+                mod[pos] = 0xFFu8
+            } else {
+                // truncation (keep >= 1 byte)
+                rng = diffLcgNext(rng)
+                mc = 1 + Int64(rng % UInt64(c - 1))
+            }
+            let outS = Array<UInt8>(outN, {_ => 0u8})
+            let outF = Array<UInt8>(outN, {_ => 0u8})
+            let rS: Int64 = if (isDict) {
+                diffSafeDict(mod, mc, outS, outN, dict, 65536)
+            } else {
+                diffSafe(mod, mc, outS, outN)
+            }
+            let rF: Int64 = if (isDict) {
+                diffFastDict(mod, mc, outF, outN, dict, 65536)
+            } else {
+                diffFast(mod, mc, outF, outN)
+            }
+            if (rS < 0 && rF < 0) {
+                neg += 1
+            } else {
+                // both must accept identically (rare: corruption inside the
+                // final literal payload can stay decodable)
+                if (rS != rF) {
+                    println("CORRUPT-DIVERGE c=${c} mc=${mc} kind=${kind}: safe=${rS} fast=${rF}")
+                }
+                @Assert(rS == rF && rS >= 0)
+                var eq = true
+                for (i in 0..rS) {
+                    if (outS[i] != outF[i]) { eq = false; break }
+                }
+                @Assert(eq)
+            }
+            cases += 1
+            ops += 1
+        }
+    }
+    @Assert(cases == 100)
+    @Assert(neg >= 30)
+    println("differential corrupt: ${cases} cases (${neg} both-negative, ${cases - neg} identical-positive)")
+}
+
+@Test
+func lz4DecompressPerfSmokeTest(): Unit {
+    // 4MB datagen corpora, forced-safe vs forced-fast (dispatch build), no gate
+    let n: Int64 = 4 * 1024 * 1024
+    let mps: Array<Float64> = [0.0, 0.5, 1.0]
+    for (mp in mps) {
+        let buf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(buf, n, mp, 0.0, 42u32)
+        let bound = Int64(LZ4_compressBound(Int32(n)))
+        let comp = Array<UInt8>(bound, {_ => 0u8})
+        let c = Int64(LZ4_compress_default(buf, Int32(n), comp, Int32(bound)))
+        @Assert(c > 0)
+        // correctness gate before timing
+        let chk = Array<UInt8>(n, {_ => 0u8})
+        @Assert(diffFast(comp, c, chk, n) == n)
+        var eq = true
+        for (i in 0..n) {
+            if (chk[i] != buf[i]) { eq = false; break }
+        }
+        @Assert(eq)
+        let iters: Int64 = 12
+        var bestS: Float64 = 0.0
+        var bestF: Float64 = 0.0
+        for (_ in 0..2) {
+            let outS = Array<UInt8>(n, {_ => 0u8})
+            let t0 = MonoTime.now()
+            var i: Int64 = 0
+            while (i < iters) {
+                LZ4_decompress_generic_forced(comp, c, outS, 0, n, false, 0,
+                    None<Array<UInt8>>, 0, 0, true)
+                i += 1
+            }
+            let dt = (MonoTime.now() - t0).toNanoseconds()
+            let mbs = Float64(n * iters) / Float64(dt) * 1000000000.0 / 1048576.0
+            if (mbs > bestS) { bestS = mbs }
+            let outF = Array<UInt8>(n, {_ => 0u8})
+            let t1 = MonoTime.now()
+            i = 0
+            while (i < iters) {
+                LZ4_decompress_generic_forced(comp, c, outF, 0, n, false, 0,
+                    None<Array<UInt8>>, 0, 0, false)
+                i += 1
+            }
+            let dt2 = (MonoTime.now() - t1).toNanoseconds()
+            let mbs2 = Float64(n * iters) / Float64(dt2) * 1000000000.0 / 1048576.0
+            if (mbs2 > bestF) { bestF = mbs2 }
+        }
+        println("perf smoke mp=${mp} n=4MB c=${c}: safe=${bestS} MB/s, fast=${bestF} MB/s")
+    }
 }
