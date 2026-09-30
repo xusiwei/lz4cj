@@ -900,10 +900,18 @@ public func LZ4_compress_destSize_extState(state: LZ4_stream_t, src: Array<UInt8
 /* 同一分配判定(别名探针):仓颉无引用同一性比较(=== 不存在;CPointer 无
     ==/</-/equals/toIntNative,逐一探针证伪),而流式压缩的分支抉择
     (L1755 dictEnd == source 的指针相等)依赖"字典与本块是否同一缓冲"。
-    探针:经 d1 写入瞬态哨兵字节、经 d2 读回、即刻复原——同一底层对象则
-    写入可见。读写间仅有整数异或与数组访问,不分配、不可抛出(下标界内:
-    k=0 < d1.size),单线程契约下与 C 指针相等语义严格一致(同一分配 ⟺
-    可见)。内容相等的不同分配(twin 缓冲)判 false —— 这是与"内容窗口
+    探针(终审评审 Important 修复,双哨兵):经 d1 依次写入两个恒相异的
+    瞬态哨兵字节(save^0xFF、save^0xAA)、各自经 d2 读回、即刻复原——
+    两次读均见到各自哨兵才判 same。单哨兵的缺陷:不同分配而 d2[0] 恰等于
+    该哨兵的字节会误报(随机 ~1/256;补集结构数据确定性命中——如全 0x00
+    字典 vs 全 0xFF 源),zig-zag 几何(dictEndL == srcIdx 数值相等)下
+    即错取 withPrefix64k(C 取 usingExtDict)致输出分歧。双哨兵的不可能
+    论证:save^0xFF != save^0xAA 恒成立(0xFF != 0xAA),而探针期间 d2
+    从未被写,不同分配的 d2[0] 在两次读之间是单值,不可能同时等于两个
+    相异常数——双读皆中 ⟺ 同一分配,与 C 指针相等语义严格一致。
+    读写间仅有整数异或与数组访问,不分配、不可抛出(下标界内:
+    k=0 < d1.size),单线程契约下安全。内容相等的不同分配(twin 缓冲)
+    判 false —— 这是与"内容窗口
     相等"替代案(M3a 解码侧先例)的本质差异:压缩侧内容判定会在
     savedict/extdict 场景产生错误的状态演化(内容等价仅保证当次输出,
     prefix 分支的 dictSize 累积 vs extDict 分支的重置会改变后续块的
@@ -914,17 +922,22 @@ internal func lz4SameBuffer(d1: Array<UInt8>, d2: Array<UInt8>): Bool {
         return false                    /* 尺寸不同必非同一分配 */
     }
     let save: UInt8 = d1[0]
-    let sent: UInt8 = save ^ 0xFFu8     /* 必不同于原值 */
-    d1[0] = sent
-    let visible: Bool = (d2[0] == sent)
-    d1[0] = save
-    return visible
+    let sent1: UInt8 = save ^ 0xFFu8    /* 哨兵一(必不同于原值) */
+    d1[0] = sent1
+    let vis1: Bool = (d2[0] == sent1)
+    let sent2: UInt8 = save ^ 0xAAu8    /* 哨兵二(与哨兵一恒相异) */
+    d1[0] = sent2
+    let vis2: Bool = (d2[0] == sent2)
+    d1[0] = save                        /* 即刻复原原值 */
+    return vis1 && vis2                 /* 双读皆中 ⟺ 同一分配 */
 }
 
 /* LZ4_renormDictT(lz4.c L1696-1713):currentOffset + nextSize 越过 2GB 时的
     表刻度重整 —— 全表条目减去 (currentOffset - 64KB)(小于该 delta 的清 0),
     currentOffset 归位 64KB,字典截尾至 64KB 并前移 dictStartIdx 使 dictEnd
-    不变(60 位指针差的溢出防护,64 位构建不可达但按上游保留)。 */
+    不变。触发条件是 U32 currentOffset 的累加(并非"64 位构建不可达"——
+    单一状态累计 >2GB 流量即可达);套件未覆盖(需单状态 >2GB 流量),
+    按上游保留。 */
 internal func lz4RenormDictT(state: LZ4_stream_t, nextSize: Int64): Unit {
     if (state.currentOffset + UInt32(nextSize & 0xFFFFFFFFi64) > 0x80000000u32) {   /* L1699 */
         let delta: UInt32 = state.currentOffset - 65536u32                          /* L1701 */

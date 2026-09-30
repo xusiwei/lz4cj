@@ -3417,3 +3417,40 @@ func lz4StreamingEdgeTest(): Unit {
     @Assert(eqd)
     println("streaming edges: tight-cap 0 + position guards, saveDict 0/0/0/1000, loadDict early-exits, attach-empty fallback pinned")
 }
+
+/*-************************************
+*  M3b final review fix: two-sentinel same-buffer probe
+**************************************/
+// Direct pins of the internal lz4SameBuffer: same allocation -> true with
+// contents restored by the probe; distinct allocations -> false even with
+// EQUAL contents (twins), and specifically in the corner where the old
+// single-sentinel probe would have returned true (dict[0]=0x00 so the old
+// sentinel save^0xFF = 0xFF equals src[0] -> single read "visible").
+@Test
+func lz4SameBufferProbeTest(): Unit {
+    // 1) same allocation: the array paired with itself
+    let a = Array<UInt8>(64, {i => UInt8(i % 251)})
+    @Assert(lz4SameBuffer(a, a))
+    var restored = true
+    for (i in 0..64) {
+        if (a[i] != UInt8(i % 251)) { restored = false; break }
+    }
+    @Assert(restored)
+    // 2) distinct Arrays with EQUAL contents -> false (twin buffers)
+    let t1 = Array<UInt8>(64, {_ => 0x5Au8})
+    let t2 = Array<UInt8>(64, {_ => 0x5Au8})
+    @Assert(!lz4SameBuffer(t1, t2))
+    // 3) the exact single-sentinel false-positive corner: distinct
+    //    buffers, dict all 0x00 (save=0x00 -> old sentinel 0xFF), src
+    //    0xFF-led -> old probe read back "visible"; the second sentinel
+    //    save^0xAA = 0xAA cannot also match a constant src[0]=0xFF
+    let dict = Array<UInt8>(64, {_ => 0x00u8})
+    let src = Array<UInt8>(64, {_ => 0xFFu8})
+    @Assert(!lz4SameBuffer(dict, src))
+    // and symmetrically with the roles swapped (src-led probe)
+    @Assert(!lz4SameBuffer(src, dict))
+    // guards: size mismatch and empty buffers -> false
+    @Assert(!lz4SameBuffer(Array<UInt8>(8, {_ => 1u8}), Array<UInt8>(9, {_ => 1u8})))
+    @Assert(!lz4SameBuffer(Array<UInt8>(0, {_ => 0u8}), Array<UInt8>(0, {_ => 0u8})))
+    println("same-buffer probe: alias true (contents restored), twins false, complementary single-sentinel corner false")
+}

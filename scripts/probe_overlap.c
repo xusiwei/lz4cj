@@ -1,6 +1,8 @@
 /* Overlap-shrink differential probe for M3b (provenance of the extra
-   differential in stream-c-report.md §5; the shrink branch itself is also
-   exercised by golden mode=cont): 7 rolling LZ4_compress_fast_continue
+   differential in stream-c-report.md §5; golden mode=cont only evaluates
+   the shrink-branch guard there - the branch body fires solely in this
+   probe's pass-2, C-differential-verified but not suite-pinned, ledger
+   M7): 7 rolling LZ4_compress_fast_continue
    blocks in one buffer, then a pass-2 block 0 whose source overlaps the
    accumulated dict -> lz4.c L1744-52 dictEnd-overlap shrink branch (not
    golden-pinned; expected pass2 c=20106 xxh32=55883273, standalone decode

@@ -151,7 +151,7 @@ C 中"用户提供裸缓冲当状态"的 API(`LZ4_compress_fast_extState(void* s
 - 解压:`LZ4_decompress_safe`、`LZ4_decompress_safe_partial`、`LZ4_decompress_safe_usingDict`、`LZ4_decompress_safe_partial_usingDict`
 - 流式压缩:`LZ4_createStream`、`LZ4_freeStream`、`LZ4_resetStream`、`LZ4_resetStream_fast`、`LZ4_initStream`、`LZ4_loadDict`、`LZ4_loadDictSlow`、`LZ4_attach_dictionary`、`LZ4_compress_fast_continue`、`LZ4_saveDict`(M3b 全量落地;`compress_fast_continue` 取 `(srcBuf, srcIdx)` 位置对,§4.3 规则 4)
 - 流式解压:`LZ4_createStreamDecode`、`LZ4_freeStreamDecode`、`LZ4_setStreamDecode`、`LZ4_decoderRingBufferSize`、`LZ4_decompress_safe_continue`
-- 常量:`LZ4_MEMORY_USAGE`、`LZ4_HASHLOG`、`LZ4_STREAMSIZE`、`LZ4_VERSION_MAJOR/MINOR/RELEASE`、`LZ4_DECODER_RING_BUFFER_SIZE`(以函数/常量形式提供)
+- 常量:`LZ4_STREAMSIZE`、`LZ4_VERSION_MAJOR/MINOR/RELEASE`、`LZ4_DECODER_RING_BUFFER_SIZE`(以函数/常量形式提供);`LZ4_MEMORY_USAGE`、`LZ4_HASHLOG` 非公开 API(终审订正:原误列为提供)——仅作库内部常量/注释引用,不对外发布
 
 **HC(`lz4hc.h`,非弃用全量)**:
 

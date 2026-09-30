@@ -992,9 +992,11 @@ int main(void) {
     }
     /* destext rows (M3b Task 4): LZ4_compress_destSize_extState (public
        API, lz4.c L1506) with ONE stream state shared by all rows - the
-       wrapper re-initializes the state on exit (L1510), so reusing a dirty
-       state pins that cleaning (a port that skips it would produce
-       different outputs on the later rows). Per input, two rows:
+       wrapper re-initializes the state on exit (L1510); note the internal
+       entry initStream (L1492) re-cleans per call, so later-row outputs
+       alone would NOT discriminate a skipped exit-clean - the real pin is
+       the post-call state assert in the Cangjie test (currentOffset/
+       tableType/dict all reset after every row). Per input, two rows:
          tg = n*3/2 >= LZ4_compressBound(n) => delegates to the extState
               fast path, *srcSizePtr is left untouched (consumed = n)
          tg = n*3/4 => real fillOutput (consumed <= n; if the whole input
