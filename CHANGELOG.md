@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0 (M3b)
+
+- 流式压缩全家 API(设计 §4.5 流式压缩 10 函数全量 + 补记项):`LZ4_createStream` / `LZ4_freeStream` / `LZ4_resetStream` / `LZ4_resetStream_fast` / `LZ4_loadDict` / `LZ4_loadDictSlow` / `LZ4_attach_dictionary` / `LZ4_compress_fast_continue` / `LZ4_saveDict`,以及 M2 清单漏记、台账裁决纳入的 `LZ4_compress_destSize_extState`(元组返回);`LZ4_stream_t` 字典区以 (dictBuf/dictStartIdx/dictSize) 引用对落地(不拷贝,与 C 生命周期契约一致;saveDict 为唯一拷贝点),`LZ4_prepareTable` 真实表保留语义取代清表(fastReset 由此真实化)
+- 压缩核心扩展为四字典模式:noDict 不变 + withPrefix64k / usingExtDict / usingDictCtx(attach 的两条路径:>4KB 整态拷贝走 extDict、≤4KB 走 dictCtx 咨询);跨段匹配计数 `LZ4_count2`、`lz4RenormDictT`(>2GB 表重整,按上游保留)
+- 签名偏离登记(设计 §4.3 规则 4 扩展):`LZ4_compress_fast_continue` 取 `(srcBuf, srcIdx: Int64)` 位置对(块源可在缓冲任意位置,extdict 双缓冲 zig-zag 等 golden 几何必需);C 侧 `dictEnd == source` 指针相等分派以 `lz4SameBuffer` 原始地址(分配同一性)判定实现(瞬态哨兵写-读-复原探针;单线程契约下与 C 指针语义严格一致,强于 M3a 解压侧的内容窗口谓词——内容判定在 savedict/extdict 场景会产生错误状态演化,已由 golden 排除)
+- golden 验证(清单扩至 356 行,+46):cont 7(+cont0 1:新鲜 continue 走 byU32 与 one-shot default 的 byU16 合法分歧锚点,c=20143 vs 19452 双录)+ savedict 6(ret 40960 历史受限 / 65536 64KB 截顶 + 迁移后续块仍逐字节一致)+ dictfast 8 / dictslow 8(64KB 字典 RDG 仓颉侧再生,xxh 钉值;含输入即字典自身前缀的流式 RDG 行)+ attach 4(dictCtx 咨询 / 整表拷贝两路径,分支经调用后状态钉住)+ extdict 6(双缓冲 zig-zag,位置对表达跨缓冲块源)+ destext 6(共享状态,委托行 c/consumed 精确且 == default 交叉验证、fillOutput 行 (size, consumed) 精确、每次调用后状态干净钉住——漏掉出口 initStream 即后续行失败);另 fastreset 10 行(M3b-T1,同流双块场景 + off=/tt= 状态钉住)
+- 闭环往返 + 边界:cont/savedict/extdict 几何滚动解码闭合(与 `LZ4_decompress_safe_continue` 互为镜像);dict/attach 20 例 `decompress_safe_usingDict` 还原;边界 C 探针钉值(紧容量 → 0 且破坏流、saveDict fresh/0/-1 → 0、1000B 历史 → 1000 + 内容、loadDict <HASH_UNIT → 0 但先 reset+64KB 增量、attach 空字典回退 == 裸 continue 逐字节)
+- 探针入库(台账义务):`scripts/span_probe.c`(M3a extDict 跨界拷贝探针重建,对上游 0774d055 重编译 14/14 一致)+ `scripts/edge_probe.c`(边界语义源)+ `scripts/probe_overlap.c`(overlap-shrink 差分:pass2 c=20106 xxh=55883273 + 解码闭合,仓颉侧逐字节一致)
+- 覆盖率(cangjie-1.0.5,`cjcov --html-details`):总体行覆盖 96.1%(3745/3898);库源码 96.81%(1366/1411),其中 common/datagen/xxhash 100%、lz4.cj 95.5%(949/994);lz4.cj 45 个未覆盖行:fillOutput 回退哈希清除 L329-333/L618-622(对抗用例未触达)、usingDictCtx test-next 候选二解析 L663-670(attach 用例每位置直接命中,未走 miss 分支)、dispatch 尺寸守卫与 destSize 委托失败兜底 L755/L855(防御/不可达)、acceleration 钳制 L782/L1109/L1112(防御,C 契约钳制)、lz4RenormDictT L930-945(>2GB 表重整,64 位不可达,按上游保留)、loadDict >64KB 截尾 L972(golden 字典恒 64KB)、重叠收缩分支体 L1147-1154(**可达**,C 差分已验但未入套件,台账登记 M7 补)、fast 循环 partial+extDict 钳制 L1447-1450(结构性不可达,上游同冗余)、滚动窗口谓词失配/None L1903/L1945(公 API 不可达)
+- 文档:design.md §4.3 规则 4 扩展至压缩侧(位置对 + lz4SameBuffer 等价性说明)、§4.4 字典引用对字段状态、§4.5 流式压缩行状态;docs/progress.md 首次按新维护规则更新(M3b 行 + 台账勾销 2 项/关闭 1 项/新登记 1 项)
+- 双工具链全绿:LTS-1.0.5 与 STS-1.2.0 各 57/57 测试通过
+
 ## 0.3.1(基线确证)
 
 - 移植基线显式化并实证:上游 dev commit `0774d055`(2026-06-01)= v1.10.0 发布线之上的官方修复线(dev 版本宏自报 1.10.0)。以 v1.10.0(tag ebb370ca)独立 worktree 重编 golden harness 重跑全矩阵:manifest 304/304 行、artifacts 264/264、partial 探针(解压合法输入)全部逐字节一致——**压缩输出与 v1.10.0 完全等价**;解压侧保留其后官方修复(read_variable_length OOB 读修复、快/慢循环 ip/iend 边界修复、match length limit 修复),损坏输入行为较 v1.10.0 更严格(v1.10.0 该处为 OOB 读未定义行为,不在仓颉复刻)。HC/frame 后续里程碑按同一 commit 移植
