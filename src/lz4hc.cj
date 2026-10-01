@@ -111,6 +111,7 @@ internal func lz4hcGetCLevelParams(cLevel: Int32): CParams {
 **************************************/
 internal const LZ4HC_HASH_LOG: Int64 = 15            /* lz4hc.h L233 */
 internal const LZ4HC_HASHTABLESIZE: Int64 = 1 << 15  /* 32768, lz4hc.h L234 */
+internal const LZ4HC_HASHSIZE: Int64 = 4             /* lz4hc.c L120: 最小可用字典段 */
 internal const LZ4MID_HASHLOG: Int64 = 14            /* lz4hc.c L142: HASH_LOG-1 */
 internal const LZ4MID_HASHTABLESIZE: Int64 = 1 << 14 /* 16384, lz4hc.c L143 */
 internal const LZ4MID_HASHSIZE: Int64 = 8            /* lz4hc.c L141 */
@@ -1854,75 +1855,109 @@ internal func LZ4HC_compress_generic_internal(s: LZ4_streamHC_t,
     prefixStart 基由 generic_internal 内部重定基推导(见其注释);
     extDict 段
     (dictBuf)与 dictCtx 前缀缓冲存在才 acquire,**T5 修正**:dictCtx!=None
-   但 dictBuf==None 时,dictCtxQ 仍须为 dictCtx 自身 prefixBuf 的指针
-   (usingDictCtxHc 咨询块要按 dictCtx 的 prefix 读取);此前传 srcQ 的
-   写法会让 dictCtx 咨询块读到工作 prefix 的别名——T2 ledger minor。
-   4 个分支独立 dispatch:
-   (a) dictBuf=None, dictCtx=None → noDictCtx 路径 srcQ 占全部三位置
-   (b) dictBuf=Some, dictCtx=None → noDictCtx with extDict
-   (c) dictBuf=Some, dictCtx=Some → usingDictCtxHc consult
-       (dictCtx 也可能是已 memcpy 后 dictBuf=None,见 (d))
-   (d) dictBuf=None, dictCtx=Some → usingDictCtxHc consult
-       dictCtxQ = dictCtx.prefixBuf + dictCtx.prefixStartIdx
-   返回 (result, srcSizeOut)。 */
+    但 dictBuf==None 时,dictCtxQ 仍须为 dictCtx 自身 prefixBuf 的指针
+    (usingDictCtxHc 咨询块要按 dictCtx 的 prefix 读取);此前传 srcQ 的
+    写法会让 dictCtx 咨询块读到工作 prefix 的别名——T2 ledger minor。
+    **T5 修复轮**:dictBuf / dictCtx.prefixBuf 与 srcBuf 同一分配时禁止
+    重复 acquire(pre-acquire lz4SameBuffer 判定,命中由 srcBase 派生)。
+    4 个分支独立 dispatch:
+    (a) dictBuf=None, dictCtx=None → noDictCtx 路径 srcQ 占全部三位置
+    (b) dictBuf=Some, dictCtx=None → noDictCtx with extDict
+    (c) dictBuf=Some, dictCtx=Some → usingDictCtxHc consult
+        (dictCtx 也可能是已 memcpy 后 dictBuf=None,见 (d))
+    (d) dictBuf=None, dictCtx=Some → usingDictCtxHc consult
+        dictCtxQ = dictCtx.prefixBuf + dictCtx.prefixStartIdx
+    返回 (result, srcSizeOut)。 */
 internal func lz4hcCompressRun(s: LZ4_streamHC_t,
         srcBuf: Array<UInt8>, srcIdx: Int64, srcSize: Int64,
         dst: Array<UInt8>, dstCapacity: Int64,
         cLevel: Int32, limit: Int32): (Int32, Int64) {
+    /* 同分配判定必须在任何 acquire 之前完成(lz4SameBuffer 带哨兵写,
+       不得在有 raw handle 持有期间调用)。dictBuf === srcBuf(edge④ 几何:
+       loadDictHC(D) 后 continue 的块仍驻 D)与 dictCtx.prefixBuf ===
+       srcBuf(attach 后以字典流 prefix 缓冲本身作为工作块)都经公共 API
+       可达 —— 命中时禁止重复 acquire,指针由已持有的 srcBase 派生。 */
+    let dictBufOpt = s.dictBuf
+    let dictCtxOpt = s.dictCtx
+    let dictSameAsSrc: Bool = match (dictBufOpt) {
+        case Some(db) => lz4SameBuffer(db, srcBuf)
+        case None => false
+    }
+    let pbufSameAsSrc: Bool = match (dictCtxOpt) {
+        case Some(dctx) =>
+            match (dctx.prefixBuf) {
+                case Some(pbuf) => lz4SameBuffer(pbuf, srcBuf)
+                case None => false
+            }
+        case None => false
+    }
     unsafe {
         let sh = acquireArrayRawData<UInt8>(srcBuf)
         let dh = acquireArrayRawData<UInt8>(dst)
-        let srcQ = sh.pointer + srcIdx
+        let srcBase = sh.pointer
+        let srcQ = srcBase + srcIdx
         var r: (Int64, Int64) = (0, 0)
-        let dictBufOpt = s.dictBuf
-        let dictCtxOpt = s.dictCtx
         if (let Some(db) <- dictBufOpt) {
-            let bh = acquireArrayRawData<UInt8>(db)
-            let dictQ = bh.pointer + s.dictStartIdx
-            match (dictCtxOpt) {
-                case Some(dctx) =>
-                    match (dctx.prefixBuf) {
-                        case Some(pbuf) =>
-                            let ph = acquireArrayRawData<UInt8>(pbuf)
-                            r = lz4hcCompressGeneric(s, srcBuf, srcIdx, srcQ, dictQ,
-                                ph.pointer + dctx.prefixStartIdx,
-                                dh.pointer, srcSize, dstCapacity, cLevel, limit)
-                            releaseArrayRawData<UInt8>(ph)
-                        case None =>
-                            /* dictCtx 自身无 prefixBuf —— 咨询不可达,落 noDictCtx;
-                               C 等价 dictCtx prefixStart==NULL 的 lookup 表 */
-                            r = lz4hcCompressGeneric(s, srcBuf, srcIdx, srcQ, dictQ, dictQ,
-                                dh.pointer, srcSize, dstCapacity, cLevel, limit)
-                    }
-                case None =>
-                    r = lz4hcCompressGeneric(s, srcBuf, srcIdx, srcQ, dictQ, dictQ,
-                        dh.pointer, srcSize, dstCapacity, cLevel, limit)
+            if (dictSameAsSrc) {
+                /* db === srcBuf:同一分配已由 sh 持有,免二次 acquire */
+                let dictQ = srcBase + s.dictStartIdx
+                r = lz4hcRunDictCtxDispatch(s, srcBuf, srcIdx, srcBase, srcQ,
+                    dictQ, dh.pointer, srcSize, dstCapacity, cLevel, limit, pbufSameAsSrc)
+            } else {
+                let bh = acquireArrayRawData<UInt8>(db)
+                let dictQ = bh.pointer + s.dictStartIdx
+                r = lz4hcRunDictCtxDispatch(s, srcBuf, srcIdx, srcBase, srcQ,
+                    dictQ, dh.pointer, srcSize, dstCapacity, cLevel, limit, pbufSameAsSrc)
+                releaseArrayRawData<UInt8>(bh)
             }
-            releaseArrayRawData<UInt8>(bh)
         } else {
             /* dictBuf=None:可能 noDictCtx,也可能 usingDictCtxHc consult
                (dictCtx 自带 prefixBuf 但本流 extDict 空 —— T5 修正) */
-            match (dictCtxOpt) {
-                case Some(dctx) =>
-                    match (dctx.prefixBuf) {
-                        case Some(pbuf) =>
-                            let ph = acquireArrayRawData<UInt8>(pbuf)
-                            r = lz4hcCompressGeneric(s, srcBuf, srcIdx, srcQ, srcQ,
-                                ph.pointer + dctx.prefixStartIdx,
-                                dh.pointer, srcSize, dstCapacity, cLevel, limit)
-                            releaseArrayRawData<UInt8>(ph)
-                        case None =>
-                            r = lz4hcCompressGeneric(s, srcBuf, srcIdx, srcQ, srcQ, srcQ,
-                                dh.pointer, srcSize, dstCapacity, cLevel, limit)
-                    }
-                case None =>
-                    r = lz4hcCompressGeneric(s, srcBuf, srcIdx, srcQ, srcQ, srcQ,
-                        dh.pointer, srcSize, dstCapacity, cLevel, limit)
-            }
+            r = lz4hcRunDictCtxDispatch(s, srcBuf, srcIdx, srcBase, srcQ,
+                srcQ, dh.pointer, srcSize, dstCapacity, cLevel, limit, pbufSameAsSrc)
         }
         releaseArrayRawData<UInt8>(dh)
         releaseArrayRawData<UInt8>(sh)
         return (Int32(r[0]), r[1])
+    }
+}
+
+/* lz4hcRunDictCtxDispatch:dictCtx 三态分派(dictBuf 侧 dictQ 指针已由
+    调用方解析)。dctx.prefixBuf 与 srcBuf 同一分配(pbufSameAsSrc,调用方
+    pre-acquire 判定)时以已持有的 srcBase 派生 dictCtxQ,免二次 acquire;
+    不同分配才对 pbuf acquire。 */
+internal func lz4hcRunDictCtxDispatch(s: LZ4_streamHC_t,
+        srcBuf: Array<UInt8>, srcIdx: Int64, srcBase: CPointer<UInt8>,
+        srcQ: CPointer<UInt8>, dictQ: CPointer<UInt8>, dstQ: CPointer<UInt8>,
+        srcSize: Int64, dstCapacity: Int64, cLevel: Int32, limit: Int32,
+        pbufSameAsSrc: Bool): (Int64, Int64) {
+    unsafe {
+        match (s.dictCtx) {
+            case Some(dctx) =>
+                match (dctx.prefixBuf) {
+                    case Some(pbuf) =>
+                        if (pbufSameAsSrc) {
+                            /* dctx.prefixBuf === srcBuf:同分配已持有 */
+                            return lz4hcCompressGeneric(s, srcBuf, srcIdx, srcQ, dictQ,
+                                srcBase + dctx.prefixStartIdx,
+                                dstQ, srcSize, dstCapacity, cLevel, limit)
+                        }
+                        let phHandle = acquireArrayRawData<UInt8>(pbuf)
+                        let r = lz4hcCompressGeneric(s, srcBuf, srcIdx, srcQ, dictQ,
+                            phHandle.pointer + dctx.prefixStartIdx,
+                            dstQ, srcSize, dstCapacity, cLevel, limit)
+                        releaseArrayRawData<UInt8>(phHandle)
+                        return r
+                    case None =>
+                        /* dictCtx 自身无 prefixBuf —— 咨询不可达,落 noDictCtx;
+                           C 等价 dictCtx prefixStart==NULL 的 lookup 表 */
+                        return lz4hcCompressGeneric(s, srcBuf, srcIdx, srcQ, dictQ, dictQ,
+                            dstQ, srcSize, dstCapacity, cLevel, limit)
+                }
+            case None =>
+                return lz4hcCompressGeneric(s, srcBuf, srcIdx, srcQ, dictQ, dictQ,
+                    dstQ, srcSize, dstCapacity, cLevel, limit)
+        }
     }
 }
 
@@ -2068,21 +2103,6 @@ public func LZ4_favorDecompressionSpeed(s: LZ4_streamHC_t, favor: Int32): Unit {
 /*-************************************
 *  Streaming (lz4hc.c L1675-1813)
 **************************************/
-/* lz4hcCompressGenericDictCtx(L1490-1514):dictCtx!=None 时三路分派。
-   position = prefixLen + (dictLimit - lowLimit) —— 上游以指针差 + dictLimit
-   差,仓颉双段引用对模型下等价(虚拟索引空间累计:prefix 段
-   [dictLimit, dictLimit + prefixLen),dict 段 [lowLimit, dictLimit) →
-   total = prefixLen + dictLimit - lowLimit)。
-   1) position >= 64 KB → dictCtx = None,走 noDictCtx 直通
-      (上游 L1503-1505:大字典已具备独立压缩能力,不再借用 dictCtx 的表)
-   2) position == 0 && srcSize > 4 KB && isStateCompatible
-      → **整态拷贝**:hashTable/chainTable 数组深拷贝(C LZ4_memcpy) +
-      标量复制 + 缓冲引用对浅拷贝(C memcpy 全结构体浅别名 dictCtx 是
-      const 不可写,这里改用 dictCtx 自身缓冲的浅拷贝)
-      + setExternalDict(src) + compressionLevel = cLevel → noDictCtx
-      (上游 L1507-1510:一字节都不漏的整态接管,后续不再用 dictCtx)
-   3) 否则 → genericInternal(usingDictCtxHc) 咨询路径
-   返回 (result, srcSizeOut)。 */
 /* LZ4HC_setExternalDictPtr(L1709-1727 同型指针入参):dictCtx 整态拷贝
    路径的 setExternalDict(L1508)。此刻 s.prefixBuf 已是 dictCtx 的
    prefixBuf(整态拷贝交接),而该缓冲正被 lz4hcCompressRun 以 ph 持有 ——
@@ -2262,12 +2282,18 @@ internal func lz4hcContinueGeneric(s: LZ4_streamHC_t,
     }
     /* 溢出检查(L1744-1748,不可达:实际触发需 prefixLen + dictLimit > 2GB,
        仓颉侧 prefixEndIdx 索引已用 Int64 不溢出,但与上游 64 KB loadDictHC
-       闸等价的语义保留以匹配二工具链一致性测试) */
+       闸等价的语义保留以匹配二工具链一致性测试)。上游 L1746-1747 加载的是
+       **当前前缀的尾部**(end - dictSize,驻 prefixBuf),非 srcBuf —— 以
+       lz4hcLoadDictHCAt 在 prefixBuf 内锚定 prefixEndIdx - dictSize 表达。 */
     let prefixLen: Int64 = s.prefixEndIdx - s.prefixStartIdx
     if (UInt64(prefixLen) + UInt64(s.dictLimit) > 0x80000000u64) {
         var dictSize: Int64 = prefixLen
         if (dictSize > 65536) { dictSize = 65536 }
-        LZ4_loadDictHC(s, srcBuf, Int32(dictSize))                        /* L1747 调用语义保留 */
+        match (s.prefixBuf) {
+            case Some(pb) =>
+                lz4hcLoadDictHCAt(s, pb, s.prefixEndIdx - dictSize, Int32(dictSize))
+            case None => ()
+        }
     }
     /* src==end 判定(L1751-1752):同缓冲且 srcIdx == prefixEndIdx → 直连
        (src 异缓冲 → setExternalDict) */
@@ -2293,7 +2319,7 @@ internal func lz4hcContinueGeneric(s: LZ4_streamHC_t,
                     if (newDictEnd > dictEndIdx) { newDictEnd = dictEndIdx }
                     s.lowLimit = s.lowLimit + UInt32((newDictEnd - dictStartIdx) & 0xFFFFFFFFi64)
                     s.dictStartIdx = newDictEnd
-                    if (Int64(s.dictLimit - s.lowLimit) < Int64(LZ4HC_HASHTABLESIZE)) {
+                    if (Int64(s.dictLimit - s.lowLimit) < LZ4HC_HASHSIZE) {  /* L1763: <4 → 丢弃 */
                         s.lowLimit = s.dictLimit
                         s.dictStartIdx = s.prefixStartIdx
                     }
@@ -2305,10 +2331,10 @@ internal func lz4hcContinueGeneric(s: LZ4_streamHC_t,
 }
 
 /* LZ4_loadDictHC(L1675-1701):>64KB 截尾(以 dictStartIdx 偏移表达,
-   **不拷贝**);cLevel 保存 → initStreamHC 全量 → setCompressionLevel 复原 →
-   initInternal(dictionary, 0) → prefixEndIdx=dictSize → mid 策略 →
-   LZ4MID_fillHTable else dictSize ≥ 4 → Insert(end-3);返回 dictSize(截尾
-   后);defensive dictSize<0 → 0。 */
+    **不拷贝**);cLevel 保存 → initStreamHC 全量 → setCompressionLevel 复原 →
+    initInternal(dictionary, 0) → prefixEndIdx=dictSize → mid 策略 →
+    LZ4MID_fillHTable else dictSize ≥ 4 → Insert(end-3);返回 dictSize(截尾
+    后);defensive dictSize<0 → 0。 */
 public func LZ4_loadDictHC(state: LZ4_streamHC_t, dictionary: Array<UInt8>,
         dictSize: Int32): Int32 {
     if (dictSize < 0) { return 0 }                                         /* L1681 defensive */
@@ -2318,6 +2344,17 @@ public func LZ4_loadDictHC(state: LZ4_streamHC_t, dictionary: Array<UInt8>,
         dictIdx = Int64(ds - 65536)
         ds = 65536
     }
+    lz4hcLoadDictHCAt(state, dictionary, dictIdx, ds)
+    return ds                                                             /* L1700 */
+}
+
+/* lz4hcLoadDictHCAt:loadDictHC 主体(dictionary 内锚定 dictIdx,长度 ds,
+    调用方保证 0 ≤ dictIdx、dictIdx + ds ≤ dictionary.size)。公共 API 以
+    dictIdx=0(或 >64KB 截尾偏移)调用;lz4hcContinueGeneric 的溢出分支以
+    prefixBuf 尾部锚定调用(上游 L1746-1747 传入 (end - dictSize) 指针,
+    即本 helper 的 dictIdx = prefixEndIdx - dictSize 语义)。 */
+internal func lz4hcLoadDictHCAt(state: LZ4_streamHC_t, dictionary: Array<UInt8>,
+        dictIdx: Int64, ds: Int32): Unit {
     let cLevel: Int32 = state.compressionLevel                            /* L1688-1692 */
     LZ4_initStreamHC(state)
     LZ4_setCompressionLevel(state, cLevel)
@@ -2329,13 +2366,12 @@ public func LZ4_loadDictHC(state: LZ4_streamHC_t, dictionary: Array<UInt8>,
         if (cp.strat == LZ4HC_STRAT_MID) {
             LZ4MID_fillHTable(state, h.pointer + dictIdx, Int64(ds))       /* L1696 */
         } else {
-            if (ds >= Int32(LZ4HC_HASHTABLESIZE)) {
-                LZ4HC_insert(state, h.pointer + dictIdx, Int64(ds) - 3)    /* L1698 */
+            if (ds >= Int32(LZ4HC_HASHSIZE)) {                             /* L1698: ≥4 → Insert */
+                LZ4HC_insert(state, h.pointer + dictIdx, Int64(ds) - 3)
             }
         }
         releaseArrayRawData<UInt8>(h)
     }
-    return ds                                                             /* L1700 */
 }
 
 /* LZ4_attach_HC_dictionary(L1703-1705):dictCtx = Some(dctx 内部状态);

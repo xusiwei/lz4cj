@@ -39,7 +39,13 @@ static unsigned char* mkbuf(size_t n, double mp, unsigned seed) {
 int main(void) {
     const int bound = LZ4_compressBound(16384);
     /* 1) continue with insufficient dstCapacity -> 0 + dirty; recovery via
-       resetStreamHC_fast (dirty -> full re-init) == fresh stream output */
+        resetStreamHC_fast (dirty -> full re-init) == fresh stream output.
+        T5 fix-round repair: the tight call gets its OWN output buffer (100
+        bytes) — writing it into o0 clobbered c0's stream and made the probe
+        fail its own decode check and exit(1) before cases 2-4 could print
+        (the earlier xxh0 pins derived from that corrupted o0). Decode checks
+        cover only the healthy outputs and are report-only: no exit before
+        all four cases print. */
     {
         LZ4_streamHC_t* ctx = LZ4_createStreamHC();
         unsigned char* b0 = mkbuf(16384, 0.5, 901);
@@ -47,9 +53,10 @@ int main(void) {
         unsigned char* o0 = (unsigned char*)malloc(bound);
         unsigned char* o1 = (unsigned char*)malloc(bound);
         unsigned char* o2 = (unsigned char*)malloc(bound);
+        unsigned char* oT = (unsigned char*)malloc(100);
         LZ4_resetStreamHC(ctx, 9);
         int c0 = LZ4_compress_HC_continue(ctx, (const char*)b0, (char*)o0, 16384, bound);
-        int cT = LZ4_compress_HC_continue(ctx, (const char*)b1, (char*)o0, 16384, 100);
+        int cT = LZ4_compress_HC_continue(ctx, (const char*)b1, (char*)oT, 16384, 100);
         int dirty = ctx->internal_donotuse.dirty;
         LZ4_resetStreamHC_fast(ctx, 9);
         int cR = LZ4_compress_HC_continue(ctx, (const char*)b1, (char*)o1, 16384, bound);
@@ -63,19 +70,18 @@ int main(void) {
         /* also dump raw compressed bytes for cross-port validation */
         FILE* fp = fopen("/tmp/c_block0.lz4", "wb");
         if (fp) { fwrite(o0, 1, (size_t)c0, fp); fclose(fp); }
-        /* verify decode roundtrip matches b0 */
+        /* decode roundtrip on the healthy outputs only (o0 holds c0's
+           intact stream; o1 the recovery stream); report-only */
         unsigned char* dec = (unsigned char*)malloc(16384);
+        int dOk = 0;
         int dr = LZ4_decompress_safe((const char*)o0, (char*)dec, c0, 16384);
-        if (dr != 16384 || memcmp(dec, b0, 16384) != 0) {
-            fprintf(stderr, "hc-tight: decode mismatch dr=%d\n", dr);
-            exit(1);
+        if (dr == 16384 && memcmp(dec, b0, 16384) == 0) {
+            int dr1 = LZ4_decompress_safe((const char*)o1, (char*)dec, cR, 16384);
+            dOk = (dr1 == 16384) && (memcmp(dec, b1, 16384) == 0);
         }
-        fprintf(stderr, "hc-tight: decode ok, b0[0..32]=%s\n",
-            b0[0] >= 32 && b0[0] < 127 ? "printable" : "nonprint");
-        for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", b0[i]);
-        fprintf(stderr, "\n");
+        fprintf(stderr, "hc-tight: decode-ok=%d dr=%d\n", dOk, dr);
         LZ4_freeStreamHC(ctx); LZ4_freeStreamHC(fr);
-        free(b0); free(b1); free(o0); free(o1); free(o2);
+        free(b0); free(b1); free(o0); free(o1); free(o2); free(oT); free(dec);
     }
     /* 2) setCompressionLevel block switch lv=9 -> 2 mid-stream: the mid
        block continues the hash-chain stream state (contiguous block, no

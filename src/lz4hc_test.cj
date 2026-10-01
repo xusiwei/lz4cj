@@ -1521,6 +1521,91 @@ func lz4hcSaveDictGoldenTest(): Unit {
         + "rolling decode == src")
 }
 
+// lz4hcSaveDictClampTest: LZ4_saveDictHC return-value clamps and the
+// nextToUpdate floor lift (upstream L1791-1813: >64KB→64KB, <4→0,
+// >prefixLen→prefixLen; dictLimit=lowLimit=endIndex-dictSize, nextToUpdate
+// lifted to dictLimit only when below — brief Step 2 unit tests, T5 fix
+// round). Anchor arithmetic: loadDictHC anchors dictLimit at 64KB and ends
+// with nextToUpdate near the dict tail (hash-chain Insert(end-3) →
+// 65536+ds-3; mid fillHTable → 65536+ds-8) — so a bare loadDict prefix
+// never lifts on save. The lift fires when nextToUpdate lags the prefix
+// end: a mid stream after a separate-buffer block keeps it at the
+// setExternalDict floor dictLimit while the prefix grows (probed against
+// upstream 0774d055).
+@Test
+func lz4hcSaveDictClampTest(): Unit {
+    let safe = Array<UInt8>(70000, {_ => 0u8})
+    // fresh stream: prefixLen == 0 → any dictSize clamps to 0
+    let fs = LZ4_createStreamHC()
+    LZ4_resetStreamHC(fs, 9)
+    @Assert(LZ4_saveDictHC(fs, safe, 100) == 0)
+    // dictSize 0 / -1 → 0 (<4 clamp)
+    let st0 = LZ4_createStreamHC()
+    LZ4_resetStreamHC(st0, 9)
+    let dict0 = Array<UInt8>(8192, {_ => 0u8})
+    RDG_genBuffer(dict0, 8192, 0.50, 0.0, 907u32)
+    @Assert(LZ4_loadDictHC(st0, dict0, 8192) == 8192)
+    @Assert(LZ4_saveDictHC(st0, safe, 0) == 0)
+    let stn = LZ4_createStreamHC()
+    LZ4_resetStreamHC(stn, 9)
+    @Assert(LZ4_loadDictHC(stn, dict0, 8192) == 8192)
+    @Assert(LZ4_saveDictHC(stn, safe, -1) == 0)
+    // dictSize > prefixLen → prefixLen (8192-byte prefix)
+    let stp = LZ4_createStreamHC()
+    LZ4_resetStreamHC(stp, 9)
+    @Assert(LZ4_loadDictHC(stp, dict0, 8192) == 8192)
+    @Assert(LZ4_saveDictHC(stp, safe, 20000) == 8192)
+    // dictSize > 64KB → 65536: stream two contiguous 48KB blocks (prefixLen
+    // 96000 > 64KB), then save 100000
+    let big = Array<UInt8>(96000, {_ => 0u8})
+    RDG_genBuffer(big, 96000, 0.50, 0.0, 908u32)
+    let stb = LZ4_createStreamHC()
+    LZ4_resetStreamHC(stb, 9)
+    let boundB = Int64(LZ4_compressBound(48000))
+    let outB = Array<UInt8>(boundB, {_ => 0u8})
+    @Assert(LZ4_compress_HC_continue(stb, big, 0, 48000, outB, Int32(boundB)) > 0)
+    @Assert(LZ4_compress_HC_continue(stb, big, 48000, 48000, outB, Int32(boundB)) > 0)
+    @Assert(LZ4_saveDictHC(stb, safe, 100000) == 65536)
+    // post-save state: safeBuffer adopted as prefix of length 65536,
+    // dictStartIdx 0, nextToUpdate floor holds (post-compression
+    // nextToUpdate >= dictLimit)
+    @Assert(stb.prefixBuf.isSome() && lz4SameBuffer(stb.prefixBuf.getOrThrow(), safe))
+    @Assert(stb.prefixEndIdx == 65536)
+    @Assert(stb.dictStartIdx == 0)
+    @Assert(stb.dictLimit == 96000u32)   // endIndex 161536 - 65536
+    @Assert(stb.lowLimit == 96000u32)
+    @Assert(stb.nextToUpdate >= stb.dictLimit)
+    // nextToUpdate lift (verified against an upstream 0774d055 probe: a mid
+    // stream after loadDict(8192) + one separate-buffer block keeps
+    // nextToUpdate at the setExternalDict floor 73728, below the post-save
+    // dictLimit 81920 → lifted)
+    let stm = LZ4_createStreamHC()
+    LZ4_resetStreamHC(stm, 2)
+    let dictM = Array<UInt8>(8192, {_ => 0u8})
+    RDG_genBuffer(dictM, 8192, 0.50, 0.0, 909u32)
+    @Assert(LZ4_loadDictHC(stm, dictM, 8192) == 8192)
+    @Assert(stm.nextToUpdate == 73720u32)   // mid fillHTable target 65536+8192-8
+    let boundM = Int64(LZ4_compressBound(16384))
+    let outM = Array<UInt8>(boundM, {_ => 0u8})
+    let blkM = Array<UInt8>(16384, {_ => 0u8})
+    RDG_genBuffer(blkM, 16384, 0.50, 0.0, 910u32)
+    @Assert(LZ4_compress_HC_continue(stm, blkM, 0, 16384, outM, Int32(boundM)) > 0)
+    @Assert(stm.nextToUpdate == 73728u32)   // setExternalDict floor; mid does not advance it
+    @Assert(LZ4_saveDictHC(stm, safe, 8192) == 8192)
+    @Assert(stm.dictLimit == 81920u32)   // endIndex 90112 - 8192
+    @Assert(stm.nextToUpdate == 81920u32)   // lifted 73728 → new dictLimit
+    // non-lift contrast (hash-chain stream: Insert(end-3) already advanced
+    // nextToUpdate to 73725 >= post-save dictLimit 69632 → unchanged)
+    let sth = LZ4_createStreamHC()
+    LZ4_resetStreamHC(sth, 9)
+    @Assert(LZ4_loadDictHC(sth, dict0, 8192) == 8192)
+    @Assert(sth.nextToUpdate == 73725u32)
+    @Assert(LZ4_saveDictHC(sth, safe, 4096) == 4096)
+    @Assert(sth.dictLimit == 69632u32)
+    @Assert(sth.nextToUpdate == 73725u32)
+    println("hcsavedict clamps: 0/0/-1/prefixLen/65536 returns + nextToUpdate lift pins verified")
+}
+
 // hcdict rows 417..420: per row a fresh stream LZ4_resetStreamHC(lv) +
 // LZ4_loadDictHC(dict, 65536) + LZ4_compress_HC_continue on a first 16384-byte
 // block in a separate buffer. dict = RDG(65536, mp=0.50, seed=99); block =
@@ -1601,8 +1686,9 @@ func lz4hcLoadDictGoldenTest(): Unit {
 //   8192 lv9-dict vs lv2-work: incompatible (mid vs hash-chain) → consult
 //     (LZ4MID_searchHCDict against hash-chain dict stream)
 // usingDict closure roundtrip and state pins (copy path: working hashTable
-// contents equal dict's, dictCtx=None; consult path: working tables still
-// empty + dictCtx=Some).
+// contents equal dict's, dictCtx=None; consult path: dictCtx=Some and the
+// dictCtx stream's tables unchanged — see the in-body substitution note for
+// why "working tables still empty" is asserted pre- not post-compression).
 // (n, mp, seed, lv, dlv, wantSize, xxh32, xxh64, fileRowIdx)
 let HCATTACH_GOLD_REF: Array<(Int64, Float64, UInt32, Int32, Int32, Int32, UInt32, UInt64, Int64)> = [
     (8192, 0.50, 99u32, 9, 9, 1407, 0xf3c6df47u32, 0x75dca7e6274f1c6cu64, 421),
@@ -1634,6 +1720,25 @@ func lz4hcAttachGoldenTest(): Unit {
             case Some(_) => true
             case None => false
         })
+        // consult-path pre-compression snapshot (T5 fix round). The brief's
+        // literal "工作流表仍空" post-compression pin is impossible: the
+        // block's positions are inserted into the working tables during the
+        // search. Documented substitution: (i) the working tables are empty
+        // PRE-compression (asserted on the snapshot below), (ii) the dictCtx
+        // stream is READ-ONLY in the consult path — its hash/chain tables
+        // must be byte-identical before vs after the compression (sampled
+        // slots 0..3 and 100).
+        let isCopyPath = (lv == dlv && n == 8192)
+        let dH0 = dstream.hashTable[0]; let dH1 = dstream.hashTable[1]
+        let dH2 = dstream.hashTable[2]; let dH3 = dstream.hashTable[3]
+        let dC0 = dstream.chainTable[0]; let dC1 = dstream.chainTable[1]
+        let dC2 = dstream.chainTable[2]; let dC3 = dstream.chainTable[3]
+        if (!isCopyPath) {
+            @Assert(wstream.hashTable[0] == 0u32 && wstream.hashTable[1] == 0u32)
+            @Assert(wstream.hashTable[2] == 0u32 && wstream.hashTable[3] == 0u32)
+            @Assert(wstream.chainTable[0] == 0u16 && wstream.chainTable[1] == 0u16)
+            @Assert(wstream.chainTable[2] == 0u16 && wstream.chainTable[3] == 0u16)
+        }
         // build the block
         let block = Array<UInt8>(n, {_ => 0u8})
         RDG_genBuffer(block, n, 0.50, 0.0, 99u32)
@@ -1650,7 +1755,8 @@ func lz4hcAttachGoldenTest(): Unit {
         }
         // post-state pin: copy path (lv=dlv=9, n=8192) detaches dictCtx
         // and works the deep-copied tables; consult path leaves dictCtx=Some
-        if (lv == dlv && n == 8192) {
+        // and the dictCtx stream's tables untouched
+        if (isCopyPath) {
             // copy path: dictCtx detached; deep-copied tables then evolved by
             // the block compression itself. Post-state pinned to upstream
             // 0774d055 (C probe on this exact geometry): slot 0 rewritten by
@@ -1663,11 +1769,18 @@ func lz4hcAttachGoldenTest(): Unit {
             @Assert(wstream.hashTable[100] == dHash1)
             @Assert(wstream.chainTable[100] == 6524u16)
         } else {
-            // consult path: dictCtx stays attached, working tables stay empty
+            // consult path: dictCtx stays attached; the dictCtx stream was
+            // read-only (sampled table slots unchanged pre vs post — the
+            // substitution pin documented above)
             @Assert(match (wstream.dictCtx) {
                 case Some(_) => true
                 case None => false
             })
+            @Assert(dstream.hashTable[0] == dH0 && dstream.hashTable[1] == dH1)
+            @Assert(dstream.hashTable[2] == dH2 && dstream.hashTable[3] == dH3)
+            @Assert(dstream.chainTable[0] == dC0 && dstream.chainTable[1] == dC1)
+            @Assert(dstream.chainTable[2] == dC2 && dstream.chainTable[3] == dC3)
+            @Assert(dstream.hashTable[100] == dHash1)
         }
         // closure roundtrip via usingDict (forceExtDict path)
         let dec = Array<UInt8>(n, {_ => 0u8})
@@ -1744,16 +1857,24 @@ func lz4hcDestContGoldenTest(): Unit {
     println("hcdestcont golden: ${checked}/2 rows, ${fileCompared} byte-exact artifacts")
 }
 
-// lz4hcStreamEdgeTest: pins against upstream 0774d055 per scripts/hc_probe.c.
+// lz4hcStreamEdgeTest: pins against upstream 0774d055 per scripts/hc_probe.c
+// (recompiled with the build command in the probe header; T5 fix-round
+// repair: the tight call has its own output buffer, decode checks are
+// healthy-outputs-only and report-only, no exit before all cases print).
+// Re-probed stdout (upstream 0774d055):
+//   hc-tight: c0=8098 xxh0=d1f5e875 cTight=0 dirty=1 cRecover=8568 xxhR=64e9c7ea cFresh=8568 eq=1
+//   hc-lvswitch: c9=8441 xxh9=d4ed1a8b c2=10922 xxh2=05b137ed dl=65536 decode-ok=1
+//   hc-resetfast: dlPre=65536 dlPost=98304 c2=11504 xxh2=1834a6a5 fresh=11504 eq=1 dlFinal=163840 llFinal=163840
+//   hc-overlap: ld=65536 c=6772 xxh32=818cfefc xxh64=40d5ea4ea6bb7005 lowLimit=114688 dictLimit=131072 dictStartOff=49152 decode-ok=1
 // (1) tight-continue: insufficient dstCapacity → 0 + dirty; resetStreamHC_fast
 // recovery output == fresh stream output. (2) setCompressionLevel block
-// switch lv=9 → 2 mid-stream: hash-chain flow continued on the inherited
-// hash-chain state (no re-anchor). (3) resetStreamHC_fast mid-stream:
-// dictLimit += prefixLen, tables kept; the next continue's output equals a
-// fresh stream on the same block. (4) overlap-shrink: loadDictHC + continue
-// with block INSIDE the dict buffer — setExternalDict then the overlap
-// check brings the prefix into [49152, 65536). Decode closure via
-// LZ4_decompress_safe_usingDict against the dict.
+// switch lv=9 → 2 mid-stream: mid strategy runs on the inherited hash-chain
+// state (no re-anchor), block-2 bytes pinned. (3) resetStreamHC_fast
+// mid-stream: dictLimit += prefixLen, tables kept; the next continue's
+// output equals a fresh stream on the same block. (4) overlap-shrink:
+// loadDictHC + continue with block INSIDE the dict buffer — setExternalDict
+// then the overlap check keeps the dict as [49152, 65536) (LZ4HC_HASHSIZE=4
+// invalidation guard). Decode closure via LZ4_decompress_safe_usingDict.
 @Test
 func lz4hcStreamEdgeTest(): Unit {
     let bound = Int64(LZ4_compressBound(16384))
@@ -1767,17 +1888,15 @@ func lz4hcStreamEdgeTest(): Unit {
     let o0 = Array<UInt8>(bound, {_ => 0u8})
     let c0 = LZ4_compress_HC_continue(ctx, b0, 0, 16384, o0, Int32(bound))
     @Assert(c0 == 8098)
-    // Note on the upstream xxh0=64ba1c31 pin: for the FIRST call of
-    // LZ4_compress_HC_continue on a freshly-reset state (no prior
-    // LZ4_loadDictHC and no prior LZ4_compress_HC chain), upstream
-    // produces an "init block" whose references exceed op=CURRENT, and the
-    // bytes depend on a chain-related tie-breaking in the hash table
-    // lookup. The encoder produces 8098 bytes for both our port and
-    // upstream (c0 size is the meaningful pin); byte-exact identity
-    // requires the post-loadDict / chain-call setup used in tests (3) and
-    // (4) below, where the encoder state has prior prefix data.
-    // tight dstCapacity=100 → 0 + dirty
-    let cT = LZ4_compress_HC_continue(ctx, b1, 0, 16384, o0, 100)
+    @Assert(XXH32(o0, Int64(c0), 0u32) == 0xd1f5e875u32)
+    // healthy-output decode closure for o0 BEFORE any reuse of the buffer
+    let dec0 = Array<UInt8>(16384, {_ => 0u8})
+    @Assert(LZ4_decompress_safe(o0, c0, dec0, 16384) == 16384)
+    @Assert(hcBytesEqual(dec0, b0, 16384))
+    // tight dstCapacity=100 into its OWN buffer (mirrors the repaired
+    // probe: the failed partial write must not clobber prior outputs)
+    let oT = Array<UInt8>(100, {_ => 0u8})
+    let cT = LZ4_compress_HC_continue(ctx, b1, 0, 16384, oT, 100)
     @Assert(cT == 0)
     @Assert(ctx.dirty == true)
     // resetStreamHC_fast: dirty → full re-init, output equals fresh stream
@@ -1794,7 +1913,7 @@ func lz4hcStreamEdgeTest(): Unit {
     @Assert(cF == cR)
     @Assert(hcBytesEqual(o0, oF, Int64(cR)))
     // (2) setCompressionLevel lv=9 → lv=2 block-level crossing (no re-anchor,
-    // hash-chain flow continued on the inherited hash-chain state)
+    // mid strategy continues on the inherited hash-chain state)
     let buf = Array<UInt8>(32768, {_ => 0u8})
     RDG_genBuffer(buf, 32768, 0.50, 0.0, 903u32)
     let ctx2 = LZ4_createStreamHC()
@@ -1802,39 +1921,22 @@ func lz4hcStreamEdgeTest(): Unit {
     let o1 = Array<UInt8>(bound, {_ => 0u8})
     let c1 = LZ4_compress_HC_continue(ctx2, buf, 0, 16384, o1, Int32(bound))
     @Assert(c1 == 8441)
-    // xxh1 = 0xd4ed1a8b pin depends on first-call chain semantics; our
-    // port emits byte-different but size-equivalent output for these
-    // particular inputs (the encoder tie-breaking at hash-table update
-    // edge cases differs from upstream on small inputs). The brief allows
-    // "golden or 探针钉字节" — we keep the structural size pin and the
-    // rolling-decode closure below as the byte-level check.
-    try {
-        let o1c = Array<UInt8>(Int64(c1), {i => o1[i]})
-        let _ = File.writeTo("/tmp/cj_lvswitch_c1.bin", o1c)
-    } catch (_: Exception) { () }
+    @Assert(XXH32(o1, Int64(c1), 0u32) == 0xd4ed1a8bu32)
     LZ4_setCompressionLevel(ctx2, 2)
     @Assert(ctx2.compressionLevel == 2)
     let o2 = Array<UInt8>(bound, {_ => 0u8})
     let c2 = LZ4_compress_HC_continue(ctx2, buf, 16384, 16384, o2, Int32(bound))
-    // The C probe pins c2=10922 xxh2=05b137ed; we keep the size check
-    // (c2 > 0, c2 <= bound) — the mid strategy runs on inherited
-    // hash-chain tables (a level-switch edge case) and our port's exact
-    // byte path differs from upstream on these small-block inputs; the
-    // structural size pin and block 1 standalone decode closure validate
-    // end-to-end correctness. Case (3) and (4) below pin against the
-    // fresh-state hash-chain pipeline where the encoder behavior matches.
-    @Assert(c2 > 0)
-    @Assert(c2 <= Int32(bound))
+    @Assert(c2 == 10922)
+    @Assert(XXH32(o2, Int64(c2), 0u32) == 0x05b137edu32)
     // dictLimit not advanced (contiguous blocks: src==end, no
     // setExternalDict, prefix segment just grows)
     @Assert(ctx2.dictLimit == 65536u32)
-    // block 1 standalone decode closure (no prefix required): c1 is
-    // valid LZ4 and decodes back to buf[0..16384) — byte-level pin.
+    // rolling decode closure across the level switch (probe decode-ok=1)
+    let dst2 = Array<UInt8>(32768, {_ => 0u8})
     let sd = LZ4_createStreamDecode()
-    let dec1Stand = Array<UInt8>(16384, {_ => 0u8})
-    let dec1r = LZ4_decompress_safe_continue(sd, o1, c1, dec1Stand, 0, 16384)
-    @Assert(dec1r == 16384)
-    @Assert(hcBytesEqual(dec1Stand, Array<UInt8>(16384, {i => buf[i]}), 16384))
+    @Assert(LZ4_decompress_safe_continue(sd, o1, c1, dst2, 0, 16384) == 16384)
+    @Assert(LZ4_decompress_safe_continue(sd, o2, c2, dst2, 16384, 16384) == 16384)
+    @Assert(hcBytesEqual(dst2, buf, 32768))
     LZ4_freeStreamDecode(sd)
     // (3) resetStreamHC_fast mid-stream: dictLimit += prefixLen, tables kept;
     // next continue's output equals a fresh stream on the same block
@@ -1870,7 +1972,8 @@ func lz4hcStreamEdgeTest(): Unit {
     @Assert(hcBytesEqual(o3c, o4, Int64(c3)))
     // (4) overlap-shrink: loadDictHC then continue with block INSIDE the dict
     // buffer at offset 32768 — setExternalDict makes the dict the extDict,
-    // then the overlap check shrinks it to [49152, 65536)
+    // then the overlap check keeps it as [49152, 65536): the surviving
+    // 16384 bytes pass the LZ4HC_HASHSIZE (=4) invalidation guard
     let D = Array<UInt8>(65536, {_ => 0u8})
     RDG_genBuffer(D, 65536, 0.50, 0.0, 905u32)
     let ctx4 = LZ4_createStreamHC()
@@ -1878,26 +1981,22 @@ func lz4hcStreamEdgeTest(): Unit {
     let ld = LZ4_loadDictHC(ctx4, D, 65536)
     @Assert(ld == 65536)
     let out = Array<UInt8>(bound, {_ => 0u8})
-    // block starts INSIDE the dictionary buffer at offset 32768
+    // block starts INSIDE the dictionary buffer at offset 32768 (also the
+    // dictBuf === srcBuf aliasing geometry for the no-double-acquire rule)
     let c4 = LZ4_compress_HC_continue(ctx4, D, 32768, 16384, out, Int32(bound))
-    // C probe pins c=6772 xxh32=818cfefc xxh64=40d5ea4ea6bb7005; accept size
-    // range and verify with usingDict decode closure (since post-overlap
-    // state affects the bytes our port produces vs upstream's).
-    @Assert(c4 > 0)
-    @Assert(c4 <= Int32(bound))
-    // post-overlap-shrink state pins: lowLimit advanced past the source
-    // range. Our port's exact values may differ slightly from upstream
-    // on the overlap-shrink edge case (the bytes produced differ), so
-    // we only verify the high-level invariant that the state advanced
-    // beyond the initial loadDictHC anchor of 65536.
-    @Assert(ctx4.lowLimit > 65536u32)
-    // dictStart moved forward (virtual: dictStart - D == 49152) — accept
-    // range since the bytes emitted by our port diverge from upstream.
-    @Assert(ctx4.dictStartIdx >= 0)
+    @Assert(c4 == 6772)
+    @Assert(XXH32(out, Int64(c4), 0u32) == 0x818cfefcu32)
+    @Assert(XXH64(out, Int64(c4), 0u64) == 0x40d5ea4ea6bb7005u64)
+    // post-overlap-shrink state == upstream probe: dictStartOff 49152,
+    // lowLimit 114688, dictLimit 131072 — the surviving dict [49152, 65536)
+    // is KEPT (dictLimit - lowLimit == 16384 >= LZ4HC_HASHSIZE)
+    @Assert(ctx4.dictStartIdx == 49152)
+    @Assert(ctx4.lowLimit == 114688u32)
+    @Assert(ctx4.dictLimit == 131072u32)
     // closure roundtrip via usingDict over the full 64KB dict (the
-    // effective extDict is the shrunk slice [49152, 65536) which
-    // overlaps with the source block; usingDict with the full dict still
-    // produces the right output)
+    // effective extDict is the shrunk slice [49152, 65536) which overlaps
+    // with the source block; usingDict with the full dict still produces
+    // the right output)
     let dec4 = Array<UInt8>(16384, {_ => 0u8})
     @Assert(LZ4_decompress_safe_usingDict(out, Int32(c4), dec4, 16384, D, 65536) == 16384)
     @Assert(hcBytesEqual(dec4, Array<UInt8>(16384, {i => D[i + 32768]}), 16384))
