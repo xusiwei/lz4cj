@@ -40,6 +40,7 @@
 - [x] ~~design.md §4.3 "默认 0" 措辞精确化:`offset!` 实为必传具名参数,无默认值~~(M3b-T1 文档批次;注:台账原记"规则 2",实际位于 §4.3 规则 3)
 - [ ] `compress_fast_continue` 输入/字典重叠收缩分支体(lz4.cj L1147-1154,上游 L1744-1752)套件未覆盖:C 差分已验(scripts/probe_overlap.c:pass2 c=20106 xxh=55883273 + 解码闭合)但未入测试/golden → **M7 收尾测试**(golden 加一行或直接断言)
 - [ ] lz4hc.cj 34 个可达未覆盖行(M4 收尾 cjcov 复核,库覆盖 96.60% 之下仅存的可达缺口):opt 解析器 _Search3 区域 22 行(三序列合并挤压校正 L807/L873-874/L906-915 + 四处 encodeSequence 缓冲不足出口 L834-839/L854-855/L881-886/L925-930,需 lv10-12 紧容量/fillOutput 中途溢出或特定重复几何)、InsertAndGetWiderMatch 的 dictCtx countBack 回扩 L1046、fillOutput 深度钳制 2 行(MID L1358 / hashChain L1739)、optimal_t 字面量改价 L1629、overlap-shrink 后 dict<4 丢弃 L2360-2361 → **M7 收尾测试**(fuzz 加压或定向用例;其余 17 个未覆盖行为防御/不可达类,已在 CHANGELOG 0.5.0 归类)
+- [ ] virgin-attach(dictCtx 前缀为空)→ noDictCtx 回退(lz4hc.cj L1988-1992):上游该路径 NULL 解引用为 UB/崩溃,仓颉防御性回退不复刻,输出无对照基准 —— 裁定登记(CHANGELOG 0.5.0 已归类)
 - [ ] RDG_genBuffer 等测试支撑代码位于 src/ 导致 lib 构建 unused 警告(结构性)→ **M8 发布前评估**(移 *_test.cj 约定或保持)
 - [ ] fast 解压路径字面密集输入 ~0.85x(指针循环 wildCopy 未继承 C SIMD 优势)→ **M7 bench 复评**,劣化再优化
 - [x] ~~CHANGELOG M3a 计时笔误~~(0.3.1 条目修正)

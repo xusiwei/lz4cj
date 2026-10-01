@@ -2223,6 +2223,7 @@ internal func lz4hcCompressGenericDictCtx(s: LZ4_streamHC_t,
                 s.lowLimit = dctx.lowLimit
                 s.nextToUpdate = dctx.nextToUpdate
                 s.favorDecSpeed = dctx.favorDecSpeed
+                s.dirty = dctx.dirty  /* 上游 L1507 memcpy 整结构含 dirty */
                 /* Insert(end-3) 与 level 切换:setExternalDict 内置 strategy
                     guard(strat != lz4mid + prefixLen≥4);继续 noDictCtx。
                     setExternalDictPtr 以 dictCtxQ 为旧前缀基址(already-
