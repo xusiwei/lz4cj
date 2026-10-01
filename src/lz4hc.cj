@@ -3,9 +3,12 @@
 // Port: Copyright (c) 2026, lz4cj contributors, BSD-2-Clause.
 // See LICENSE for full text.
 // Corresponds to upstream lib/lz4hc.c (HC high-compression mode).
-// M4 Tasks 1-4: state family + level table + hash/count/pattern primitives +
+// M4 Tasks 1-5: state family + level table + hash/count/pattern primitives +
 // encodeSequence, hash-chain core (levels 3-9), lz4mid core (levels 1-2),
-// optimal parser (levels 10-12) + favorDecompressionSpeed, generic dispatch.
+// optimal parser (levels 10-12) + favorDecompressionSpeed, generic dispatch,
+// streaming family with loadDictHC, attach_HC_dictionary, continue +
+// continue_destSize, saveDictHC + 3-way dictCtx dispatch (lz4hcCompressRun
+// restructured for dictCtxBase independence).
 
 package lz4
 
@@ -702,18 +705,19 @@ internal func LZ4HC_insertAndFindBestMatch(s: LZ4_streamHC_t,
    保持。encodeSequence 的 buffer-issue 契约:issue 时 ip/anchor 保持入参
    值、op 取返回值;fillOutput 经 _dest_overflow 以 optr 恢复后自适配。 */
 internal func LZ4HC_compress_hashChain(s: LZ4_streamHC_t,
-        src: CPointer<UInt8>, dictQ: CPointer<UInt8>, dictCtxQ: CPointer<UInt8>,
+        src: CPointer<UInt8>, ipStart: Int64,
+        dictQ: CPointer<UInt8>, dictCtxQ: CPointer<UInt8>,
         dst: CPointer<UInt8>, srcSize: Int64, maxOutputSize: Int64,
         maxNbAttempts: Int32, limit: Int32, dict: Int32): (Int64, Int64) {
     let inputSize: Int64 = srcSize
     let patternAnalysis: Bool = maxNbAttempts > 128                 /* L1171: levels 9+ */
 
-    let iend: Int64 = inputSize
+    let iend: Int64 = ipStart + inputSize
     let mflimit: Int64 = iend - LZ4_MFLIMIT
     let matchlimit: Int64 = iend - LZ4_LASTLITERALS
 
-    var ip: Int64 = 0
-    var anchor: Int64 = 0
+    var ip: Int64 = ipStart
+    var anchor: Int64 = ipStart
     var op: Int64 = 0
     var optr: Int64 = 0
     var oend: Int64 = maxOutputSize
@@ -1003,7 +1007,7 @@ internal func LZ4HC_compress_hashChain(s: LZ4_streamHC_t,
     LZ4_memcpyPtr(dst, op, src, anchor, lastRunSize)                /* L1377 */
     op += lastRunSize
 
-    return (op, ip)                                                 /* L1382-1383 */
+    return (op, ip - ipStart)                                       /* L1382-1383 */
 }
 
 /*-************************************
@@ -1173,20 +1177,21 @@ internal func lz4midSelectSearchDict(dictCtx: Option<LZ4_streamHC_t>): Int32 {
    generic_internal);返回 (result, srcSizeOut)(srcSizePtr 出值语义,失败
    (0, 0))。单一 unsafe 域内调用,纯指针运算、无分配。 */
 internal func LZ4MID_compress(ctx: LZ4_streamHC_t,
-        src: CPointer<UInt8>, dictQ: CPointer<UInt8>, dictCtxQ: CPointer<UInt8>,
+        src: CPointer<UInt8>, ipStart: Int64,
+        dictQ: CPointer<UInt8>, dictCtxQ: CPointer<UInt8>,
         dst: CPointer<UInt8>, srcSize: Int64, dstCapacity: Int64,
         limit: Int32, dict: Int32): (Int64, Int64) {
     /* hash4Table = ctx.hashTable[0, 16384),hash8Table = [16384, 32768) */
-    var ip: Int64 = 0
-    var anchor: Int64 = 0
-    let iend: Int64 = srcSize
+    var ip: Int64 = ipStart
+    var anchor: Int64 = ipStart
+    let iend: Int64 = ipStart + srcSize
     let mflimit: Int64 = iend - LZ4_MFLIMIT
     let matchlimit: Int64 = iend - LZ4_LASTLITERALS
     let ilimit: Int64 = iend - LZ4MID_HASHSIZE
     var op: Int64 = 0
     var oend: Int64 = dstCapacity
 
-    let prefixPtr: CPointer<UInt8> = src                              /* L563: prefixStart = 块基址 */
+    let prefixPtr: CPointer<UInt8> = src                              /* L572: prefixStart = 状态前缀基(dictLimit 映射) */
     let prefixIdx: UInt32 = ctx.dictLimit                             /* L564 */
     let ilimitIdx: UInt32 = UInt32(ilimit & 0xFFFFFFFFi64) + prefixIdx   /* L565: (U32)(ilimit-prefixPtr)+prefixIdx */
     let dictIdx: UInt32 = ctx.lowLimit                                /* L566: dictStart 虚拟基 */
@@ -1398,7 +1403,7 @@ internal func LZ4MID_compress(ctx: LZ4_streamHC_t,
     LZ4_memcpyPtr(dst, op, prefixPtr, anchor, lastRunSize)            /* L782 */
     op += lastRunSize
 
-    return (op, ip)                                                   /* L786-787: *srcSizePtr = ip-src; return op-dst */
+    return (op, ip - ipStart)                                        /* L786-787: *srcSizePtr = ip-src; return op-dst */
 }
 
 /* isStateCompatible(L1483-1488):两状态同为 mid 或同为非 mid 才兼容
@@ -1485,7 +1490,8 @@ internal func LZ4HC_findLongerMatch(ctx: LZ4_streamHC_t,
    (int)favorDecSpeed ∈ {0,1}。回溯改写 while(true) 的 break 条件
    `next_matchLength > candidate_pos` 逐字(双交换次序保持)。 */
 internal func LZ4HC_compress_optimal(ctx: LZ4_streamHC_t,
-        source: CPointer<UInt8>, dictQ: CPointer<UInt8>, dictCtxQ: CPointer<UInt8>,
+        source: CPointer<UInt8>, ipStart: Int64,
+        dictQ: CPointer<UInt8>, dictCtxQ: CPointer<UInt8>,
         dst: CPointer<UInt8>, srcSize: Int64, dstCapacity: Int64,
         nbSearches: Int32, sufficientLen: Int64,
         limit: Int32, fullUpdate: Bool,
@@ -1495,11 +1501,11 @@ internal func LZ4HC_compress_optimal(ctx: LZ4_streamHC_t,
 
     let favor: Int32 = if (favorDecSpeed) { 1 } else { 0 }       /* (int)favorDecSpeed */
     var sufficientLenLocal: Int64 = sufficientLen
-    let iend: Int64 = srcSize
+    let iend: Int64 = ipStart + srcSize
     let mflimit: Int64 = iend - LZ4_MFLIMIT
     let matchlimit: Int64 = iend - LZ4_LASTLITERALS
-    var ip: Int64 = 0
-    var anchor: Int64 = 0
+    var ip: Int64 = ipStart
+    var anchor: Int64 = ipStart
     var op: Int64 = 0
     var opSaved: Int64 = 0
     var oend: Int64 = dstCapacity
@@ -1782,7 +1788,7 @@ internal func LZ4HC_compress_optimal(ctx: LZ4_streamHC_t,
     LZ4_memcpyPtr(dst, op, source, anchor, lastRunSize)          /* L2129 */
     op += lastRunSize
 
-    return (op, ip)                                              /* L2134-2135: *srcSizePtr = ip; retval = op */
+    return (op, ip - ipStart)                                    /* L2134-2135: *srcSizePtr = ip; retval = op */
 }
 
 /*-************************************
@@ -1807,20 +1813,32 @@ internal func LZ4HC_compress_generic_internal(s: LZ4_streamHC_t,
         return (1, 0)
     }
     s.prefixEndIdx += srcSize                                       /* L1440: ctx->end += *srcSizePtr */
+    /* 连续流位置重定基(上游 ip 为真实指针,ipIndex = (ip - prefixStart) +
+       dictLimit 由状态推导;仓颉核心以基指针 + 相对 ip 表达)。入口不变量:
+       src 恒指向缓冲 prefixEndIdx 处 —— 一次性(initInternal 锚定 srcIdx ==
+       prefixEndIdx)、continue 连续块(sameBuf 要求 srcIdx == prefixEndIdx)
+       与 setExternalDict/整态接管后(prefixStartIdx == prefixEndIdx ==
+       srcIdx)均成立,且 prefixBuf === srcBuf 同一数组(acquire 覆盖)。
+       ipStart = 旧 prefixEndIdx - prefixStartIdx(块起点相对 prefixStart
+       基的偏移);prefixBase = src - ipStart 即虚拟索引 dictLimit 映射的
+       基指针,与上游 hc4->prefixStart 一致 —— 核心内 ipIndex/endMatchIdx
+       等虚拟索引与候选回读据此天然正确,一次性路径 ipStart==0 行为不变。 */
+    let ipStart: Int64 = s.prefixEndIdx - srcSize - s.prefixStartIdx
+    let prefixBase: CPointer<UInt8> = unsafe { src - ipStart }
     let cParam = lz4hcGetCLevelParams(cLevel)                       /* L1441 */
     let favor: Bool = s.favorDecSpeed                               /* L1442 */
     var result: (Int64, Int64) = (0, 0)
     if (cParam.strat == LZ4HC_STRAT_MID) {
         /* lz4mid 策略(L1445-1448):T3 已接通 */
-        result = LZ4MID_compress(s, src, dictQ, dictCtxQ, dst, srcSize, dstCapacity, limit, dict)
+        result = LZ4MID_compress(s, prefixBase, ipStart, dictQ, dictCtxQ, dst, srcSize, dstCapacity, limit, dict)
     } else if (cParam.strat == LZ4HC_STRAT_HC) {
-        result = LZ4HC_compress_hashChain(s, src, dictQ, dictCtxQ, dst, srcSize, dstCapacity,   /* L1450-1452 */
+        result = LZ4HC_compress_hashChain(s, prefixBase, ipStart, dictQ, dictCtxQ, dst, srcSize, dstCapacity,   /* L1450-1452 */
             cParam.nbSearches, limit, dict)
     } else {
         /* lz4opt strategy (L1455-1459): T4 connected — fullUpdate = cLevel >=
-           LZ4HC_CLEVEL_MAX (ultra mode), sufficient_len = targetLength, favor
-           read from the stream state (L1442). */
-        result = LZ4HC_compress_optimal(s, src, dictQ, dictCtxQ, dst, srcSize, dstCapacity,
+            LZ4HC_CLEVEL_MAX (ultra mode), sufficient_len = targetLength, favor
+            read from the stream state (L1442). */
+        result = LZ4HC_compress_optimal(s, prefixBase, ipStart, dictQ, dictCtxQ, dst, srcSize, dstCapacity,
             cParam.nbSearches, Int64(cParam.targetLength), limit,
             cLevel >= LZ4HC_CLEVEL_MAX, dict, favor)
     }
@@ -1830,27 +1848,23 @@ internal func LZ4HC_compress_generic_internal(s: LZ4_streamHC_t,
     return result
 }
 
-/* LZ4HC_compress_generic(L1516-1532):dictCtx==None → noDictCtx 直通
-   (L1527-1528);dictCtx!=None → 本任务占位直通 genericInternal
-   (usingDictCtxHc),T5 落三路分派(64KB 脱挂/状态拷贝/咨询)。 */
-internal func lz4hcCompressGeneric(s: LZ4_streamHC_t,
-        src: CPointer<UInt8>, dictQ: CPointer<UInt8>, dictCtxQ: CPointer<UInt8>,
-        dst: CPointer<UInt8>, srcSize: Int64, dstCapacity: Int64,
-        cLevel: Int32, limit: Int32): (Int64, Int64) {
-    let dictDir: Int32 = if (s.dictCtx.isNone()) {                  /* L1527 */
-        LZ4HC_DICT_NODICTCTX
-    } else {
-        LZ4HC_DICT_USINGDICTCTXHC                                   /* T5:三路分派替换此支 */
-    }
-    return LZ4HC_compress_generic_internal(s, src, dictQ, dictCtxQ, dst,
-        srcSize, dstCapacity, cLevel, limit, dictDir)
-}
-
 /* lz4hcCompressRun:一次性/流式共用的单一 unsafe 域(指针三律:acquire →
-   分派 → release,域内不分配;M3b lz4ContinueRun 先例)。prefixStart ==
-   本块基址(initInternal 锚定),故 srcQ 即 prefixStart 指针;extDict 段
-   (dictBuf)与 dictCtx 前缀缓冲存在才 acquire,空缺传占位指针(核内按
-   指令取用,不解引用)。返回 (result, srcSizeOut)。 */
+    分派 → release,域内不分配;M3b lz4ContinueRun 先例)。srcQ 恒为
+    prefixEnd 锚点处的块指针 —— 连续 continue 时 srcQ ≠ prefixStart 指针,
+    prefixStart 基由 generic_internal 内部重定基推导(见其注释);
+    extDict 段
+    (dictBuf)与 dictCtx 前缀缓冲存在才 acquire,**T5 修正**:dictCtx!=None
+   但 dictBuf==None 时,dictCtxQ 仍须为 dictCtx 自身 prefixBuf 的指针
+   (usingDictCtxHc 咨询块要按 dictCtx 的 prefix 读取);此前传 srcQ 的
+   写法会让 dictCtx 咨询块读到工作 prefix 的别名——T2 ledger minor。
+   4 个分支独立 dispatch:
+   (a) dictBuf=None, dictCtx=None → noDictCtx 路径 srcQ 占全部三位置
+   (b) dictBuf=Some, dictCtx=None → noDictCtx with extDict
+   (c) dictBuf=Some, dictCtx=Some → usingDictCtxHc consult
+       (dictCtx 也可能是已 memcpy 后 dictBuf=None,见 (d))
+   (d) dictBuf=None, dictCtx=Some → usingDictCtxHc consult
+       dictCtxQ = dictCtx.prefixBuf + dictCtx.prefixStartIdx
+   返回 (result, srcSizeOut)。 */
 internal func lz4hcCompressRun(s: LZ4_streamHC_t,
         srcBuf: Array<UInt8>, srcIdx: Int64, srcSize: Int64,
         dst: Array<UInt8>, dstCapacity: Int64,
@@ -1860,30 +1874,51 @@ internal func lz4hcCompressRun(s: LZ4_streamHC_t,
         let dh = acquireArrayRawData<UInt8>(dst)
         let srcQ = sh.pointer + srcIdx
         var r: (Int64, Int64) = (0, 0)
-        match (s.dictBuf) {
-            case Some(db) =>
-                let bh = acquireArrayRawData<UInt8>(db)
-                let dictQ = bh.pointer + s.dictStartIdx
-                match (s.dictCtx) {
-                    case Some(dctx) =>
-                        match (dctx.prefixBuf) {
-                            case Some(pbuf) =>
-                                let ph = acquireArrayRawData<UInt8>(pbuf)
-                                r = lz4hcCompressGeneric(s, srcQ, dictQ, ph.pointer + dctx.prefixStartIdx,
-                                    dh.pointer, srcSize, dstCapacity, cLevel, limit)
-                                releaseArrayRawData<UInt8>(ph)
-                            case None =>
-                                r = lz4hcCompressGeneric(s, srcQ, dictQ, dictQ,
-                                    dh.pointer, srcSize, dstCapacity, cLevel, limit)
-                        }
-                    case None =>
-                        r = lz4hcCompressGeneric(s, srcQ, dictQ, dictQ,
-                            dh.pointer, srcSize, dstCapacity, cLevel, limit)
-                }
-                releaseArrayRawData<UInt8>(bh)
-            case None =>
-                r = lz4hcCompressGeneric(s, srcQ, srcQ, srcQ,
-                    dh.pointer, srcSize, dstCapacity, cLevel, limit)
+        let dictBufOpt = s.dictBuf
+        let dictCtxOpt = s.dictCtx
+        if (let Some(db) <- dictBufOpt) {
+            let bh = acquireArrayRawData<UInt8>(db)
+            let dictQ = bh.pointer + s.dictStartIdx
+            match (dictCtxOpt) {
+                case Some(dctx) =>
+                    match (dctx.prefixBuf) {
+                        case Some(pbuf) =>
+                            let ph = acquireArrayRawData<UInt8>(pbuf)
+                            r = lz4hcCompressGeneric(s, srcBuf, srcIdx, srcQ, dictQ,
+                                ph.pointer + dctx.prefixStartIdx,
+                                dh.pointer, srcSize, dstCapacity, cLevel, limit)
+                            releaseArrayRawData<UInt8>(ph)
+                        case None =>
+                            /* dictCtx 自身无 prefixBuf —— 咨询不可达,落 noDictCtx;
+                               C 等价 dictCtx prefixStart==NULL 的 lookup 表 */
+                            r = lz4hcCompressGeneric(s, srcBuf, srcIdx, srcQ, dictQ, dictQ,
+                                dh.pointer, srcSize, dstCapacity, cLevel, limit)
+                    }
+                case None =>
+                    r = lz4hcCompressGeneric(s, srcBuf, srcIdx, srcQ, dictQ, dictQ,
+                        dh.pointer, srcSize, dstCapacity, cLevel, limit)
+            }
+            releaseArrayRawData<UInt8>(bh)
+        } else {
+            /* dictBuf=None:可能 noDictCtx,也可能 usingDictCtxHc consult
+               (dictCtx 自带 prefixBuf 但本流 extDict 空 —— T5 修正) */
+            match (dictCtxOpt) {
+                case Some(dctx) =>
+                    match (dctx.prefixBuf) {
+                        case Some(pbuf) =>
+                            let ph = acquireArrayRawData<UInt8>(pbuf)
+                            r = lz4hcCompressGeneric(s, srcBuf, srcIdx, srcQ, srcQ,
+                                ph.pointer + dctx.prefixStartIdx,
+                                dh.pointer, srcSize, dstCapacity, cLevel, limit)
+                            releaseArrayRawData<UInt8>(ph)
+                        case None =>
+                            r = lz4hcCompressGeneric(s, srcBuf, srcIdx, srcQ, srcQ, srcQ,
+                                dh.pointer, srcSize, dstCapacity, cLevel, limit)
+                    }
+                case None =>
+                    r = lz4hcCompressGeneric(s, srcBuf, srcIdx, srcQ, srcQ, srcQ,
+                        dh.pointer, srcSize, dstCapacity, cLevel, limit)
+            }
         }
         releaseArrayRawData<UInt8>(dh)
         releaseArrayRawData<UInt8>(sh)
@@ -2028,4 +2063,363 @@ public func LZ4_setCompressionLevel(s: LZ4_streamHC_t, compressionLevel: Int32):
    match 长度偏置,Task 4 消费)。 */
 public func LZ4_favorDecompressionSpeed(s: LZ4_streamHC_t, favor: Int32): Unit {
     s.favorDecSpeed = favor != 0
+}
+
+/*-************************************
+*  Streaming (lz4hc.c L1675-1813)
+**************************************/
+/* lz4hcCompressGenericDictCtx(L1490-1514):dictCtx!=None 时三路分派。
+   position = prefixLen + (dictLimit - lowLimit) —— 上游以指针差 + dictLimit
+   差,仓颉双段引用对模型下等价(虚拟索引空间累计:prefix 段
+   [dictLimit, dictLimit + prefixLen),dict 段 [lowLimit, dictLimit) →
+   total = prefixLen + dictLimit - lowLimit)。
+   1) position >= 64 KB → dictCtx = None,走 noDictCtx 直通
+      (上游 L1503-1505:大字典已具备独立压缩能力,不再借用 dictCtx 的表)
+   2) position == 0 && srcSize > 4 KB && isStateCompatible
+      → **整态拷贝**:hashTable/chainTable 数组深拷贝(C LZ4_memcpy) +
+      标量复制 + 缓冲引用对浅拷贝(C memcpy 全结构体浅别名 dictCtx 是
+      const 不可写,这里改用 dictCtx 自身缓冲的浅拷贝)
+      + setExternalDict(src) + compressionLevel = cLevel → noDictCtx
+      (上游 L1507-1510:一字节都不漏的整态接管,后续不再用 dictCtx)
+   3) 否则 → genericInternal(usingDictCtxHc) 咨询路径
+   返回 (result, srcSizeOut)。 */
+/* LZ4HC_setExternalDictPtr(L1709-1727 同型指针入参):dictCtx 整态拷贝
+   路径的 setExternalDict(L1508)。此刻 s.prefixBuf 已是 dictCtx 的
+   prefixBuf(整态拷贝交接),而该缓冲正被 lz4hcCompressRun 以 ph 持有 ——
+   单 unsafe 域 hygiene 禁止二次 acquire,旧前缀基址改为 already-held
+   指针入参:oldPrefixStartPtr = dictCtxQ = prefixStart 指针(虚拟索引
+   dictLimit 映射的基址,srcQ 即新块 newBlockBuf[newBlockIdx] 侧指针)。
+   Insert(end-3) 同上游:target 相对 prefixStart 基址 = prefixLen - 3。 */
+internal func LZ4HC_setExternalDictPtr(s: LZ4_streamHC_t,
+        oldPrefixStartPtr: CPointer<UInt8>, newBlockBuf: Array<UInt8>,
+        newBlockIdx: Int64): Unit {
+    let prefixLen: Int64 = s.prefixEndIdx - s.prefixStartIdx            /* end - prefixStart */
+    if (prefixLen >= 4 &&                                               /* L1712 end >= prefixStart+4 */
+            lz4hcGetCLevelParams(s.compressionLevel).strat != LZ4HC_STRAT_MID) {
+        LZ4HC_insert(s, oldPrefixStartPtr, prefixLen - 3)               /* L1714 Insert(end-3) */
+    }
+    s.lowLimit = s.dictLimit                                            /* L1718 */
+    s.dictBuf = s.prefixBuf                                             /* L1719 别名 */
+    s.dictStartIdx = s.prefixStartIdx
+    s.dictLimit = s.dictLimit + UInt32(prefixLen & 0xFFFFFFFFi64)       /* L1720 */
+    s.prefixBuf = Some(newBlockBuf)                                     /* L1721 */
+    s.prefixStartIdx = newBlockIdx
+    s.prefixEndIdx = newBlockIdx                                        /* L1722 end = newBlock */
+    s.nextToUpdate = s.dictLimit                                        /* L1723 */
+    s.dictCtx = None                                                    /* L1726 */
+}
+
+/* lz4hcCompressGenericDictCtx(L1490-1514):dictCtx!=None 时三路分派。
+   position = prefixLen + (dictLimit - lowLimit) —— 上游以指针差 + dictLimit
+   差,仓颉双段引用对模型下等价(虚拟索引空间累计:prefix 段
+   [dictLimit, dictLimit + prefixLen),dict 段 [lowLimit, dictLimit) →
+   total = prefixLen + dictLimit - lowLimit)。
+   1) position >= 64 KB → dictCtx = None,走 noDictCtx 直通
+      (上游 L1503-1505:大字典已具备独立压缩能力,不再借用 dictCtx 的表)
+   2) position == 0 && srcSize > 4 KB && isStateCompatible
+      → **整态拷贝**:hashTable/chainTable 数组深拷贝(C LZ4_memcpy) +
+      标量复制 + 缓冲引用对浅拷贝(C memcpy 全结构体浅别名 dictCtx 是
+      const 不可写,这里改用 dictCtx 自身缓冲的浅拷贝)
+      + setExternalDict(src) + compressionLevel = cLevel → noDictCtx
+      (上游 L1507-1510:一字节都不漏的整态接管,后续不再用 dictCtx)
+   3) 否则 → genericInternal(usingDictCtxHc) 咨询路径
+    返回 (result, srcSizeOut)。注:此函数受调用方 unsafe 域保护,整态
+    拷贝路径的 setExternalDict (L1508) 经 LZ4HC_setExternalDictPtr 走
+    already-held 指针入参(dictCtx 的 prefixBuf 已被 lz4hcCompressRun
+    以 ph 持有,单 unsafe 域内不再二次 acquire)。整态拷贝后
+    s.prefixBuf/dictBuf 已指向 dictCtx 的 prefixBuf/dictBuf(浅别名),
+    setExternalDict 必须把 srcBuf 接管为新 prefix。 */
+internal func lz4hcCompressGenericDictCtx(s: LZ4_streamHC_t,
+        srcBuf: Array<UInt8>, srcIdx: Int64,
+        src: CPointer<UInt8>, dictQ: CPointer<UInt8>, dictCtxQ: CPointer<UInt8>,
+        dst: CPointer<UInt8>, srcSize: Int64, dstCapacity: Int64,
+        cLevel: Int32, limit: Int32): (Int64, Int64) {
+    let position: UInt64 = UInt64(s.prefixEndIdx - s.prefixStartIdx) +
+        UInt64(s.dictLimit - s.lowLimit)                                /* L1501 */
+    match (s.dictCtx) {
+        case Some(dctx) =>
+            if (position >= 65536u64) {                                  /* L1503 */
+                s.dictCtx = None
+                return LZ4HC_compress_generic_internal(s, src, dictQ, dictCtxQ, dst,
+                    srcSize, dstCapacity, cLevel, limit, LZ4HC_DICT_NODICTCTX)
+            } else if (position == 0u64 && srcSize > 4096 &&
+                    lz4hcIsStateCompatible(s, dctx)) {                   /* L1506 */
+                /* 整态拷贝(L1507 LZ4_memcpy):深拷贝两表 + 标量 + 缓冲引用对
+                   浅拷贝(dictCtx 是 const 不可写,这里改为以 dictCtx 当前
+                   快照同步 s,dictCtx 保留引用对) */
+                var i: Int64 = 0
+                while (i < s.hashTable.size) {
+                    s.hashTable[i] = dctx.hashTable[i]
+                    i += 1
+                }
+                i = 0
+                while (i < s.chainTable.size) {
+                    s.chainTable[i] = dctx.chainTable[i]
+                    i += 1
+                }
+                s.prefixBuf = dctx.prefixBuf
+                s.prefixStartIdx = dctx.prefixStartIdx
+                s.prefixEndIdx = dctx.prefixEndIdx
+                s.dictBuf = dctx.dictBuf
+                s.dictStartIdx = dctx.dictStartIdx
+                s.dictLimit = dctx.dictLimit
+                s.lowLimit = dctx.lowLimit
+                s.nextToUpdate = dctx.nextToUpdate
+                s.favorDecSpeed = dctx.favorDecSpeed
+                /* Insert(end-3) 与 level 切换:setExternalDict 内置 strategy
+                    guard(strat != lz4mid + prefixLen≥4);继续 noDictCtx。
+                    setExternalDictPtr 以 dictCtxQ 为旧前缀基址(already-
+                    held,免二次 acquire)、srcBuf/srcIdx 为新 prefix。 */
+                LZ4HC_setExternalDictPtr(s, dictCtxQ, srcBuf, srcIdx)     /* L1508 */
+                s.compressionLevel = cLevel                               /* L1509 */
+                /* 整态接管后 dict 段(dictBuf)即 dictCtx 的旧前缀缓冲,
+                    其基指针 dictStart == dictCtxQ(ph.pointer +
+                    dctx.prefixStartIdx)。入口时刻的 dictQ 快照已随
+                    wrapper 内状态改变而失效 —— memcpy 路径入口
+                    dictBuf==None,dictQ 别名 srcQ,继续沿用会让 extDict
+                    读取越过 src 数组末尾越界。两个指针位均传 dictCtxQ
+                    (noDictCtx 模式下 dictCtxQ 位不参与读取)。 */
+                return LZ4HC_compress_generic_internal(s, src, dictCtxQ, dictCtxQ, dst,
+                    srcSize, dstCapacity, cLevel, limit, LZ4HC_DICT_NODICTCTX)
+            } else {                                                      /* L1511 */
+                return LZ4HC_compress_generic_internal(s, src, dictQ, dictCtxQ, dst,
+                    srcSize, dstCapacity, cLevel, limit, LZ4HC_DICT_USINGDICTCTXHC)
+            }
+        case None => return (0, 0)   /* 不可达:dictCtx!=None 进入此函数 */
+    }
+}
+
+/* lz4hcCompressGeneric(L1516-1532):T2 占位直通 genericInternal,T5 落三路
+   分派(dictCtx!=None → dictCtx wrapper,否则 noDictCtx 直通)。dictCtx wrapper
+   需要 srcBuf + srcIdx 以便整态拷贝路径的 setExternalDict 把 srcBuf 作为新
+   prefix 接管(src 指针单独传亦可,但 Array 入参让 wrapper 内嵌套 unsafe
+   域更直观)。 */
+internal func lz4hcCompressGeneric(s: LZ4_streamHC_t,
+        srcBuf: Array<UInt8>, srcIdx: Int64,
+        src: CPointer<UInt8>, dictQ: CPointer<UInt8>, dictCtxQ: CPointer<UInt8>,
+        dst: CPointer<UInt8>, srcSize: Int64, dstCapacity: Int64,
+        cLevel: Int32, limit: Int32): (Int64, Int64) {
+    match (s.dictCtx) {
+        case Some(_) =>
+            return lz4hcCompressGenericDictCtx(s, srcBuf, srcIdx,
+                src, dictQ, dictCtxQ, dst, srcSize, dstCapacity, cLevel, limit)
+        case None =>
+            return LZ4HC_compress_generic_internal(s, src, dictQ, dictCtxQ, dst,
+                srcSize, dstCapacity, cLevel, limit, LZ4HC_DICT_NODICTCTX)
+    }
+}
+
+/* LZ4HC_setExternalDict(L1709-1727):extDict 切换。end≥prefixStart+4 且
+   strat != lz4mid → Insert(end-3)(注意 setExternalDict 调用时 prefixBuf
+   仍为旧块,Insert 走 prefixBuf 路径);随后摘除旧前缀、抬 dictLimit
+   += prefixLen、prefix 换新块、nextToUpdate 复位至 dictLimit、dictCtx=None。
+   仓颉双段引用对模型:dictBuf/prefixBuf 引用对交接 + dictStartIdx 镜像
+   旧 prefixStart(零拷贝,C L1719-1720 别名)。 */
+internal func LZ4HC_setExternalDict(s: LZ4_streamHC_t, newBlockBuf: Array<UInt8>,
+        newBlockIdx: Int64): Unit {
+    let prefixLen: Int64 = s.prefixEndIdx - s.prefixStartIdx              /* L1712: end - prefixStart */
+    if (prefixLen >= 4 &&
+            lz4hcGetCLevelParams(s.compressionLevel).strat != LZ4HC_STRAT_MID) {
+        /* Insert(end-3):仓颉 Insert 的 prefixPtr 参数 = 虚拟索引
+            dictLimit 映射的基指针 = 数组基 + prefixStartIdx,target
+            相对该基 = prefixLen - 3;prefixStartIdx != 0 时(如 hcdict
+            dd=131072 截尾锚定后 prefixStartIdx=65536)数组基与
+            dictLimit 基不重合,误用数组基 + prefixEndIdx-3 会错位 */
+        match (s.prefixBuf) {
+            case Some(pbuf) =>
+                unsafe {
+                    let h = acquireArrayRawData<UInt8>(pbuf)
+                    LZ4HC_insert(s, h.pointer + s.prefixStartIdx, prefixLen - 3)
+                    releaseArrayRawData<UInt8>(h)
+                }
+            case None => ()
+        }
+    }
+    s.lowLimit = s.dictLimit                                              /* L1718 */
+    s.dictBuf = s.prefixBuf                                               /* L1719 别名 */
+    s.dictStartIdx = s.prefixStartIdx
+    s.dictLimit = s.dictLimit + UInt32(prefixLen & 0xFFFFFFFFi64)         /* L1720 */
+    s.prefixBuf = Some(newBlockBuf)                                       /* L1721 */
+    s.prefixStartIdx = newBlockIdx
+    s.prefixEndIdx = newBlockIdx                                          /* L1722 end = newBlock */
+    s.nextToUpdate = s.dictLimit                                          /* L1723 */
+    s.dictCtx = None                                                      /* L1726 */
+}
+
+/* lz4hcContinueGeneric(L1729-1769):continue 主体。顺序:
+   auto-init(prefixBuf.isNone → initInternal)、溢出检查(不可达保留)、
+   src==end 判定(lz4SameBuffer && srcIdx == prefixEndIdx;否则 setExternalDict)、末
+   generic。重叠收缩(sourceEnd 与 dict 段相交,仅同一分配下执行 ——
+   dictBuf 与 srcBuf 同一缓冲且 [src, src+srcSize) 与 dict 段相交 → 抬
+   lowLimit/dictStartIdx 至 sourceEnd,过短则丢弃 dict)。 */
+internal func lz4hcContinueGeneric(s: LZ4_streamHC_t,
+        srcBuf: Array<UInt8>, srcIdx: Int64, srcSize: Int64,
+        dst: Array<UInt8>, dstCapacity: Int64,
+        cLevel: Int32, limit: Int32): (Int32, Int64) {
+    let prefixBufBefore = s.prefixBuf                                     /* L1740 */
+    if (prefixBufBefore.isNone()) {
+        LZ4HC_initInternal(s, srcBuf, srcIdx)                             /* L1741 */
+    }
+    /* 溢出检查(L1744-1748,不可达:实际触发需 prefixLen + dictLimit > 2GB,
+       仓颉侧 prefixEndIdx 索引已用 Int64 不溢出,但与上游 64 KB loadDictHC
+       闸等价的语义保留以匹配二工具链一致性测试) */
+    let prefixLen: Int64 = s.prefixEndIdx - s.prefixStartIdx
+    if (UInt64(prefixLen) + UInt64(s.dictLimit) > 0x80000000u64) {
+        var dictSize: Int64 = prefixLen
+        if (dictSize > 65536) { dictSize = 65536 }
+        LZ4_loadDictHC(s, srcBuf, Int32(dictSize))                        /* L1747 调用语义保留 */
+    }
+    /* src==end 判定(L1751-1752):同缓冲且 srcIdx == prefixEndIdx → 直连
+       (src 异缓冲 → setExternalDict) */
+    let sameBuf: Bool = match (s.prefixBuf) {
+        case Some(pb) => lz4SameBuffer(pb, srcBuf) && srcIdx == s.prefixEndIdx
+        case None => false
+    }
+    if (!sameBuf) {
+        LZ4HC_setExternalDict(s, srcBuf, srcIdx)
+    }
+    /* 重叠收缩(L1755-1766):sourceEnd = src + srcSize;dict 段 = dictBuf[0,
+       dictLimit-lowLimit);若相交 → 抬 lowLimit/dictStartIdx 至 sourceEnd
+       (clamp 至 dictEnd);过小则丢弃 dict(置 lowLimit == dictLimit,
+       dictStartIdx == prefixStartIdx)。 */
+    match (s.dictBuf) {
+        case Some(db) =>
+            if (lz4SameBuffer(db, srcBuf)) {                              /* 同分配判定 */
+                let dictStartIdx: Int64 = s.dictStartIdx
+                let dictEndIdx: Int64 = dictStartIdx + Int64(s.dictLimit - s.lowLimit)
+                let sourceEndIdx: Int64 = srcIdx + srcSize
+                if (sourceEndIdx > dictStartIdx && srcIdx < dictEndIdx) {
+                    var newDictEnd: Int64 = sourceEndIdx
+                    if (newDictEnd > dictEndIdx) { newDictEnd = dictEndIdx }
+                    s.lowLimit = s.lowLimit + UInt32((newDictEnd - dictStartIdx) & 0xFFFFFFFFi64)
+                    s.dictStartIdx = newDictEnd
+                    if (Int64(s.dictLimit - s.lowLimit) < Int64(LZ4HC_HASHTABLESIZE)) {
+                        s.lowLimit = s.dictLimit
+                        s.dictStartIdx = s.prefixStartIdx
+                    }
+                }
+            }
+        case None => ()
+    }
+    return lz4hcCompressRun(s, srcBuf, srcIdx, srcSize, dst, dstCapacity, cLevel, limit)
+}
+
+/* LZ4_loadDictHC(L1675-1701):>64KB 截尾(以 dictStartIdx 偏移表达,
+   **不拷贝**);cLevel 保存 → initStreamHC 全量 → setCompressionLevel 复原 →
+   initInternal(dictionary, 0) → prefixEndIdx=dictSize → mid 策略 →
+   LZ4MID_fillHTable else dictSize ≥ 4 → Insert(end-3);返回 dictSize(截尾
+   后);defensive dictSize<0 → 0。 */
+public func LZ4_loadDictHC(state: LZ4_streamHC_t, dictionary: Array<UInt8>,
+        dictSize: Int32): Int32 {
+    if (dictSize < 0) { return 0 }                                         /* L1681 defensive */
+    var ds: Int32 = dictSize
+    var dictIdx: Int64 = 0
+    if (ds > 65536) {                                                     /* L1683 */
+        dictIdx = Int64(ds - 65536)
+        ds = 65536
+    }
+    let cLevel: Int32 = state.compressionLevel                            /* L1688-1692 */
+    LZ4_initStreamHC(state)
+    LZ4_setCompressionLevel(state, cLevel)
+    LZ4HC_initInternal(state, dictionary, dictIdx)                         /* L1693 */
+    state.prefixEndIdx = state.prefixStartIdx + Int64(ds)                  /* L1694 */
+    let cp = lz4hcGetCLevelParams(state.compressionLevel)
+    unsafe {
+        let h = acquireArrayRawData<UInt8>(dictionary)
+        if (cp.strat == LZ4HC_STRAT_MID) {
+            LZ4MID_fillHTable(state, h.pointer + dictIdx, Int64(ds))       /* L1696 */
+        } else {
+            if (ds >= Int32(LZ4HC_HASHTABLESIZE)) {
+                LZ4HC_insert(state, h.pointer + dictIdx, Int64(ds) - 3)    /* L1698 */
+            }
+        }
+        releaseArrayRawData<UInt8>(h)
+    }
+    return ds                                                             /* L1700 */
+}
+
+/* LZ4_attach_HC_dictionary(L1703-1705):dictCtx = Some(dctx 内部状态);
+   C 的 NULL 摘除分支(NULL 字典流)对类状态不可达(无 null 引用),Task 3 attach
+   先例不暴露 NULL 入口。 */
+public func LZ4_attach_HC_dictionary(workingStream: LZ4_streamHC_t,
+        dictionaryStream: LZ4_streamHC_t): Unit {
+    workingStream.dictCtx = Some(dictionaryStream)
+}
+
+/* LZ4_compress_HC_continue(L1771-1778):(state, srcBuf, srcIdx, srcSize,
+   dst, dstCapacity):Int32。compressBound 择限 + defensive srcIdx/srcSize
+   越界 → 0(M3b continue 先例)。 */
+public func LZ4_compress_HC_continue(state: LZ4_streamHC_t,
+        srcBuf: Array<UInt8>, srcIdx: Int64, srcSize: Int32,
+        dst: Array<UInt8>, dstCapacity: Int32): Int32 {
+    if (srcIdx < 0 || srcIdx > srcBuf.size || srcSize < 0 ||
+            srcIdx + Int64(srcSize) > srcBuf.size) {
+        return 0                                                           /* defensive */
+    }
+    let limit: Int32 = if (dstCapacity < LZ4_compressBound(srcSize)) {
+        LZ4_OUTPUT_LIMITED
+    } else {
+        LZ4_OUTPUT_NOT_LIMITED
+    }
+    let (r, _) = lz4hcContinueGeneric(state, srcBuf, srcIdx, Int64(srcSize),
+        dst, Int64(dstCapacity), state.compressionLevel, limit)
+    return r
+}
+
+/* LZ4_compress_HC_continue_destSize(L1780-1783):fillOutput。返回
+   (cSize, consumed);失败 (r<=0) → (0, srcSize)。委托语义同
+   LZ4_compress_HC_destSize。 */
+public func LZ4_compress_HC_continue_destSize(state: LZ4_streamHC_t,
+        srcBuf: Array<UInt8>, srcIdx: Int64, srcSize: Int32,
+        dst: Array<UInt8>, targetDestSize: Int32): (Int32, Int32) {
+    if (srcIdx < 0 || srcIdx > srcBuf.size || srcSize < 0 ||
+            srcIdx + Int64(srcSize) > srcBuf.size) {
+        return (0, srcSize)                                                /* defensive */
+    }
+    let (r, consumed) = lz4hcContinueGeneric(state, srcBuf, srcIdx,
+        Int64(srcSize), dst, Int64(targetDestSize), state.compressionLevel,
+        LZ4_OUTPUT_FILL)
+    if (r <= 0) {
+        return (0, srcSize)
+    }
+    return (r, Int32(consumed))
+}
+
+/* LZ4_saveDictHC(L1791-1813):三重钳制(>64KB→64KB、<4→0、>prefixLen→
+   prefixLen);拷贝 end-dictSize..end → safeBuffer[0..dictSize];endIndex
+   平移(dictLimit=lowLimit=endIndex-dictSize、dictStartIdx=0、prefixBuf=
+   Some(safeBuffer)、nextToUpdate 抬底)。 */
+public func LZ4_saveDictHC(state: LZ4_streamHC_t, safeBuffer: Array<UInt8>,
+        dictSize: Int32): Int32 {
+    let prefixLen: Int32 = Int32(state.prefixEndIdx - state.prefixStartIdx)   /* L1794 */
+    var d: Int32 = dictSize
+    if (d > 65536) { d = 65536 }                                          /* L1797 */
+    if (d < 4) { d = 0 }                                                  /* L1798 */
+    if (d > prefixLen) { d = prefixLen }                                  /* L1799 */
+    if (d > 0) {
+        /* 拷贝 end-dictSize..end → safeBuffer[0..dictSize] */
+        match (state.prefixBuf) {
+            case Some(pbuf) =>
+                unsafe {
+                    let h = acquireArrayRawData<UInt8>(pbuf)
+                    let s = acquireArrayRawData<UInt8>(safeBuffer)
+                    LZ4_memcpyPtr(s.pointer, 0, h.pointer,
+                        state.prefixEndIdx - Int64(d), Int64(d))
+                    releaseArrayRawData<UInt8>(s)
+                    releaseArrayRawData<UInt8>(h)
+                }
+            case None => ()
+        }
+    }
+    let endIndex: UInt32 = UInt32(state.prefixEndIdx - state.prefixStartIdx) + state.dictLimit   /* L1803 */
+    state.prefixBuf = Some(safeBuffer)                                    /* L1804-1805 */
+    state.prefixStartIdx = 0
+    state.prefixEndIdx = Int64(d)                                         /* end = safeBuffer+d */
+    state.dictLimit = endIndex - UInt32(d)                                /* L1806 */
+    state.lowLimit = endIndex - UInt32(d)                                 /* L1807 */
+    state.dictStartIdx = 0                                                /* L1808 dictStart = prefixStart */
+    if (state.nextToUpdate < state.dictLimit) {                           /* L1809-1810 */
+        state.nextToUpdate = state.dictLimit
+    }
+    return d                                                              /* L1812 */
 }

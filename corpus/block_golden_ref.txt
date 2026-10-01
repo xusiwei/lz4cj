@@ -413,3 +413,31 @@ n=65536 mp=0.50 seed=0 mode=hc lv=12 fav=1 size=32944 xxh32=774e3ec8 xxh64=fffa3
 n=65536 mp=0.90 seed=7 mode=hc lv=12 fav=1 size=5583 xxh32=977aa445 xxh64=d388157a857b6f46 inxxh32=99ba8de1 inxxh64=3a798cd5ac65353f file=block/399.lz4
 n=65536 mp=0.50 seed=0 mode=hcdest lv=10 tg=49152 size=32907 consumed=65536 xxh32=e67278c9 xxh64=3e4c3f4fca221e79 inxxh32=c20f7bcc inxxh64=197a59a7c9d2bd88 file=block/400.lz4
 n=65536 mp=0.50 seed=0 mode=hcdest lv=12 tg=49152 size=32882 consumed=65536 xxh32=224ec306 xxh64=c3fd28f0e0e3235e inxxh32=c20f7bcc inxxh64=197a59a7c9d2bd88 file=block/401.lz4
+# hccont=RDG(n=65536 block=16384 mp=0.50 lp=0.00 seed=0) one buffer, 4 contiguous blocks; LZ4_resetStreamHC(lv) + LZ4_compress_HC_continue per block (notLimited); lv in {2,9,12} = mid/hc/opt on identical geometry; rolling decode at same offsets
+n=16384 mp=0.50 seed=0 mode=hccont seq=0 lv=2 size=10355 xxh32=368d41c1 xxh64=e7ca34f06a8a19e8 inxxh32=5c4a1230 inxxh64=5ab6c56a75f212e2 file=block/402.lz4
+n=16384 mp=0.50 seed=0 mode=hccont seq=1 lv=2 size=9389 xxh32=91a79235 xxh64=4b56361c9a2053e4 inxxh32=3028dceb inxxh64=b982f9c570703e77 file=block/403.lz4
+n=16384 mp=0.50 seed=0 mode=hccont seq=2 lv=2 size=6850 xxh32=57e96a76 xxh64=6721196433491e22 inxxh32=5693071f inxxh64=cfe5795c5b9f8463 file=block/404.lz4
+n=16384 mp=0.50 seed=0 mode=hccont seq=3 lv=2 size=7947 xxh32=d4d55a24 xxh64=6dd1aca03d45fed2 inxxh32=09a32383 inxxh64=498f4f3ebaac6906 file=block/405.lz4
+n=16384 mp=0.50 seed=0 mode=hccont seq=0 lv=9 size=10145 xxh32=b30be3e9 xxh64=c03eff1fa1ceeea8 inxxh32=5c4a1230 inxxh64=5ab6c56a75f212e2 file=block/406.lz4
+n=16384 mp=0.50 seed=0 mode=hccont seq=1 lv=9 size=9001 xxh32=9043e0de xxh64=6938ca41c51653f8 inxxh32=3028dceb inxxh64=b982f9c570703e77 file=block/407.lz4
+n=16384 mp=0.50 seed=0 mode=hccont seq=2 lv=9 size=6420 xxh32=052a9dba xxh64=09ad8ec8e50ae8f6 inxxh32=5693071f inxxh64=cfe5795c5b9f8463 file=block/408.lz4
+n=16384 mp=0.50 seed=0 mode=hccont seq=3 lv=9 size=7363 xxh32=ceac01d2 xxh64=66db85c887850217 inxxh32=09a32383 inxxh64=498f4f3ebaac6906 file=block/409.lz4
+n=16384 mp=0.50 seed=0 mode=hccont seq=0 lv=12 size=10140 xxh32=16124d43 xxh64=b2def69591110e5b inxxh32=5c4a1230 inxxh64=5ab6c56a75f212e2 file=block/410.lz4
+n=16384 mp=0.50 seed=0 mode=hccont seq=1 lv=12 size=8986 xxh32=58616960 xxh64=2052e600feea78de inxxh32=3028dceb inxxh64=b982f9c570703e77 file=block/411.lz4
+n=16384 mp=0.50 seed=0 mode=hccont seq=2 lv=12 size=6415 xxh32=6dff440a xxh64=bafc79e50ba7f0b4 inxxh32=5693071f inxxh64=cfe5795c5b9f8463 file=block/412.lz4
+n=16384 mp=0.50 seed=0 mode=hccont seq=3 lv=12 size=7354 xxh32=adde8f22 xxh64=a5db787602cf4817 inxxh32=09a32383 inxxh64=498f4f3ebaac6906 file=block/413.lz4
+# hcsavedict=RDG(n=49152 block=16384 mp=0.50 lp=0.00 seed=905) slices copied into 3 separate buffers; LZ4_saveDictHC(safe,8192) after seq=0/1 relocates the dictionary (extDict migration path); lv=9
+n=16384 mp=0.50 seed=905 mode=hcsavedict seq=0 lv=9 size=7376 xxh32=78698157 xxh64=d10a620e109354b9 inxxh32=91ff5339 inxxh64=7b8f8b6a3bb88890 file=block/414.lz4
+n=16384 mp=0.50 seed=905 mode=hcsavedict seq=1 lv=9 size=7454 xxh32=f3bcb779 xxh64=fba3f08e32ac88f7 inxxh32=09c089ca inxxh64=3ed017e1189723c2 file=block/415.lz4
+n=16384 mp=0.50 seed=905 mode=hcsavedict seq=2 lv=9 size=8631 xxh32=12fbcf04 xxh64=2adf89fcacb5394b inxxh32=3bc371df inxxh64=eae14b32e4069128 file=block/416.lz4
+# hcdict=dict=RDG(n=65536 mp=0.50 lp=0.00 seed=99) xxh32=059edec2 xxh64=d41565bb0ecfa4e3 via LZ4_loadDictHC + first block RDG(n=16384 mp=0.50 lp=0.00 seed=99) = the dict's own prefix (separate buffer); lv in {2,9,12}; dd=131072 row pins the >64KB tail clamp (effective dict = last 65536 bytes of RDG(n=131072 mp=0.50 lp=0.00 seed=99))
+n=16384 mp=0.50 seed=99 mode=hcdict lv=2 dd=65536 size=4461 xxh32=f7c80486 xxh64=ec55174c9823ae1a inxxh32=75d05054 inxxh64=35446f7da0b7a536 file=block/417.lz4
+n=16384 mp=0.50 seed=99 mode=hcdict lv=9 dd=65536 size=3657 xxh32=eb9e9f6f xxh64=cac784a44492082a inxxh32=75d05054 inxxh64=35446f7da0b7a536 file=block/418.lz4
+n=16384 mp=0.50 seed=99 mode=hcdict lv=12 dd=65536 size=3644 xxh32=257d796a xxh64=10d47f7633eb874a inxxh32=75d05054 inxxh64=35446f7da0b7a536 file=block/419.lz4
+n=16384 mp=0.50 seed=99 mode=hcdict lv=9 dd=131072 size=6193 xxh32=46ec7398 xxh64=b4814a801a84ccd4 inxxh32=75d05054 inxxh64=35446f7da0b7a536 file=block/420.lz4
+# hcattach=dict=RDG(n=65536 mp=0.50 lp=0.00 seed=99) xxh32=059edec2 xxh64=d41565bb0ecfa4e3 on a dictionary stream (resetStreamHC(dlv) + LZ4_loadDictHC); fresh working stream + LZ4_attach_HC_dictionary + LZ4_compress_HC_continue(block=RDG(mp=0.50 lp=0.00 seed=99) = the dict's own prefix): 8192/lv9 whole-state copy, 4096/lv9 consult, 8192 lv9-dict vs lv2-work incompatible consult. hcdestcont=RDG(n=32768 block=16384 mp=0.50 lp=0.00 seed=906) lv=9 2 contiguous blocks via LZ4_compress_HC_continue_destSize tg=12288
+n=8192 mp=0.50 seed=99 mode=hcattach lv=9 dlv=9 size=1407 xxh32=f3c6df47 xxh64=75dca7e6274f1c6c inxxh32=f4290fc5 inxxh64=7e74e3fde4c63bb4 file=block/421.lz4
+n=4096 mp=0.50 seed=99 mode=hcattach lv=9 dlv=9 size=552 xxh32=5dbbabdc xxh64=101a84954a6eecff inxxh32=7085c0ee inxxh64=ebba4e70ddd088c4 file=block/422.lz4
+n=8192 mp=0.50 seed=99 mode=hcattach lv=2 dlv=9 size=1596 xxh32=a1c5f5f5 xxh64=306fd7a968fb1937 inxxh32=f4290fc5 inxxh64=7e74e3fde4c63bb4 file=block/423.lz4
+n=16384 mp=0.50 seed=906 mode=hcdestcont seq=0 lv=9 tg=12288 size=6189 consumed=16384 xxh32=42536b9e xxh64=46f2770d8f9c0ea1 inxxh32=c4dc3143 inxxh64=4c51ed8d28c9d9e3 file=block/424.lz4
+n=16384 mp=0.50 seed=906 mode=hcdestcont seq=1 lv=9 tg=12288 size=6205 consumed=16384 xxh32=b4ba5c14 xxh64=4752f5f89d192d4b inxxh32=59883502 inxxh64=466f3ba3982e33e6 file=block/425.lz4

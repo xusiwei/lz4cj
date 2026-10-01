@@ -23,3 +23,5 @@ tmp
 scripts/datagen_ref
 scripts/gen_golden
 scripts/dest_probe
+scripts/hc_probe
+scripts/hc_dest_probe

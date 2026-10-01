@@ -41,6 +41,19 @@
 //         variant would wipe the flag; the new fav=1 field marks the row)
 //         over lv=10 x A, lv=12 x A, lv=12 x B => 14 rows, plus mode=hcdest
 //         lv=10 and lv=12 x A (tg=n*3/4) => 2 rows => 402 rows.
+// + M4 Task 5 HC streaming rows: mode=hccont (4 contiguous 16384 blocks of
+//         one RDG(65536,0.50,0) buffer, LZ4_resetStreamHC + continue per
+//         block; lv in {2,9,12}) => 12 rows, mode=hcsavedict (3 blocks of
+//         RDG(49152,0.50,905) in separate buffers, LZ4_saveDictHC(safe,
+//         8192) between; lv=9) => 3 rows, mode=hcdict (LZ4_loadDictHC of
+//         RDG(65536,0.50,99) + first block RDG(16384,0.50,99) in a separate
+//         buffer; lv in {2,9,12} + one dd=131072 clamp row at lv=9)
+//         => 4 rows, mode=hcattach (dict stream lv9 + LZ4_attach_HC_
+//         dictionary: 8192/lv9 whole-state-copy row, 4096/lv9 consult row,
+//         8192 work-lv2-vs-dict-lv9 incompatible consult row) => 3 rows,
+//         mode=hcdestcont (2 contiguous 16384 blocks of RDG(32768,0.50,
+//         906), LZ4_compress_HC_continue_destSize tg=12288; lv=9)
+//         => 2 rows => 426 rows.
 //
 // Manifest line format (contract for M2 Tasks 3/4 and M3 - follow exactly):
 //   n=<n> mp=<mp> seed=<seed> mode=<mode> size=<c> [consumed=<k> ]xxh32=<h32> xxh64=<h64> inxxh32=<h32> inxxh64=<h64>[ file=block/<idx>.lz4]
@@ -1479,6 +1492,329 @@ int main(void) {
             idx++;
             free(buf); free(out); free(dec); free(hcState);
         }
+    }
+    /* hccont rows (M4 Task 5): HC streaming continue over one RDG buffer
+       (65536, mp=0.50, seed=0) sliced into 4 contiguous 16384-byte blocks:
+       LZ4_resetStreamHC(ctx, lv) then one LZ4_compress_HC_continue per
+       block (dstCapacity = compressBound => notLimited). Contiguous blocks
+       extend the prefix segment (src == end: no setExternalDict, no
+       re-anchor; the search machine bases on prefixStart so cross-block
+       matches accumulate virtual positions). lv in {2,9,12} covers
+       mid/hc/opt strategies on identical geometry. Hard check: rolling
+       LZ4_decompress_safe_continue decode into a twin buffer at the same
+       offsets. */
+    {
+        const size_t kBlock = 16384;
+        const size_t kTotal = 4 * kBlock;
+        static const int kLv[3] = { 2, 9, 12 };
+        unsigned char* buf = (unsigned char*)malloc(kTotal);
+        unsigned char* dst = (unsigned char*)malloc(kTotal);
+        int bound = LZ4_compressBound((int)kBlock);
+        unsigned char* out = (unsigned char*)malloc((size_t)bound);
+        if (!buf || !dst || !out) { fprintf(stderr, "oom\n"); return 1; }
+        RDG_genBuffer(buf, kTotal, 0.50, 0.0, 0);
+        printf("# hccont=RDG(n=65536 block=16384 mp=0.50 lp=0.00 seed=0) one buffer, 4 contiguous blocks; "
+               "LZ4_resetStreamHC(lv) + LZ4_compress_HC_continue per block (notLimited); "
+               "lv in {2,9,12} = mid/hc/opt on identical geometry; rolling decode at same offsets\n");
+        for (unsigned li = 0; li < 3; li++) {
+            LZ4_streamHC_t* ctx = LZ4_createStreamHC();
+            LZ4_streamDecode_t* sd = LZ4_createStreamDecode();
+            if (!ctx || !sd) { fprintf(stderr, "hccont: alloc failed\n"); return 1; }
+            LZ4_resetStreamHC(ctx, kLv[li]);
+            for (unsigned k = 0; k < 4; k++) {
+                const unsigned char* slice = buf + (size_t)k * kBlock;
+                int c = LZ4_compress_HC_continue(ctx, (const char*)slice, (char*)out,
+                                                 (int)kBlock, bound);
+                if (c <= 0) { fprintf(stderr, "hccont: compress failed lv=%d k=%u\n", kLv[li], k); return 1; }
+                int r = LZ4_decompress_safe_continue(sd, (const char*)out,
+                                                     (char*)(dst + (size_t)k * kBlock),
+                                                     c, (int)kBlock);
+                if (r != (int)kBlock || memcmp(dst + (size_t)k * kBlock, slice, kBlock) != 0) {
+                    fprintf(stderr, "hccont: rolling decode mismatch lv=%d k=%u\n", kLv[li], k);
+                    return 1;
+                }
+                printf("n=%zu mp=0.50 seed=0 mode=hccont seq=%u lv=%d size=%d "
+                       "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+                       kBlock, k, kLv[li], c,
+                       XXH32(out, (size_t)c, 0), (unsigned long long)XXH64(out, (size_t)c, 0),
+                       XXH32(slice, kBlock, 0), (unsigned long long)XXH64(slice, kBlock, 0));
+                writeArtifact(out, c, idx);
+                printf("\n");
+                idx++;
+            }
+            LZ4_freeStreamHC(ctx);
+            LZ4_freeStreamDecode(sd);
+        }
+        free(buf); free(dst); free(out);
+    }
+    /* hcsavedict rows (M4 Task 5): 3 blocks of 16384 bytes in SEPARATE
+       buffers (slices of one RDG(49152, mp=0.50, seed=905) generation,
+       copied into per-block allocations so every block breaks contiguity),
+       with LZ4_saveDictHC(ctx, safe, 8192) after seq=0 and seq=1: the
+       history is relocated into safeBuffer and the following block
+       compresses against it as extDict (setExternalDict handover). lv=9.
+       The decoder never sees the relocation (identical content), so the
+       rolling LZ4_decompress_safe_continue check works with the linear
+       layout. Hard check C-side: saveDictHC returns 8192 each time. */
+    {
+        const size_t kBlock = 16384;
+        const size_t kSave = 8192;
+        unsigned char* src = (unsigned char*)malloc(3 * kBlock);
+        unsigned char* dst = (unsigned char*)malloc(3 * kBlock);
+        unsigned char* safe = (unsigned char*)malloc(kSave);
+        int bound = LZ4_compressBound((int)kBlock);
+        unsigned char* out = (unsigned char*)malloc((size_t)bound);
+        if (!src || !dst || !safe || !out) { fprintf(stderr, "oom\n"); return 1; }
+        RDG_genBuffer(src, 3 * kBlock, 0.50, 0.0, 905);
+        printf("# hcsavedict=RDG(n=49152 block=16384 mp=0.50 lp=0.00 seed=905) slices copied into "
+               "3 separate buffers; LZ4_saveDictHC(safe,8192) after seq=0/1 relocates the dictionary "
+               "(extDict migration path); lv=9\n");
+        LZ4_streamHC_t* ctx = LZ4_createStreamHC();
+        LZ4_streamDecode_t* sd = LZ4_createStreamDecode();
+        if (!ctx || !sd) { fprintf(stderr, "hcsavedict: alloc failed\n"); return 1; }
+        LZ4_resetStreamHC(ctx, 9);
+        for (unsigned k = 0; k < 3; k++) {
+            unsigned char* block = (unsigned char*)malloc(kBlock);
+            if (!block) { fprintf(stderr, "oom\n"); return 1; }
+            memcpy(block, src + (size_t)k * kBlock, kBlock);
+            int c = LZ4_compress_HC_continue(ctx, (const char*)block, (char*)out,
+                                             (int)kBlock, bound);
+            if (c <= 0) { fprintf(stderr, "hcsavedict: compress failed k=%u\n", k); return 1; }
+            int r = LZ4_decompress_safe_continue(sd, (const char*)out,
+                                                 (char*)(dst + (size_t)k * kBlock),
+                                                 c, (int)kBlock);
+            if (r != (int)kBlock || memcmp(dst + (size_t)k * kBlock, block, kBlock) != 0) {
+                fprintf(stderr, "hcsavedict: rolling decode mismatch k=%u\n", k);
+                return 1;
+            }
+            printf("n=%zu mp=0.50 seed=905 mode=hcsavedict seq=%u lv=9 size=%d "
+                   "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+                   kBlock, k, c,
+                   XXH32(out, (size_t)c, 0), (unsigned long long)XXH64(out, (size_t)c, 0),
+                   XXH32(block, kBlock, 0), (unsigned long long)XXH64(block, kBlock, 0));
+            writeArtifact(out, c, idx);
+            printf("\n");
+            idx++;
+            if (k < 2) {
+                int s = LZ4_saveDictHC(ctx, (char*)safe, (int)kSave);
+                if (s != (int)kSave) {
+                    fprintf(stderr, "hcsavedict: saveDictHC returned %d after seq=%u\n", s, k);
+                    return 1;
+                }
+            }
+            free(block);
+        }
+        LZ4_freeStreamHC(ctx);
+        LZ4_freeStreamDecode(sd);
+        free(src); free(dst); free(safe); free(out);
+    }
+    /* hcdict rows (M4 Task 5): per row a fresh stream LZ4_resetStreamHC(lv)
+       + LZ4_loadDictHC(dict, 65536) + LZ4_compress_HC_continue over a first
+       16384-byte block in a separate buffer. dict = RDG(65536, mp=0.50,
+       seed=99) (M3 provenance); block = RDG(16384, mp=0.50, seed=99) = the
+       dict's own first 16384 bytes (RDG is a streaming generator, real
+       shared content at every alignment). lv in {2,9,12} runs the extDict
+       path on the three table fills (Insert(end-3) / LZ4MID_fillHTable /
+       opt). dd=131072 row (lv=9): a 131072-byte dictionary buffer
+       RDG(131072, mp=0.50, seed=99); loadDictHC clamps to the LAST 64KB
+       (returns 65536) - dd= records the original buffer size. Hard checks:
+       loadDictHC return; usingDict decode against the effective 64KB dict
+       slice. */
+    {
+        const size_t dictSize = 64 * 1024;
+        const size_t kBlock = 16384;
+        unsigned char* dictBuf = (unsigned char*)malloc(dictSize);
+        unsigned char* bigDict = (unsigned char*)malloc(2 * dictSize);
+        if (!dictBuf || !bigDict) { fprintf(stderr, "oom\n"); return 1; }
+        RDG_genBuffer(dictBuf, dictSize, 0.5, 0.0, 99);
+        RDG_genBuffer(bigDict, 2 * dictSize, 0.5, 0.0, 99);
+        printf("# hcdict=dict=RDG(n=65536 mp=0.50 lp=0.00 seed=99) xxh32=%08x xxh64=%016llx via "
+               "LZ4_loadDictHC + first block RDG(n=16384 mp=0.50 lp=0.00 seed=99) = the dict's own "
+               "prefix (separate buffer); lv in {2,9,12}; dd=131072 row pins the >64KB tail clamp "
+               "(effective dict = last 65536 bytes of RDG(n=131072 mp=0.50 lp=0.00 seed=99))\n",
+               XXH32(dictBuf, dictSize, 0), (unsigned long long)XXH64(dictBuf, dictSize, 0));
+        static const int kLv[4] = { 2, 9, 12, 9 };
+        static const size_t kDD[4] = { 65536, 65536, 65536, 131072 };
+        for (unsigned ri = 0; ri < 4; ri++) {
+            /* loadDictHC input window = the full dd bytes: dictBuf for the
+               64KB rows, the whole 131072-byte bigDict for the clamp row so
+               the >64KB tail clamp lands on the REAL last 64KB
+               [bigDict+64KB, bigDict+128KB). (Passing bigDict+64KB with
+               dd=131072 would push the clamped window 64KB past bigDict's
+               end - an out-of-bounds heap read whose garbage window happened
+               to yield no matches; the golden row would then depend on
+               allocator layout instead of the intended clamp semantics.)
+               Decode uses the effective window either way. */
+            const unsigned char* dict = (kDD[ri] == dictSize) ? dictBuf : bigDict;
+            const unsigned char* decDict = (kDD[ri] == dictSize) ? dictBuf : (bigDict + dictSize);
+            unsigned char* buf = (unsigned char*)malloc(kBlock);
+            unsigned char* dstb = (unsigned char*)malloc(kBlock);
+            int bound = LZ4_compressBound((int)kBlock);
+            unsigned char* out = (unsigned char*)malloc((size_t)bound);
+            if (!buf || !dstb || !out) { fprintf(stderr, "oom\n"); return 1; }
+            RDG_genBuffer(buf, kBlock, 0.50, 0.0, 99);
+            LZ4_streamHC_t* ctx = LZ4_createStreamHC();
+            if (!ctx) { fprintf(stderr, "hcdict: alloc failed\n"); return 1; }
+            LZ4_resetStreamHC(ctx, kLv[ri]);
+            int ld = LZ4_loadDictHC(ctx, (const char*)dict, (int)kDD[ri]);
+            if (ld != (int)dictSize) {
+                fprintf(stderr, "hcdict: loadDictHC returned %d (dd=%zu)\n", ld, kDD[ri]);
+                return 1;
+            }
+            int c = LZ4_compress_HC_continue(ctx, (const char*)buf, (char*)out,
+                                             (int)kBlock, bound);
+            if (c <= 0) { fprintf(stderr, "hcdict: compress failed lv=%d\n", kLv[ri]); return 1; }
+            int r = LZ4_decompress_safe_usingDict((const char*)out, (char*)dstb, c, (int)kBlock,
+                                                  (const char*)decDict, (int)dictSize);
+            if (r != (int)kBlock || memcmp(dstb, buf, kBlock) != 0) {
+                fprintf(stderr, "hcdict: usingDict decode failed lv=%d dd=%zu\n", kLv[ri], kDD[ri]);
+                return 1;
+            }
+            printf("n=%zu mp=0.50 seed=99 mode=hcdict lv=%d dd=%zu size=%d "
+                   "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+                   kBlock, kLv[ri], kDD[ri], c,
+                   XXH32(out, (size_t)c, 0), (unsigned long long)XXH64(out, (size_t)c, 0),
+                   XXH32(buf, kBlock, 0), (unsigned long long)XXH64(buf, kBlock, 0));
+            writeArtifact(out, c, idx);
+            printf("\n");
+            idx++;
+            LZ4_freeStreamHC(ctx);
+            free(buf); free(dstb); free(out);
+        }
+        free(dictBuf); free(bigDict);
+    }
+    /* hcattach + hcdestcont rows (M4 Task 5): attach = per row a dictionary
+       stream (LZ4_resetStreamHC(dlv) + LZ4_loadDictHC(dict RDG(65536,
+       mp=0.50, seed=99))) + a fresh working stream (LZ4_resetStreamHC(lv))
+       + LZ4_attach_HC_dictionary(work, dict) + LZ4_compress_HC_continue on
+       the working stream; block = RDG(n, mp=0.50, seed=99) = the dict's own
+       prefix. position==0 (fresh working state): 8192/lv9 (srcSize>4096,
+       states compatible) takes the whole-state-copy path (dictCtx detached,
+       deep table copy, setExternalDict) while 4096/lv9 consults
+       (usingDictCtxHc, working table stays empty) and 8192 with dict lv=9
+       vs working lv=2 is incompatible (mid vs hash-chain table layouts) so
+       it consults too - exercising LZ4MID's searchHCDict against the
+       hash-chain dict stream. destcont = lv=9 over 2 contiguous 16384
+       blocks of one RDG(32768, mp=0.50, seed=906) buffer via
+       LZ4_compress_HC_continue_destSize with tg = 16384*3/4 = 12288;
+       consumed= pins *srcSizePtr. Hard checks: usingDict decode (attach),
+       decode == src[0..consumed) (destcont). */
+    {
+        const size_t dictSize = 64 * 1024;
+        unsigned char* dictBuf = (unsigned char*)malloc(dictSize);
+        if (!dictBuf) { fprintf(stderr, "oom\n"); return 1; }
+        RDG_genBuffer(dictBuf, dictSize, 0.5, 0.0, 99);
+        printf("# hcattach=dict=RDG(n=65536 mp=0.50 lp=0.00 seed=99) xxh32=%08x xxh64=%016llx on a "
+               "dictionary stream (resetStreamHC(dlv) + LZ4_loadDictHC); fresh working stream + "
+               "LZ4_attach_HC_dictionary + LZ4_compress_HC_continue(block=RDG(mp=0.50 lp=0.00 seed=99) "
+               "= the dict's own prefix): 8192/lv9 whole-state copy, 4096/lv9 consult, 8192 lv9-dict "
+               "vs lv2-work incompatible consult. hcdestcont=RDG(n=32768 block=16384 mp=0.50 lp=0.00 "
+               "seed=906) lv=9 2 contiguous blocks via LZ4_compress_HC_continue_destSize tg=12288\n",
+               XXH32(dictBuf, dictSize, 0), (unsigned long long)XXH64(dictBuf, dictSize, 0));
+        static const struct { size_t n; int lv; int dlv; } kAt[3] = {
+            { 8192, 9, 9 }, { 4096, 9, 9 }, { 8192, 2, 9 },
+        };
+        for (unsigned ri = 0; ri < 3; ri++) {
+            size_t n = kAt[ri].n;
+            unsigned char* buf = (unsigned char*)malloc(n);
+            unsigned char* dstb = (unsigned char*)malloc(n);
+            int bound = LZ4_compressBound((int)n);
+            unsigned char* out = (unsigned char*)malloc((size_t)bound);
+            if (!buf || !dstb || !out) { fprintf(stderr, "oom\n"); return 1; }
+            RDG_genBuffer(buf, n, 0.50, 0.0, 99);
+            LZ4_streamHC_t* dstream = LZ4_createStreamHC();
+            LZ4_streamHC_t* wstream = LZ4_createStreamHC();
+            if (!dstream || !wstream) { fprintf(stderr, "hcattach: alloc failed\n"); return 1; }
+            LZ4_resetStreamHC(dstream, kAt[ri].dlv);
+            if (LZ4_loadDictHC(dstream, (const char*)dictBuf, (int)dictSize) != (int)dictSize) {
+                fprintf(stderr, "hcattach: loadDictHC failed\n");
+                return 1;
+            }
+            LZ4_resetStreamHC(wstream, kAt[ri].lv);
+            LZ4_attach_HC_dictionary(wstream, dstream);
+            int c = LZ4_compress_HC_continue(wstream, (const char*)buf, (char*)out,
+                                             (int)n, bound);
+            if (c <= 0) { fprintf(stderr, "hcattach: compress failed n=%zu lv=%d\n", n, kAt[ri].lv); return 1; }
+            int r = LZ4_decompress_safe_usingDict((const char*)out, (char*)dstb, c, (int)n,
+                                                  (const char*)dictBuf, (int)dictSize);
+            if (r != (int)n || memcmp(dstb, buf, n) != 0) {
+                fprintf(stderr, "hcattach: usingDict decode failed n=%zu lv=%d\n", n, kAt[ri].lv);
+                return 1;
+            }
+            printf("n=%zu mp=0.50 seed=99 mode=hcattach lv=%d dlv=%d size=%d "
+                   "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+                   n, kAt[ri].lv, kAt[ri].dlv, c,
+                   XXH32(out, (size_t)c, 0), (unsigned long long)XXH64(out, (size_t)c, 0),
+                   XXH32(buf, n, 0), (unsigned long long)XXH64(buf, n, 0));
+            writeArtifact(out, c, idx);
+            printf("\n");
+            idx++;
+            LZ4_freeStreamHC(dstream);
+            LZ4_freeStreamHC(wstream);
+            free(buf); free(dstb); free(out);
+        }
+        /* hcdestcont: 2 contiguous blocks, fillOutput continue. The two blocks
+           share one RDG-generated buffer, so block 1's compressed stream may
+           reference block 0's bytes (it does — block 1's first offset is
+           14904). Standalone safe decode of block 1 fails. Decode block 0
+           standalone, then decode block 1 with the just-decoded block 0 as
+           extDict via LZ4_decompress_safe_usingDict (whose forceExtDict path
+           validates offsets against prefixSize + dictSize, i.e. up to 16384
+           at the start of block 1 and growing thereafter). */
+        {
+            const size_t kBlock = 16384;
+            const int tg = (int)(kBlock * 3 / 4);
+            unsigned char* buf = (unsigned char*)malloc(2 * kBlock);
+            unsigned char* dstb = (unsigned char*)malloc(2 * kBlock);
+            int bound = LZ4_compressBound((int)kBlock);
+            unsigned char* out = (unsigned char*)malloc((size_t)(tg > bound ? tg : bound));
+            if (!buf || !dstb || !out) { fprintf(stderr, "oom\n"); return 1; }
+            RDG_genBuffer(buf, 2 * kBlock, 0.50, 0.0, 906);
+            LZ4_streamHC_t* ctx = LZ4_createStreamHC();
+            if (!ctx) { fprintf(stderr, "hcdestcont: alloc failed\n"); return 1; }
+            LZ4_resetStreamHC(ctx, 9);
+            for (unsigned k = 0; k < 2; k++) {
+                const unsigned char* slice = buf + (size_t)k * kBlock;
+                int srcSize = (int)kBlock;
+                int c = LZ4_compress_HC_continue_destSize(ctx, (const char*)slice, (char*)out,
+                                                          &srcSize, tg);
+                if (c <= 0 || c > tg || srcSize < 0 || (size_t)srcSize > kBlock) {
+                    fprintf(stderr, "hcdestcont: out of contract k=%u (c=%d srcSize=%d)\n", k, c, srcSize);
+                    return 1;
+                }
+                int r;
+                if (k == 0) {
+                    r = LZ4_decompress_safe((const char*)out,
+                                            (char*)(dstb),
+                                            c, srcSize);
+                } else {
+                    /* block 1 references block 0; decode with block 0 as
+                       extDict via usingDict (forceExtDict path) */
+                    r = LZ4_decompress_safe_usingDict((const char*)out,
+                                                      (char*)(dstb + kBlock),
+                                                      c, srcSize,
+                                                      (const char*)(dstb),
+                                                      (int)kBlock);
+                }
+                if (r != srcSize ||
+                    memcmp(dstb + (size_t)k * kBlock, slice, (size_t)srcSize) != 0) {
+                    fprintf(stderr, "hcdestcont: decode check failed k=%u (r=%d srcSize=%d)\n",
+                            k, r, srcSize);
+                    return 1;
+                }
+                printf("n=%zu mp=0.50 seed=906 mode=hcdestcont seq=%u lv=9 tg=%d size=%d consumed=%d "
+                       "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+                       kBlock, k, tg, c, srcSize,
+                       XXH32(out, (size_t)c, 0), (unsigned long long)XXH64(out, (size_t)c, 0),
+                       XXH32(slice, kBlock, 0), (unsigned long long)XXH64(slice, kBlock, 0));
+                writeArtifact(out, c, idx);
+                printf("\n");
+                idx++;
+            }
+            LZ4_freeStreamHC(ctx);
+            free(buf); free(dstb); free(out);
+        }
+        free(dictBuf);
     }
     fprintf(stderr, "cases=%d\n", idx);
     return 0;

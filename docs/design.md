@@ -156,7 +156,7 @@ C 中"用户提供裸缓冲当状态"的 API(`LZ4_compress_fast_extState(void* s
 **HC(`lz4hc.h`,非弃用全量)**:
 
 - `LZ4_compress_HC`、`LZ4_compress_HC_extStateHC`、`LZ4_compress_HC_extStateHC_fastReset`、`LZ4_compress_HC_destSize`、`LZ4_sizeofStateHC`
-- 流式:`LZ4_createStreamHC`、`LZ4_freeStreamHC`、`LZ4_initStreamHC`、`LZ4_resetStreamHC`、`LZ4_resetStreamHC_fast`、`LZ4_loadDictHC`、`LZ4_compress_HC_continue`、`LZ4_saveDictHC`、`LZ4_attach_HC_dictionary`、`LZ4_setCompressionLevel`、`LZ4_favorDecompressionSpeed`
+- 流式:`LZ4_createStreamHC`、`LZ4_freeStreamHC`、`LZ4_initStreamHC`、`LZ4_resetStreamHC`、`LZ4_resetStreamHC_fast`、`LZ4_loadDictHC`、`LZ4_compress_HC_continue`、`LZ4_compress_HC_continue_destSize`、`LZ4_saveDictHC`、`LZ4_attach_HC_dictionary`、`LZ4_setCompressionLevel`、`LZ4_favorDecompressionSpeed`
 - 常量:`LZ4HC_CLEVEL_MIN(2)`、`LZ4HC_CLEVEL_MAX(12)`、`LZ4HC_CLEVEL_DEFAULT`、`LZ4HC_CLEVEL_OPT_MIN`
 
 **frame(`lz4frame.h`)**:

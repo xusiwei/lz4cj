@@ -31,13 +31,21 @@ scripts/gen_golden | tee corpus/block_golden_ref.txt
 #           mid row (M4 Task 3: lv=2 x A)
 #         + 14 hc optimal rows (M4 Task 4: lv10-12 x A/B + lv12 x C..G +
 #           3 fav=1 rows) + 2 hcdest opt rows (M4 Task 4: lv=10/12 x A)
-# = 402 data rows, plus 13 '#' provenance comments
+#         + 12 hccont rows (M4 Task 5: 4 contiguous blocks x lv {2,9,12})
+#         + 3 hcsavedict rows (M4 Task 5: 3 blocks with saveDictHC between)
+#         + 4 hcdict rows (M4 Task 5: loadDictHC at lv {2,9,12} + dd=131072 clamp)
+#         + 3 hcattach rows (M4 Task 5: 8192/lv9 copy + 4096/lv9 consult +
+#           8192 lv9-dict vs lv2-work incompatible consult)
+#         + 2 hcdestcont rows (M4 Task 5: lv9 2 contiguous blocks via
+#           LZ4_compress_HC_continue_destSize tg=12288)
+# = 426 data rows, plus 17 '#' provenance comments
 #   (dict / stream / ring / setdict + cont / savedict / dictfast /
-#    dictslow / attach / extdict / destext + hc / hcdest sections)
-[ "$(wc -l < corpus/block_golden_ref.txt)" -eq 415 ] \
-    || { echo "ERROR: expected 415 golden lines (402 rows + 13 comments)" >&2; exit 1; }
-[ "$(grep -c '^#' corpus/block_golden_ref.txt)" -eq 13 ] \
-    || { echo "ERROR: expected exactly 13 comment lines" >&2; exit 1; }
+#    dictslow / attach / extdict / destext + hc / hcdest +
+#    hccont / hcsavedict / hcdict / hcattach / hcdestcont sections)
+[ "$(wc -l < corpus/block_golden_ref.txt)" -eq 443 ] \
+    || { echo "ERROR: expected 443 golden lines (426 rows + 17 comments)" >&2; exit 1; }
+[ "$(grep -c '^#' corpus/block_golden_ref.txt)" -eq 17 ] \
+    || { echo "ERROR: expected exactly 17 comment lines" >&2; exit 1; }
 [ "$(grep -c 'mode=fastreset' corpus/block_golden_ref.txt)" -eq 10 ] \
     || { echo "ERROR: expected 10 fastreset rows" >&2; exit 1; }
 [ "$(grep -c 'mode=cont seq=' corpus/block_golden_ref.txt)" -eq 7 ] \
@@ -58,5 +66,15 @@ scripts/gen_golden | tee corpus/block_golden_ref.txt
     || { echo "ERROR: expected 6 destext rows" >&2; exit 1; }
 [ "$(grep -c 'mode=hc ' corpus/block_golden_ref.txt)" -eq 42 ] \
     || { echo "ERROR: expected 42 hc rows" >&2; exit 1; }
-[ "$(grep -c 'mode=hcdest' corpus/block_golden_ref.txt)" -eq 4 ] \
+[ "$(grep -cE 'mode=hcdest[^a-z]' corpus/block_golden_ref.txt)" -eq 4 ] \
     || { echo "ERROR: expected 4 hcdest rows" >&2; exit 1; }
+[ "$(grep -c 'mode=hccont seq=' corpus/block_golden_ref.txt)" -eq 12 ] \
+    || { echo "ERROR: expected 12 hccont rows" >&2; exit 1; }
+[ "$(grep -c 'mode=hcsavedict seq=' corpus/block_golden_ref.txt)" -eq 3 ] \
+    || { echo "ERROR: expected 3 hcsavedict rows" >&2; exit 1; }
+[ "$(grep -c 'mode=hcdict lv=' corpus/block_golden_ref.txt)" -eq 4 ] \
+    || { echo "ERROR: expected 4 hcdict rows" >&2; exit 1; }
+[ "$(grep -c 'mode=hcattach lv=' corpus/block_golden_ref.txt)" -eq 3 ] \
+    || { echo "ERROR: expected 3 hcattach rows" >&2; exit 1; }
+[ "$(grep -c 'mode=hcdestcont seq=' corpus/block_golden_ref.txt)" -eq 2 ] \
+    || { echo "ERROR: expected 2 hcdestcont rows" >&2; exit 1; }
