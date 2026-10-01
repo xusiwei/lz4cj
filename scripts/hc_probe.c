@@ -4,14 +4,17 @@
    LZ4_loadDictHC / LZ4_saveDictHC / LZ4_resetStreamHC_fast edge cases.
    Buffer construction must match the Cangjie test byte-for-byte (RDG via
    upstream tests/datagen.c). Expected values: see the per-case asserts in
-   lz4hcStreamEdgeTest (tight-continue 0 + dirty + resetFast recovery ==
-   fresh stream; level switch 9->2 mid-stream on the inherited hash-chain
-   state; resetStreamHC_fast mid-stream dictLimit shift then continue ==
-    fresh stream; overlap-shrink branch when the post-loadDict block lives
-    inside the dictionary buffer; dictCtx prefix aliasing when the extDict
-    buffer D doubles as the attached dictCtx's prefix while src sits in a
-    separate buffer and continues contiguously — provenance of
-    lz4hcDictCtxPrefixAliasTest).
+     lz4hcStreamEdgeTest (tight-continue 0 + dirty + resetFast recovery ==
+     fresh stream; level switch 9->2 mid-stream on the inherited hash-chain
+     state; resetStreamHC_fast mid-stream dictLimit shift then continue ==
+     fresh stream; overlap-shrink branch when the post-loadDict block lives
+     inside the dictionary buffer; dictCtx prefix aliasing when the extDict
+     buffer D doubles as the attached dictCtx's prefix while src sits in a
+     separate buffer and continues contiguously — provenance of
+     lz4hcDictCtxPrefixAliasTest; MID+MID dictCtx consult via
+     LZ4MID_searchExtDict on a <=4KB block — provenance of
+     lz4hcMidDictCtxConsultTest; dict-buffer-as-block pbufSameAsSrc
+     aliasing under the whole-state takeover — same test).
    Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs \
           scripts/hc_probe.c $HOME/lz4/tests/datagen.c $HOME/lz4/lib/lz4.c \
           $HOME/lz4/lib/lz4hc.c $HOME/lz4/lib/xxhash.c -o scripts/hc_probe
@@ -201,6 +204,64 @@ int main(void) {
                preAttachCtxNull, dictCtxCleared, ok);
         LZ4_freeStreamHC(w); LZ4_freeStreamHC(d); LZ4_freeStreamDecode(sd);
         free(D); free(B); free(o1); free(o2); free(dst);
+    }
+    /* 6) MID+MID dictCtx consult: both streams at level 2, block <= 4KB so
+        upstream stays on the consult path (position==0 && srcSize<=4KB
+        skips the whole-state takeover), and the mid strategy consults the
+        dict stream via LZ4MID_searchExtDict (hash8 then hash4 lookups
+        inside the dict stream's prefix). B regenerates the 2048-byte
+        prefix of D's RDG stream (same seed) so dict-side candidates exist.
+        Decode closes via decompress_safe_usingDict; position stays < 64KB
+        so dictCtx survives the call. */
+    {
+        unsigned char* D = mkbuf(65536, 0.5, 909);
+        unsigned char* B = mkbuf(2048, 0.5, 909);  /* same seed -> B == D[0..2048) */
+        unsigned char* out = (unsigned char*)malloc(LZ4_compressBound(2048));
+        unsigned char* dst = (unsigned char*)malloc(2048);
+        LZ4_streamHC_t* w = LZ4_createStreamHC();
+        LZ4_streamHC_t* d = LZ4_createStreamHC();
+        LZ4_resetStreamHC(w, 2);
+        LZ4_resetStreamHC(d, 2);
+        int ld = LZ4_loadDictHC(d, (const char*)D, 65536);
+        LZ4_attach_HC_dictionary(w, d);
+        int c = LZ4_compress_HC_continue(w, (const char*)B, (char*)out, 2048,
+                                         LZ4_compressBound(2048));
+        int ctxKept = (w->internal_donotuse.dictCtx != NULL);
+        int r = LZ4_decompress_safe_usingDict((const char*)out, (char*)dst, c, 2048,
+                                              (const char*)D, 65536);
+        int ok = (r == 2048) && (memcmp(dst, B, 2048) == 0);
+        printf("hc-mid-consult: ld=%d c=%d xxh32=%08x xxh64=%016llx ctxKept=%d decode-ok=%d\n",
+               ld, c, XXH32(out, (size_t)c, 0),
+               (unsigned long long)XXH64(out, (size_t)c, 0), ctxKept, ok);
+        LZ4_freeStreamHC(w); LZ4_freeStreamHC(d);
+        free(D); free(B); free(out); free(dst);
+    }
+    /* 7) compress the dict buffer ITSELF as the working block after
+        attach: source == dictCtx->prefixStart aliases the dict stream's
+        prefix buffer (port: pbufSameAsSrc sentinel branch), and with
+        srcSize > 4KB upstream takes the whole-state takeover
+        (memcpy dictCtx state + setExternalDict(src) -> dictCtx cleared).
+        Decode closes via usingDict with the same D (content-identical
+        history). */
+    {
+        unsigned char* D3 = mkbuf(65536, 0.5, 911);
+        unsigned char* o3 = (unsigned char*)malloc(bound);
+        unsigned char* dst3 = (unsigned char*)malloc(16384);
+        LZ4_streamHC_t* w3 = LZ4_createStreamHC();
+        LZ4_streamHC_t* d3 = LZ4_createStreamHC();
+        LZ4_resetStreamHC(w3, 9);
+        LZ4_resetStreamHC(d3, 9);
+        int ld3 = LZ4_loadDictHC(d3, (const char*)D3, 65536);
+        LZ4_attach_HC_dictionary(w3, d3);
+        int c3 = LZ4_compress_HC_continue(w3, (const char*)D3, (char*)o3, 16384, bound);
+        int ctxKept3 = (w3->internal_donotuse.dictCtx != NULL);
+        int r3 = LZ4_decompress_safe_usingDict((const char*)o3, (char*)dst3, c3, 16384,
+                                               (const char*)D3, 65536);
+        int ok3 = (r3 == 16384) && (memcmp(dst3, D3, 16384) == 0);
+        printf("hc-dict-as-block: ld3=%d c3=%d xxh3=%08x ctxKept=%d decode-ok=%d\n",
+               ld3, c3, XXH32(o3, (size_t)c3, 0), ctxKept3, ok3);
+        LZ4_freeStreamHC(w3); LZ4_freeStreamHC(d3);
+        free(D3); free(o3); free(dst3);
     }
     return 0;
 }

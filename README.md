@@ -15,7 +15,7 @@ scripts/build_and_test.sh both # 双工具链构建 + 全量测试
 
 ## 测试
 
-共 57 项测试:版本与 compressBound、流状态、XXH32/XXH64(官方向量 + 流式)、datagen(C 交叉验证)、一站式块压缩 golden(256 行清单 + 125 行对抗性 destSize 用例,字节级精确比对)、块解压全家族 golden(清单 v2 共 300 行:解压 artifact 逐字节 + partial 探针 + dict/stream/ring/setdict 滚动解码)、safe/fast 差分(随机 + 合成流 + 损坏输入)、extDict 跨界拷贝对抗用例、模糊测试(2000 解压种子 + 200 流式种子;`LZ4_SKIP_PERF=1` 可跳过性能冒烟)、流式压缩 golden 46 行(cont/savedict/dictfast/dictslow/attach/extdict/destext,清单扩至 356 行)+ 闭环滚动往返 + 边界契约。
+共 93 项测试:版本与 compressBound、流状态、XXH32/XXH64(官方向量 + 流式)、datagen(C 交叉验证)、一站式块压缩 golden(256 行清单 + 125 行对抗性 destSize 用例,字节级精确比对)、块解压全家族 golden(清单 v2 共 300 行:解压 artifact 逐字节 + partial 探针 + dict/stream/ring/setdict 滚动解码)、safe/fast 差分(随机 + 合成流 + 损坏输入)、extDict 跨界拷贝对抗用例、流式压缩 golden 46 行(cont/savedict/dictfast/dictslow/attach/extdict/destext)、HC 高压缩 golden 70 行(levels 1-12 全采样三策略 + destSize + 流式 continue/saveDict/loadDict/attach,清单共 426 数据行)、模糊测试(2000 解压种子 + 200 流式种子 + 300 HC 压缩种子:分层 mid/hashchain/opt 各 100,one-shot 往返 + 确定性 + 不足容量 + 流式迁移 + 滚动解码闭环;`LZ4_SKIP_PERF=1` 可跳过性能冒烟)+ 闭环滚动往返 + 边界契约。
 
 ## 当前进度
 
@@ -24,11 +24,12 @@ scripts/build_and_test.sh both # 双工具链构建 + 全量测试
 - **M2(完成)**:一站式块压缩(`LZ4_compress_default` / `fast` / `fast_extState`(+fastReset)/ `destSize`)+ `compressBound` 与流状态;256 行 golden + 125 行对抗性 destSize 用例,C 交叉字节级验证。
 - **M3a(完成)**:块解压全家族(`LZ4_decompress_safe` / `safe_partial` / `safe_usingDict` / `safe_partial_usingDict` / `safe_continue` + 流式解码状态与 ring 尺寸契约);300 行 golden、safe/fast 双循环差分、2000+200 种子模糊测试;库源码行覆盖 98.4%。
 - **M3b(完成)**:流式压缩全家(`createStream` / `freeStream` / `resetStream(+fast)` / `loadDict(+Slow)` / `attach_dictionary` / `compress_fast_continue` / `saveDict` / `destSize_extState`),真实 `prepareTable` 表保留语义,四字典模式压缩核心;golden 扩至 356 行(46 行新增逐字节)、闭环滚动往返、边界契约 C 探针钉值;库源码行覆盖 96.8%。**block 层(lz4.c 非弃用 API 全量)就此闭环**。
-- **M4(下一步)**:HC 高压缩(lz4hc.c,级别 1-12 + 最优解析 + 流式)。
+- **M4(完成)**:HC 高压缩全量(lz4hc.c 非弃用 17 函数):三策略核心 LZ4MID(lv1-2)/ hashChain(lv3-9)/ optimal(lv10-12)+ `favorDecompressionSpeed`,one-shot / extState(+fastReset)/ destSize / 流式 `loadDictHC` / `attach` / `continue(+destSize)` / `saveDictHC`;golden 扩至 426 数据行(70 行新增,levels 1-12 全采样逐字节)、C 探针 7 案例钉值、300 种子 HC 模糊测试(分层 100/100/100);库源码行覆盖 96.6%。**HC 层(lz4hc.c 非弃用 API 全量)就此闭环**。
+- **M5(下一步)**:Frame 压缩(lz4frame.c:cctx 状态机、compressFrame、Begin/Update/Flush/End)。
 
 **移植基线**:上游 dev commit `0774d055`(2026-06-01,v1.10.0 发布线之上的官方修复线)。压缩输出与 v1.10.0 发布版逐字节一致(300 行 golden 双 ref 重验零差异);解压包含其后官方 OOB/边界修复,损坏输入行为更严格;详见 [docs/design.md](docs/design.md) 与 [docs/progress.md](docs/progress.md)。
 
-一站式块压缩、块解压与流式压缩(字典/续压/attach)API 均已对外提供;HC 与 frame 接口在后续里程碑提供,路线图见 [docs/design.md](docs/design.md)。
+一站式块压缩、块解压、流式压缩(字典/续压/attach)与 HC 高压缩(级别 1-12、最优解析、HC 流式字典)API 均已对外提供;frame 接口在后续里程碑提供,路线图见 [docs/design.md](docs/design.md)。
 
 ## 变更记录
 

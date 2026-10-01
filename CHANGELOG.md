@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0 (M4)
+
+- HC 高压缩全量 API(lz4hc.c 非弃用 17 函数 + 常量族):one-shot `LZ4_compress_HC` / `LZ4_compress_HC_extStateHC`(+`_fastReset`)/ `LZ4_compress_HC_destSize`(元组返回)、状态族 `LZ4_createStreamHC` / `LZ4_freeStreamHC` / `LZ4_initStreamHC` / `LZ4_resetStreamHC`(+`_fast`)/ `LZ4_setCompressionLevel` / `LZ4_favorDecompressionSpeed` / `LZ4_sizeofStateHC`、流式 `LZ4_loadDictHC` / `LZ4_attach_HC_dictionary` / `LZ4_compress_HC_continue` / `LZ4_compress_HC_continue_destSize` / `LZ4_saveDictHC`,`LZ4HC_CLEVEL_{MIN,DEFAULT,OPT_MIN,MAX}` 常量族;弃用块(lz4hc.c L2196-2255)按范围裁定不移植
+- 三策略压缩核心(级别表 k_clTable 逐字段对齐):**LZ4MID**(lv1-2,hash4/hash8 双查 + ip+1 二次确认 + catch-back)、**hashChain**(lv3-9,InsertAndGetWiderMatch 链表搜索 + PA 优化 + chainSwap)、**optimal**(lv10-12,价格数组 DP + 回溯链改写 + favorDecompressionSpeed);MID 与 hashChain/optimal 间流式切换经 isStateCompatible 分派(不兼容整态丢弃重锚)
+- golden 验证(清单扩至 443 行,数据行 +70 → 426):hc one-shot 42(levels 1-12 全采样 × {one-shot, extState, fastReset} + favor 行 lv10-12,mp 0.0/0.5/0.9/1.0)+ hcdest 4 + hccont 12(lv2/9/12 × 4 块连续流)+ hcsavedict 3(独立块缓冲 + saveDictHC 迁移)+ hcdict 4(loadDictHC 三级别 + >64KB 截尾行)+ hcattach 3(整态拷贝 / dictCtx 咨询两路径)+ hcdestcont 2;全部与 corpus artifact 逐字节比对
+- 模糊测试(T6,`fuzzHcTest`):300 种子,level 分层 `FUZZ_HC_LEVELS[seed % 12]`(mid lv1-2 / hashChain lv3-9 / optimal lv10-12 恰各 100 ≥ 80,派生计数器断言);每种子 one-shot 往返 + fresh 态二次压缩逐字节确定 + 容量 c0-1 必失败(不足 ⟺ 0;字面 bound-1 仅在 c0==bound 时失败,故以实测 c0 构造)+ 流式 2-4 块随机边界(同缓冲连续 / 独立缓冲 + saveDictHC 迁移两变体,`LZ4_decompress_safe_continue` 滚动解码闭环)+ 每 2 种子全流重放逐字节 + 每 10 种子 destSize 抽查(size ≤ target、consumed ≤ n、前缀还原);favor 经流式路径覆盖(opt 流 52 次);opt 级输入钳制 ≤ 64KB(单次 + 流式)、mid/hashchain 保持 n ≤ 200000,新增 LTS 6.2s / STS 4.1s;LCG 低比特与 seed 奇偶锁定的相关性已用 bit8/bit12 抽样解除(favor/savedict 变体正交,覆盖率复核证实)
+- 边界裁定与修复(评审轮):row-420 hcdict 行 C harness >64KB 截尾几何修复(原值为堆垃圾偶然稳定,再生成后 6193/46ec7398);`LZ4HC_HASHSIZE=4` 守卫修复(overlap-shrink 与 loadDictHC Insert 原误用 HASHTABLESIZE 32768,丢弃 [4,32768) 存活字典);探针溯源入库:`scripts/hc_probe.c`(7 案例:紧容量/级别切换/resetFast/重叠收缩/dictCtx 前缀别名/MID+MID 咨询/字典缓冲即块源)+ `scripts/hc_dest_probe.c`(destSize 边界),全部对上游 0774d055 重编译验证
+- 补充用例:`lz4hcMidDictCtxConsultTest`(覆盖门禁驱动:≤4KB 块走 MID 咨询路径 `LZ4MID_searchExtDict`(hash8/hash4 字典内查找)+ 字典缓冲即块源的 pbufSameAsSrc 整态接管别名,双案例 C 探针钉值 c=1183/c3=4809 逐字节 + usingDict 闭环)
+- 覆盖率(cangjie-1.0.5,`cjpm test --coverage` + `cjcov --html-details`):总体行覆盖 96.6%(6611/6847);库源码 96.60%(2725/2821),其中 common/datagen/xxhash 100%、lz4.cj 95.5%(952/997,45 个未覆盖行同 M3b 归类不变)、lz4hc.cj 96.4%(1356/1407);lz4hc.cj 51 个未覆盖行归类:防御/契约外 9(公 API srcIdx/srcSize 守卫与 destSize 清洗早退、virgin-attach 的 noDict 回退族——上游为空态 takeover 语义未定义级,不复刻、哨兵 None 臂)、不可达-按上游保留 8(搜索 U32 下溢/距离超窗守卫、>2GB 溢出再锚定分支)、可达未测 34(opt _Search3 合并校正与缓冲不足出口 22 + countBack 回扩 + fillOutput 钳制 2 + optimal_t 改价 + overlap<4 丢弃)→ 台账登记 M7
+- 双工具链全绿:LTS-1.0.5 与 STS-1.2.0 各 93/93 测试通过
+
 ## 0.4.0 (M3b)
 
 - 流式压缩全家 API(设计 §4.5 流式压缩 10 函数全量 + 补记项):`LZ4_createStream` / `LZ4_freeStream` / `LZ4_resetStream` / `LZ4_resetStream_fast` / `LZ4_loadDict` / `LZ4_loadDictSlow` / `LZ4_attach_dictionary` / `LZ4_compress_fast_continue` / `LZ4_saveDict`,以及 M2 清单漏记、台账裁决纳入的 `LZ4_compress_destSize_extState`(元组返回);`LZ4_stream_t` 字典区以 (dictBuf/dictStartIdx/dictSize) 引用对落地(不拷贝,与 C 生命周期契约一致;saveDict 为唯一拷贝点),`LZ4_prepareTable` 真实表保留语义取代清表(fastReset 由此真实化)

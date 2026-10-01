@@ -2080,3 +2080,76 @@ func lz4hcDictCtxPrefixAliasTest(): Unit {
     LZ4_freeStreamDecode(sd)
     println("hc dictctx alias: dictBuf===prefixBuf!==srcBuf no-double-acquire pins verified")
 }
+
+// lz4hcMidDictCtxConsultTest: pins against upstream 0774d055 per
+// scripts/hc_probe.c cases 6-7 (M4 Task 6 coverage gate: the MID strategy's
+// dictCtx consult LZ4MID_searchExtDict and the dict-buffer-as-block
+// pbufSameAsSrc aliasing under the whole-state takeover were unexercised by
+// the golden suite). Probe stdout (upstream 0774d055):
+//   hc-mid-consult: ld=65536 c=1183 xxh32=cac47c28 xxh64=14821fc0141a171b ctxKept=1 decode-ok=1
+//   hc-dict-as-block: ld3=65536 c3=4809 xxh3=a72072b9 ctxKept=0 decode-ok=1
+// Case 6: both streams lv2 (mid strategy); block 2048 <= 4KB keeps upstream
+// on the consult path (position==0 && srcSize<=4KB skips the whole-state
+// takeover), so LZ4MID_compress reaches the dictCtx consult and
+// LZ4MID_searchExtDict (hash8 then hash4 lookups inside d's MID tables,
+// filled by loadDictHC's LZ4MID_fillHTable); B regenerates D's RDG prefix
+// (same seed) so dict-side candidates exist. Case 7: the working block IS
+// the dict buffer (srcBuf === dictCtx.prefixBuf) with srcSize > 4KB ->
+// whole-state takeover; the pbufSameAsSrc sentinel must derive dictCtxQ
+// from the already-held src allocation (no second acquire).
+@Test
+func lz4hcMidDictCtxConsultTest(): Unit {
+    // -- case 6: MID+MID consult (LZ4MID_searchExtDict) --
+    let D = Array<UInt8>(65536, {_ => 0u8})
+    RDG_genBuffer(D, 65536, 0.50, 0.0, 909u32)
+    let B = Array<UInt8>(2048, {_ => 0u8})
+    RDG_genBuffer(B, 2048, 0.50, 0.0, 909u32)   // same seed -> B == D[0..2048)
+    let w = LZ4_createStreamHC()
+    let d = LZ4_createStreamHC()
+    LZ4_resetStreamHC(w, 2)
+    LZ4_resetStreamHC(d, 2)
+    @Assert(LZ4_loadDictHC(d, D, 65536) == 65536)
+    LZ4_attach_HC_dictionary(w, d)
+    let bound6 = Int64(LZ4_compressBound(2048))
+    let out6 = Array<UInt8>(bound6, {_ => 0u8})
+    let c6 = LZ4_compress_HC_continue(w, B, 0, 2048, out6, Int32(bound6))
+    @Assert(c6 == 1183)
+    @Assert(XXH32(out6, Int64(c6), 0u32) == 0xcac47c28u32)
+    @Assert(XXH64(out6, Int64(c6), 0u64) == 0x14821fc0141a171bu64)
+    // position 0 + prefix 2048 < 64KB -> consult keeps dictCtx (ctxKept=1)
+    @Assert(w.dictCtx.isSome())
+    let dec6 = Array<UInt8>(2048, {_ => 0u8})
+    @Assert(LZ4_decompress_safe_usingDict(out6, c6, dec6, 2048, D, 65536) == 2048)
+    @Assert(hcBytesEqual(dec6, B, 2048))
+    // -- case 7: dict buffer AS the working block (pbufSameAsSrc) --
+    let D3 = Array<UInt8>(65536, {_ => 0u8})
+    RDG_genBuffer(D3, 65536, 0.50, 0.0, 911u32)
+    let w3 = LZ4_createStreamHC()
+    let d3 = LZ4_createStreamHC()
+    LZ4_resetStreamHC(w3, 9)
+    LZ4_resetStreamHC(d3, 9)
+    @Assert(LZ4_loadDictHC(d3, D3, 65536) == 65536)
+    LZ4_attach_HC_dictionary(w3, d3)
+    // geometry proof: the block source is exactly the dictCtx prefix
+    // allocation the pre-acquire sentinel must recognize
+    match (w3.dictCtx) {
+        case Some(dctx) =>
+            match (dctx.prefixBuf) {
+                case Some(pb) => @Assert(lz4SameBuffer(pb, D3))
+                case None => @Assert(false)
+            }
+        case None => @Assert(false)
+    }
+    let bound7 = Int64(LZ4_compressBound(16384))
+    let out7 = Array<UInt8>(bound7, {_ => 0u8})
+    let c7 = LZ4_compress_HC_continue(w3, D3, 0, 16384, out7, Int32(bound7))
+    @Assert(c7 == 4809)
+    @Assert(XXH32(out7, Int64(c7), 0u32) == 0xa72072b9u32)
+    // srcSize > 4KB + position 0 -> whole-state takeover cleared dictCtx
+    // (ctxKept=0)
+    @Assert(w3.dictCtx.isNone())
+    let dec7 = Array<UInt8>(16384, {_ => 0u8})
+    @Assert(LZ4_decompress_safe_usingDict(out7, c7, dec7, 16384, D3, 65536) == 16384)
+    @Assert(hcBytesEqual(dec7, D3, 16384))
+    println("hc mid dictctx consult + dict-as-block takeover pins verified")
+}
