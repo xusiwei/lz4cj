@@ -29,6 +29,10 @@
 //         G=(1,0.00,0) - empty/tiny inputs take the *dst=0 and all-literal
 //         paths) => 19 rows, plus mode=hcdest (LZ4_compress_HC_destSize,
 //         lv=9 x A, tg=n*3/4) => 1 row => 376 rows.
+// + M4 Task 3 mid rows: mode=hc levels 1-2 (lz4mid strategy): A/B x lv 1..2
+//         then lv=2 over C..G (same inputs as Task 2; E=13 passes the
+//         >=minLength guard - main loop runs, no match, all literals) => 9
+//         rows, plus mode=hcdest lv=2 x A (tg=n*3/4) => 1 row => 386 rows.
 //
 // Manifest line format (contract for M2 Tasks 3/4 and M3 - follow exactly):
 //   n=<n> mp=<mp> seed=<seed> mode=<mode> size=<c> [consumed=<k> ]xxh32=<h32> xxh64=<h64> inxxh32=<h32> inxxh64=<h64>[ file=block/<idx>.lz4]
@@ -1075,10 +1079,12 @@ int main(void) {
        hash-chain levels 3-9 (levels 1-2 lz4mid / 10-12 optimal are later
        M4 tasks). A and B sweep all levels (nbSearches 4..256; lv=9 also
        flips patternAnalysis on, maxNbAttempts 256 > 128), then lv=9 over
-       size-varied inputs C..G: C crosses the 64KB index regime, D/E stay
-       below/around LZ4_minLength(13) boundaries (E=13 is exactly
-       minLength -> all-literals via the inputSize<LZ4_minLength goto),
-       F=0 (empty: generic_internal writes *dst=0, size=1) and G=1 (1-byte
+        size-varied inputs C..G: C crosses the 64KB index regime, D/E stay
+        below/around LZ4_minLength(13) boundaries (E=13 passes the
+        inputSize >= LZ4_minLength guard, so the main loop runs and finds
+        no match -> all literals; the all-literals goto fires only at
+        n < 13),
+        F=0 (empty: generic_internal writes *dst=0, size=1) and G=1 (1-byte
        all-literal block). dstCapacity = compressBound => notLimited.
        Hard check: every row standalone-decodes to the original input. */
     {
@@ -1182,6 +1188,117 @@ int main(void) {
         printf("# hcdest=LZ4_compress_HC_destSize(heap state) lv=9 A=RDG(n=65536 mp=0.50 lp=0.00 seed=0) "
                "tg=n*3/4 fillOutput; consumed= pins *srcSizePtr; decode out == src[0..consumed)\n");
         printf("n=%zu mp=0.50 seed=0 mode=hcdest lv=9 tg=%d size=%d consumed=%d "
+               "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+               n, tg, c, consumed,
+               XXH32(out, (size_t)c, 0), (unsigned long long)XXH64(out, (size_t)c, 0),
+               XXH32(buf, n, 0), (unsigned long long)XXH64(buf, n, 0));
+        writeArtifact(out, c, idx);
+        printf("\n");
+        idx++;
+        free(buf); free(out); free(dec); free(hcState);
+    }
+    /* hc mid rows (M4 Task 3): LZ4_compress_HC over the lz4mid levels 1-2
+       (lz4hc.c L554-803). Appended after every Task 2 section so all
+       existing artifact indices are preserved; the rows join the mode=hc /
+       mode=hcdest sections (same inputs as Task 2, no new '#' comments):
+       A/B x lv 1..2, then lv=2 over C..G (E=13 passes the >=minLength
+       guard - the main loop runs and finds no match -> all literals; the
+       all-literals goto fires only at n<13; F=0 via generic sanitization,
+       G=1 is a 1-byte all-literal block). Hard check: every row
+       standalone-decodes to the original input. */
+    {
+        static const struct { size_t n; double mp; unsigned seed; } kMidAB[2] = {
+            {65536, 0.50, 0}, {65536, 0.90, 7},
+        };
+        for (unsigned ab = 0; ab < 2; ab++)
+        for (int lv = 1; lv <= 2; lv++) {
+            size_t n = kMidAB[ab].n;
+            unsigned char* buf = (unsigned char*)malloc(n ? n : 1);
+            int bound = LZ4_compressBound((int)n);
+            unsigned char* out = (unsigned char*)malloc((size_t)bound);
+            unsigned char* dec = (unsigned char*)malloc(n ? n : 1);
+            if (!buf || !out || !dec) { fprintf(stderr, "oom\n"); return 1; }
+            RDG_genBuffer(buf, n, kMidAB[ab].mp, 0.0, kMidAB[ab].seed);
+            int c = LZ4_compress_HC((const char*)buf, (char*)out, (int)n, bound, lv);
+            if (c <= 0) {
+                fprintf(stderr, "hcmid: compress failed (n=%zu lv=%d)\n", n, lv);
+                return 1;
+            }
+            int r = LZ4_decompress_safe((const char*)out, (char*)dec, c, (int)n);
+            if (r != (int)n || memcmp(dec, buf, n) != 0) {
+                fprintf(stderr, "hcmid: decode check failed (n=%zu lv=%d)\n", n, lv);
+                return 1;
+            }
+            printf("n=%zu mp=%.2f seed=%u mode=hc lv=%d size=%d "
+                   "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+                   n, kMidAB[ab].mp, kMidAB[ab].seed, lv, c,
+                   XXH32(out, (size_t)c, 0), (unsigned long long)XXH64(out, (size_t)c, 0),
+                   XXH32(buf, n, 0), (unsigned long long)XXH64(buf, n, 0));
+            writeArtifact(out, c, idx);
+            printf("\n");
+            idx++;
+            free(buf); free(out); free(dec);
+        }
+        static const struct { size_t n; double mp; unsigned seed; } kMidE[5] = {
+            {131072, 0.90, 0}, {255, 0.50, 0}, {13, 0.50, 0}, {0, 0.00, 0}, {1, 0.00, 0},
+        };
+        for (unsigned ei = 0; ei < 5; ei++) {
+            size_t n = kMidE[ei].n;
+            unsigned char* buf = (unsigned char*)malloc(n ? n : 1);
+            int bound = LZ4_compressBound((int)n);
+            unsigned char* out = (unsigned char*)malloc((size_t)bound);
+            unsigned char* dec = (unsigned char*)malloc(n ? n : 1);
+            if (!buf || !out || !dec) { fprintf(stderr, "oom\n"); return 1; }
+            RDG_genBuffer(buf, n, kMidE[ei].mp, 0.0, kMidE[ei].seed);
+            int c = LZ4_compress_HC((const char*)buf, (char*)out, (int)n, bound, 2);
+            if (c <= 0) {
+                fprintf(stderr, "hcmid: compress failed (n=%zu lv=2)\n", n);
+                return 1;
+            }
+            int r = LZ4_decompress_safe((const char*)out, (char*)dec, c, (int)n);
+            if (r != (int)n || memcmp(dec, buf, n) != 0) {
+                fprintf(stderr, "hcmid: decode check failed (n=%zu lv=2)\n", n);
+                return 1;
+            }
+            printf("n=%zu mp=%.2f seed=%u mode=hc lv=2 size=%d "
+                   "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+                   n, kMidE[ei].mp, kMidE[ei].seed, c,
+                   XXH32(out, (size_t)c, 0), (unsigned long long)XXH64(out, (size_t)c, 0),
+                   XXH32(buf, n, 0), (unsigned long long)XXH64(buf, n, 0));
+            writeArtifact(out, c, idx);
+            printf("\n");
+            idx++;
+            free(buf); free(out); free(dec);
+        }
+    }
+    /* hcdest mid row (M4 Task 3): LZ4_compress_HC_destSize lv=2 x A,
+       tg = n*3/4 - exercises the lz4mid fillOutput path (oend hack,
+       _lz4mid_dest_overflow adaptation). consumed= pins *srcSizePtr.
+       Hard checks: size <= tg, consumed in [0, n], decode == the consumed
+       prefix of the input. */
+    {
+        const size_t n = 65536;
+        unsigned char* buf = (unsigned char*)malloc(n);
+        int bound = LZ4_compressBound((int)n);
+        int tg = (int)(n * 3 / 4);
+        unsigned char* out = (unsigned char*)malloc((size_t)(tg > bound ? tg : bound));
+        unsigned char* dec = (unsigned char*)malloc(n);
+        void* hcState = malloc((size_t)LZ4_sizeofStateHC());
+        if (!buf || !out || !dec || !hcState) { fprintf(stderr, "oom\n"); return 1; }
+        RDG_genBuffer(buf, n, 0.50, 0.0, 0);
+        int consumed = (int)n;
+        int c = LZ4_compress_HC_destSize(hcState, (const char*)buf, (char*)out,
+                                         &consumed, tg, 2);
+        if (c <= 0 || c > tg || consumed < 0 || (size_t)consumed > n) {
+            fprintf(stderr, "hcdestmid: out of contract (c=%d tg=%d consumed=%d)\n", c, tg, consumed);
+            return 1;
+        }
+        int r = LZ4_decompress_safe((const char*)out, (char*)dec, c, consumed);
+        if (r != consumed || (consumed && memcmp(dec, buf, (size_t)consumed) != 0)) {
+            fprintf(stderr, "hcdestmid: decode check failed (c=%d consumed=%d r=%d)\n", c, consumed, r);
+            return 1;
+        }
+        printf("n=%zu mp=0.50 seed=0 mode=hcdest lv=2 tg=%d size=%d consumed=%d "
                "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
                n, tg, c, consumed,
                XXH32(out, (size_t)c, 0), (unsigned long long)XXH64(out, (size_t)c, 0),

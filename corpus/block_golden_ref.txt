@@ -387,3 +387,13 @@ n=0 mp=0.00 seed=0 mode=hc lv=9 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inx
 n=1 mp=0.00 seed=0 mode=hc lv=9 size=2 xxh32=47bed82c xxh64=ec3cae3829bb6262 inxxh32=9608f5fb inxxh64=50bd57c8fab35779 file=block/374.lz4
 # hcdest=LZ4_compress_HC_destSize(heap state) lv=9 A=RDG(n=65536 mp=0.50 lp=0.00 seed=0) tg=n*3/4 fillOutput; consumed= pins *srcSizePtr; decode out == src[0..consumed)
 n=65536 mp=0.50 seed=0 mode=hcdest lv=9 tg=49152 size=32916 consumed=65536 xxh32=c21308ab xxh64=6b48f5333290f3fa inxxh32=c20f7bcc inxxh64=197a59a7c9d2bd88 file=block/375.lz4
+n=65536 mp=0.50 seed=0 mode=hc lv=1 size=34530 xxh32=c0a48731 xxh64=8ad58e4da6e824f4 inxxh32=c20f7bcc inxxh64=197a59a7c9d2bd88 file=block/376.lz4
+n=65536 mp=0.50 seed=0 mode=hc lv=2 size=34530 xxh32=c0a48731 xxh64=8ad58e4da6e824f4 inxxh32=c20f7bcc inxxh64=197a59a7c9d2bd88 file=block/377.lz4
+n=65536 mp=0.90 seed=7 mode=hc lv=1 size=6315 xxh32=0c3a4dc1 xxh64=ac3e7dc606b06671 inxxh32=99ba8de1 inxxh64=3a798cd5ac65353f file=block/378.lz4
+n=65536 mp=0.90 seed=7 mode=hc lv=2 size=6315 xxh32=0c3a4dc1 xxh64=ac3e7dc606b06671 inxxh32=99ba8de1 inxxh64=3a798cd5ac65353f file=block/379.lz4
+n=131072 mp=0.90 seed=0 mode=hc lv=2 size=21077 xxh32=29d2739b xxh64=43fa195391d7585d inxxh32=bf1377f2 inxxh64=683af1c226081890 file=block/380.lz4
+n=255 mp=0.50 seed=0 mode=hc lv=2 size=238 xxh32=0639b5bd xxh64=645d2f9032bdf162 inxxh32=f125f7b1 inxxh64=42bbcae5695ca49e file=block/381.lz4
+n=13 mp=0.50 seed=0 mode=hc lv=2 size=14 xxh32=ab784699 xxh64=dd68042376530281 inxxh32=979ab100 inxxh64=8e064ca692afdcf9 file=block/382.lz4
+n=0 mp=0.00 seed=0 mode=hc lv=2 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/383.lz4
+n=1 mp=0.00 seed=0 mode=hc lv=2 size=2 xxh32=47bed82c xxh64=ec3cae3829bb6262 inxxh32=9608f5fb inxxh64=50bd57c8fab35779 file=block/384.lz4
+n=65536 mp=0.50 seed=0 mode=hcdest lv=2 tg=49152 size=34530 consumed=65536 xxh32=c0a48731 xxh64=8ad58e4da6e824f4 inxxh32=c20f7bcc inxxh64=197a59a7c9d2bd88 file=block/385.lz4

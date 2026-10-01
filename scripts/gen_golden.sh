@@ -27,11 +27,13 @@ scripts/gen_golden | tee corpus/block_golden_ref.txt
 #         + 6 extdict rows (M3b Task 3)
 #         + 6 destext rows (M3b Task 4)
 #         + 19 hc rows (M4 Task 2: A/B x lv3-9 + lv9 x C..G) + 1 hcdest row
-# = 376 data rows, plus 13 '#' provenance comments
+#         + 9 hc mid rows (M4 Task 3: A/B x lv1-2 + lv2 x C..G) + 1 hcdest
+#           mid row (M4 Task 3: lv=2 x A)
+# = 386 data rows, plus 13 '#' provenance comments
 #   (dict / stream / ring / setdict + cont / savedict / dictfast /
 #    dictslow / attach / extdict / destext + hc / hcdest sections)
-[ "$(wc -l < corpus/block_golden_ref.txt)" -eq 389 ] \
-    || { echo "ERROR: expected 389 golden lines (376 rows + 13 comments)" >&2; exit 1; }
+[ "$(wc -l < corpus/block_golden_ref.txt)" -eq 399 ] \
+    || { echo "ERROR: expected 399 golden lines (386 rows + 13 comments)" >&2; exit 1; }
 [ "$(grep -c '^#' corpus/block_golden_ref.txt)" -eq 13 ] \
     || { echo "ERROR: expected exactly 13 comment lines" >&2; exit 1; }
 [ "$(grep -c 'mode=fastreset' corpus/block_golden_ref.txt)" -eq 10 ] \
@@ -52,7 +54,7 @@ scripts/gen_golden | tee corpus/block_golden_ref.txt
     || { echo "ERROR: expected 6 extdict rows" >&2; exit 1; }
 [ "$(grep -c 'mode=destext' corpus/block_golden_ref.txt)" -eq 6 ] \
     || { echo "ERROR: expected 6 destext rows" >&2; exit 1; }
-[ "$(grep -c 'mode=hc ' corpus/block_golden_ref.txt)" -eq 19 ] \
-    || { echo "ERROR: expected 19 hc rows" >&2; exit 1; }
-[ "$(grep -c 'mode=hcdest' corpus/block_golden_ref.txt)" -eq 1 ] \
-    || { echo "ERROR: expected 1 hcdest row" >&2; exit 1; }
+[ "$(grep -c 'mode=hc ' corpus/block_golden_ref.txt)" -eq 28 ] \
+    || { echo "ERROR: expected 28 hc rows" >&2; exit 1; }
+[ "$(grep -c 'mode=hcdest' corpus/block_golden_ref.txt)" -eq 2 ] \
+    || { echo "ERROR: expected 2 hcdest rows" >&2; exit 1; }

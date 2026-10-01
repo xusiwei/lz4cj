@@ -110,6 +110,7 @@ internal const LZ4HC_HASH_LOG: Int64 = 15            /* lz4hc.h L233 */
 internal const LZ4HC_HASHTABLESIZE: Int64 = 1 << 15  /* 32768, lz4hc.h L234 */
 internal const LZ4MID_HASHLOG: Int64 = 14            /* lz4hc.c L142: HASH_LOG-1 */
 internal const LZ4MID_HASHTABLESIZE: Int64 = 1 << 14 /* 16384, lz4hc.c L143 */
+internal const LZ4MID_HASHSIZE: Int64 = 8            /* lz4hc.c L141 */
 internal const OPTIMAL_ML: Int32 = 18                /* lz4hc.c L76: (ML_MASK-1)+MINMATCH */
 internal const LZ4_OPT_NUM: Int32 = 4096             /* lz4hc.c L77: 1<<12 */
 
@@ -1006,19 +1007,412 @@ internal func LZ4HC_compress_hashChain(s: LZ4_streamHC_t,
 }
 
 /*-************************************
-*  Strategy stubs (lz4hc.c L1410-1416 前向声明对应)
+*  Mid compression, levels 1-2 (lz4hc.c L389-803)
 **************************************/
-/* LZ4MID_compress(L436-660 区域,1-2 级):T3 实现并替换函数体;本任务
-   占位返回失败。签名 FINAL:ctx + 块基址指针对 + 源/目的 + limit/dict 指令,
-   返回 (result, srcSizeOut)(srcSizePtr 语义)。 */
+/* LZ4HC_searchExtDict(L389-430):自家链外借 dictCtx 哈希链搜字典 match。
+   ip/iLowLimit/iHighLimit 为工作 prefix 缓冲(prefixPtr)侧索引;dictCtx 的
+   prefix 缓冲由外层 unsafe 域以 dictCtxBase 供给(matchPtr 索引 =
+   lDictMatchIndex - dictCtx.dictLimit)。lDictEndIndex = dictCtx.prefixLen +
+   dictCtx.dictLimit;matchIndex 平移(+ gDictEndIndex - (U32)lDictEndIndex)
+   与链回退均 U32 回绕。本任务无入口可达(dictCtx 仅 T5 流式 API 挂接),
+   随 LZ4MID_compress 一并移植。 */
+internal func LZ4HC_searchExtDict(prefixPtr: CPointer<UInt8>, ip: Int64, ipIndex: UInt32,
+        iLowLimit: Int64, iHighLimit: Int64, dictCtx: LZ4_streamHC_t, dictCtxBase: CPointer<UInt8>,
+        gDictEndIndex: UInt32, currentBestMLIn: Int32, nbAttemptsIn: Int32): LZ4HC_match {
+    let lDictEndIndex: UInt64 = UInt64(dictCtx.prefixEndIdx - dictCtx.prefixStartIdx) + UInt64(dictCtx.dictLimit)   /* L393 */
+    var lDictMatchIndex: UInt32 = dictCtx.hashTable[Int64(LZ4HC_hashPtr(prefixPtr, ip))]   /* L394 */
+    var matchIndex: UInt32 = lDictMatchIndex + gDictEndIndex - UInt32(lDictEndIndex)   /* L395: U32 回绕 */
+    var offset: Int32 = 0
+    var sBack: Int32 = 0
+    var currentBestML: Int32 = currentBestMLIn
+    var nbAttempts: Int32 = nbAttemptsIn
+    while ((ipIndex - matchIndex <= LZ4_DISTANCE_MAX) && (nbAttempts > 0)) {   /* L398: C 后缀减予定序 */
+        nbAttempts -= 1
+        let matchPtrIdx: Int64 = Int64(lDictMatchIndex) - Int64(dictCtx.dictLimit)   /* L399: prefixStart - dictLimit + idx */
+        if (LZ4_readLE32(dictCtxBase, matchPtrIdx) == LZ4_readLE32(prefixPtr, ip)) {   /* L401 */
+            var back: Int32 = 0
+            var vLimit: Int64 = ip + Int64(lDictEndIndex - UInt64(lDictMatchIndex))   /* L404 */
+            if (vLimit > iHighLimit) {
+                vLimit = iHighLimit                                    /* L405 */
+            }
+            var mlt: Int32 = Int32(LZ4_count2(prefixPtr, ip + LZ4_MINMATCH,
+                dictCtxBase, matchPtrIdx + LZ4_MINMATCH, vLimit)) + Int32(LZ4_MINMATCH)   /* L406: 跨段计数 */
+            back = if (ip > iLowLimit) {                               /* L407: bMin = dictCtx->prefixStart */
+                LZ4HC_countBack(prefixPtr, ip, dictCtxBase, matchPtrIdx, iLowLimit, 0)
+            } else {
+                0
+            }
+            mlt -= back
+            if (mlt > currentBestML) {
+                currentBestML = mlt
+                offset = Int32(ipIndex - matchIndex)                   /* L410: U32 减 */
+                sBack = back
+            }
+        }
+        let nextOffset: UInt32 = UInt32(dictCtx.chainTable[Int64(lDictMatchIndex & 0xFFFFu32)])   /* L415: DELTANEXTU16 */
+        lDictMatchIndex -= nextOffset
+        matchIndex -= nextOffset
+    }
+    return LZ4HC_match(offset, currentBestML, sBack)                   /* L419-424 */
+}
+
+/* LZ4MID_searchHCDict(L436-444):dictCtx 为 hash-chain 流时的字典搜索:
+   委托 searchExtDict,iLowLimit = ip(不回看)、currentBestML = MINMATCH-1、
+   nbAttempts = 2。T5 hcattach 不兼容行(dict lv9 + work lv2)消费。 */
+internal func LZ4MID_searchHCDict(prefixPtr: CPointer<UInt8>, ip: Int64, ipIndex: UInt32,
+        iHighLimit: Int64, dictCtx: LZ4_streamHC_t, dictCtxBase: CPointer<UInt8>,
+        gDictEndIndex: UInt32): LZ4HC_match {
+    return LZ4HC_searchExtDict(prefixPtr, ip, ipIndex, ip, iHighLimit,
+        dictCtx, dictCtxBase, gDictEndIndex, Int32(LZ4_MINMATCH) - 1, 2)   /* L441-443 */
+}
+
+/* LZ4MID_searchExtDict(L446-496):dictCtx 为 mid 流时的字典搜索:hash8 先查
+   后 hash4,safeLen = MIN(lDictEndIndex - lMatchIndex, iHighLimit - ip) 钳制
+   (跨段读取下界),mlt >= MINMATCH 即返(back 恒 0)。hash8 槽位于
+   hashTable[LZ4MID_HASHTABLESIZE, 32768)。 */
+internal func LZ4MID_searchExtDict(prefixPtr: CPointer<UInt8>, ip: Int64, ipIndex: UInt32,
+        iHighLimit: Int64, dictCtx: LZ4_streamHC_t, dictCtxBase: CPointer<UInt8>,
+        gDictEndIndex: UInt32): LZ4HC_match {
+    let lDictEndIndex: UInt64 = UInt64(dictCtx.prefixEndIdx - dictCtx.prefixStartIdx) + UInt64(dictCtx.dictLimit)   /* L447 */
+    /* search long match first (L451-466) */
+    let l8DictMatchIndex: UInt32 = dictCtx.hashTable[LZ4MID_HASHTABLESIZE + Int64(LZ4MID_hash8Ptr(prefixPtr, ip))]   /* L452 */
+    let m8Index: UInt32 = l8DictMatchIndex + gDictEndIndex - UInt32(lDictEndIndex)   /* L453: U32 回绕 */
+    if (ipIndex - m8Index <= LZ4_DISTANCE_MAX) {                      /* L455 */
+        let matchPtrIdx: Int64 = Int64(l8DictMatchIndex) - Int64(dictCtx.dictLimit)   /* L456 */
+        let a: UInt64 = lDictEndIndex - UInt64(l8DictMatchIndex)
+        let b: UInt64 = UInt64(iHighLimit - ip)
+        let safeLen: UInt64 = if (a < b) { a } else { b }             /* L457: MIN */
+        let mlt: Int32 = Int32(LZ4_count2(prefixPtr, ip, dictCtxBase, matchPtrIdx, ip + Int64(safeLen)))   /* L458 */
+        if (mlt >= Int32(LZ4_MINMATCH)) {
+            return LZ4HC_match(Int32(ipIndex - m8Index), mlt, 0)      /* L460-464 */
+        }
+    }
+    /* search for short match second (L469-485) */
+    let l4DictMatchIndex: UInt32 = dictCtx.hashTable[Int64(LZ4MID_hash4Ptr(prefixPtr, ip))]   /* L470 */
+    let m4Index: UInt32 = l4DictMatchIndex + gDictEndIndex - UInt32(lDictEndIndex)   /* L471 */
+    if (ipIndex - m4Index <= LZ4_DISTANCE_MAX) {
+        let matchPtrIdx: Int64 = Int64(l4DictMatchIndex) - Int64(dictCtx.dictLimit)
+        let a: UInt64 = lDictEndIndex - UInt64(l4DictMatchIndex)
+        let b: UInt64 = UInt64(iHighLimit - ip)
+        let safeLen: UInt64 = if (a < b) { a } else { b }
+        let mlt: Int32 = Int32(LZ4_count2(prefixPtr, ip, dictCtxBase, matchPtrIdx, ip + Int64(safeLen)))
+        if (mlt >= Int32(LZ4_MINMATCH)) {
+            return LZ4HC_match(Int32(ipIndex - m4Index), mlt, 0)
+        }
+    }
+    return LZ4HC_match(0, 0, 0)                                       /* L488-491: nothing found */
+}
+
+/* LZ4MID_addPosition + ADDPOS 宏(L502-508):hash4 槽位于 hashTable
+   [0, 16384),hash8 槽位于 [16384, 32768)。 */
+internal func LZ4MID_addPos4(s: LZ4_streamHC_t, p: CPointer<UInt8>, i: Int64, index: UInt32): Unit {
+    s.hashTable[Int64(LZ4MID_hash4Ptr(p, i))] = index
+}
+
+internal func LZ4MID_addPos8(s: LZ4_streamHC_t, p: CPointer<UInt8>, i: Int64, index: UInt32): Unit {
+    s.hashTable[LZ4MID_HASHTABLESIZE + Int64(LZ4MID_hash8Ptr(p, i))] = index
+}
+
+/* LZ4MID_fillHTable(L513-538):字典入表(仅 mid 策略可利用)。第一循环
+   3 步进双表(idx 位 ADDPOS4 + idx+1 位 ADDPOS8);第二循环尾段 32KB 1 步进
+   ADDPOS8,起点 = size > 32KB+8 ? target-32KB : nextToUpdate;出函数
+   nextToUpdate = target;size <= 8 直返(表不动)。T5 loadDictHC 消费。
+   dictPtr = s 的 prefixStart(上游 assert(dict == cctx->prefixStart))。 */
+internal func LZ4MID_fillHTable(s: LZ4_streamHC_t, dictPtr: CPointer<UInt8>, size: Int64): Unit {
+    let prefixIdx: UInt32 = s.dictLimit                               /* L518 */
+    let target: UInt32 = prefixIdx + UInt32(size) - UInt32(LZ4MID_HASHSIZE)   /* L519: U32 回绕 */
+    var idx: UInt32 = s.nextToUpdate                                  /* L520 */
+    if (size <= LZ4MID_HASHSIZE) {                                    /* L523-524 */
+        return
+    }
+    while (idx < target) {                                            /* L526 */
+        LZ4MID_addPos4(s, dictPtr, Int64(idx) - Int64(prefixIdx), idx)          /* L527: ADDPOS4 */
+        LZ4MID_addPos8(s, dictPtr, Int64(idx) + 1 - Int64(prefixIdx), idx + 1u32)   /* L528: ADDPOS8 */
+        idx += 3u32
+    }
+    idx = if (size > 32768 + LZ4MID_HASHSIZE) {                       /* L531: 32 KB + LZ4MID_HASHSIZE */
+        target - 32768u32
+    } else {
+        s.nextToUpdate
+    }
+    while (idx < target) {                                            /* L532 */
+        LZ4MID_addPos8(s, dictPtr, Int64(idx) - Int64(prefixIdx), idx)          /* L533 */
+        idx += 1u32
+    }
+    s.nextToUpdate = target                                           /* L536 */
+}
+
+/* select_searchDict_function(L540-546):C 返回函数指针(NULL = 不查);
+   仓颉以选择码替代。T5 流式 dictCtx 路径消费。 */
+internal const LZ4MID_SEARCH_NONE: Int32 = 0
+internal const LZ4MID_SEARCH_EXTDICT: Int32 = 1
+internal const LZ4MID_SEARCH_HCDICT: Int32 = 2
+
+internal func lz4midSelectSearchDict(dictCtx: Option<LZ4_streamHC_t>): Int32 {
+    match (dictCtx) {
+        case None =>
+            return LZ4MID_SEARCH_NONE                                 /* L542 */
+        case Some(dctx) =>
+            if (lz4hcGetCLevelParams(dctx.compressionLevel).strat == LZ4HC_STRAT_MID) {
+                return LZ4MID_SEARCH_EXTDICT                          /* L544: mid 流 */
+            }
+            return LZ4MID_SEARCH_HCDICT                               /* L545: hash-chain 流 */
+    }
+}
+
+/* LZ4MID_compress(L554-803):mid 策略核心(1-2 级)。hash8/hash4 双查、短
+   匹配 ip+1 二次确认(gated by ip < mflimit)、catch-back(无符号
+   (U32)(ip-prefixPtr) > matchDistance 判定)、表填充位点(匹配首 3 位 +
+   尾 5 位)、skip 步进 1+((ip-anchor)>>9)、_lz4mid_last_literals、fillOutput
+   的 oend hack 与 _lz4mid_dest_overflow。C 的 goto _lz4mid_encode_sequence
+   以 encode 标志重组、_lz4mid_dest_overflow 以 overflow 标志;注意
+   encodeSequence 的 buffer-issue 契约在 MID 特殊:op 恢复 saved_op(丢弃其
+   推进值,C L704-706 显式恢复 —— 与 hashChain 核心的 optr 机制不同源)。
+   dictCtx 路径(dict == usingDictCtxHc)T5 流式 API 才可达,随函数体一并
+   移植。前置:srcSize ∈ [1, LZ4_MAX_INPUT_SIZE]、dstCapacity >= 1(清洗在
+   generic_internal);返回 (result, srcSizeOut)(srcSizePtr 出值语义,失败
+   (0, 0))。单一 unsafe 域内调用,纯指针运算、无分配。 */
 internal func LZ4MID_compress(ctx: LZ4_streamHC_t,
         src: CPointer<UInt8>, dictQ: CPointer<UInt8>, dictCtxQ: CPointer<UInt8>,
         dst: CPointer<UInt8>, srcSize: Int64, dstCapacity: Int64,
         limit: Int32, dict: Int32): (Int64, Int64) {
-    /* T3 占位:未实现策略一律失败 */
-    return (0, 0)
+    /* hash4Table = ctx.hashTable[0, 16384),hash8Table = [16384, 32768) */
+    var ip: Int64 = 0
+    var anchor: Int64 = 0
+    let iend: Int64 = srcSize
+    let mflimit: Int64 = iend - LZ4_MFLIMIT
+    let matchlimit: Int64 = iend - LZ4_LASTLITERALS
+    let ilimit: Int64 = iend - LZ4MID_HASHSIZE
+    var op: Int64 = 0
+    var oend: Int64 = dstCapacity
+
+    let prefixPtr: CPointer<UInt8> = src                              /* L563: prefixStart = 块基址 */
+    let prefixIdx: UInt32 = ctx.dictLimit                             /* L564 */
+    let ilimitIdx: UInt32 = UInt32(ilimit & 0xFFFFFFFFi64) + prefixIdx   /* L565: (U32)(ilimit-prefixPtr)+prefixIdx */
+    let dictIdx: UInt32 = ctx.lowLimit                                /* L566: dictStart 虚拟基 */
+    let gDictEndIndex: UInt32 = ctx.lowLimit                          /* L567 */
+    var matchLength: UInt32 = 0u32
+    var matchDistance: UInt32 = 0u32
+    var overflow = false                                              /* goto _lz4mid_dest_overflow */
+
+    if (limit == LZ4_OUTPUT_FILL) {
+        oend -= LZ4_LASTLITERALS                                      /* L592: fillOutput 尾量预留 hack */
+    }
+
+    if (srcSize >= LZ4_minLength) {                                   /* L594: 小输入全字面量 goto */
+        while (!overflow && ip <= mflimit) {                          /* L597: main loop */
+            let ipIndex: UInt32 = UInt32(ip) + prefixIdx              /* L598 */
+            var encode = false                                        /* goto _lz4mid_encode_sequence */
+            /* search long match (L600-623) */
+            let h8: UInt32 = LZ4MID_hash8Ptr(prefixPtr, ip)           /* L601 */
+            let pos8: UInt32 = ctx.hashTable[LZ4MID_HASHTABLESIZE + Int64(h8)]   /* L602 */
+            ctx.hashTable[LZ4MID_HASHTABLESIZE + Int64(h8)] = ipIndex /* L604: addPosition */
+            if (ipIndex - pos8 <= LZ4_DISTANCE_MAX) {                 /* L605: U32 回绕 */
+                if (pos8 >= prefixIdx) {                              /* L607: prefix 段内 */
+                    let matchPtrIdx: Int64 = Int64(pos8 - prefixIdx)
+                    matchLength = UInt32(LZ4_count(prefixPtr, ip, matchPtrIdx, matchlimit))   /* L610 */
+                    if (matchLength >= UInt32(LZ4_MINMATCH)) {
+                        matchDistance = ipIndex - pos8                /* L613 */
+                        encode = true
+                    }
+                } else if (pos8 >= dictIdx) {                         /* L616: extDict 段 */
+                    let matchPtrIdx: Int64 = Int64(pos8 - dictIdx)    /* dictStart + (pos8 - dictIdx) */
+                    let a: UInt64 = UInt64(prefixIdx - pos8)
+                    let b: UInt64 = UInt64(matchlimit - ip)
+                    let safeLen: UInt64 = if (a < b) { a } else { b } /* L618: MIN */
+                    matchLength = UInt32(LZ4_count2(prefixPtr, ip, dictQ, matchPtrIdx, ip + Int64(safeLen)))   /* L619 */
+                    if (matchLength >= UInt32(LZ4_MINMATCH)) {
+                        matchDistance = ipIndex - pos8
+                        encode = true
+                    }
+                }
+            }
+            /* search short match (L625-677) */
+            if (!encode) {
+                let h4: UInt32 = LZ4MID_hash4Ptr(prefixPtr, ip)       /* L627 */
+                let pos4: UInt32 = ctx.hashTable[Int64(h4)]           /* L628 */
+                ctx.hashTable[Int64(h4)] = ipIndex                    /* L630 */
+                if (ipIndex - pos4 <= LZ4_DISTANCE_MAX) {
+                    if (pos4 >= prefixIdx) {                          /* L633: 仅 prefix 段内查 */
+                        let matchPtrIdx: Int64 = Int64(pos4 - prefixIdx)
+                        matchLength = UInt32(LZ4_count(prefixPtr, ip, matchPtrIdx, matchlimit))   /* L638 */
+                        if (matchLength >= UInt32(LZ4_MINMATCH)) {
+                            /* short match found, let's just check ip+1 for longer (L641-670) */
+                            let h8m2: UInt32 = LZ4MID_hash8Ptr(prefixPtr, ip + 1)   /* L642 */
+                            let pos8m2: UInt32 = ctx.hashTable[LZ4MID_HASHTABLESIZE + Int64(h8m2)]   /* L643 */
+                            let m2Distance: UInt32 = ipIndex + 1u32 - pos8m2        /* L644 */
+                            matchDistance = ipIndex - pos4            /* L645 */
+                            if ((m2Distance <= LZ4_DISTANCE_MAX) &&
+                                    (pos8m2 >= prefixIdx) &&          /* L647: 仅 prefix 段 */
+                                    (ip < mflimit)) {                 /* L648: 二次确认门槛 */
+                                let m2PtrIdx: Int64 = Int64(pos8m2 - prefixIdx)
+                                let ml2: UInt32 = UInt32(LZ4_count(prefixPtr, ip + 1, m2PtrIdx, matchlimit))   /* L651 */
+                                if (ml2 > matchLength) {
+                                    ctx.hashTable[LZ4MID_HASHTABLESIZE + Int64(h8m2)] = ipIndex + 1u32   /* L655 */
+                                    ip += 1
+                                    matchLength = ml2
+                                    matchDistance = m2Distance
+                                }
+                            }
+                            encode = true
+                        }
+                    } else if (pos4 >= dictIdx) {                     /* L668: extDict match candidate */
+                        let matchPtrIdx: Int64 = Int64(pos4 - dictIdx)
+                        let a: UInt64 = UInt64(prefixIdx - pos4)
+                        let b: UInt64 = UInt64(matchlimit - ip)
+                        let safeLen: UInt64 = if (a < b) { a } else { b }
+                        matchLength = UInt32(LZ4_count2(prefixPtr, ip, dictQ, matchPtrIdx, ip + Int64(safeLen)))   /* L671 */
+                        if (matchLength >= UInt32(LZ4_MINMATCH)) {
+                            matchDistance = ipIndex - pos4
+                            encode = true
+                        }
+                    }
+                }
+            }
+            /* no match found in prefix: search into external dictionary (L678-690) */
+            if ((!encode) && (dict == LZ4HC_DICT_USINGDICTCTXHC) &&
+                    (ipIndex - gDictEndIndex < LZ4_DISTANCE_MAX - 8u32)) {   /* L679: U32 */
+                match (ctx.dictCtx) {
+                    case Some(dctx) =>
+                        let sel = lz4midSelectSearchDict(ctx.dictCtx)
+                        let dMatch = if (sel == LZ4MID_SEARCH_EXTDICT) {
+                            LZ4MID_searchExtDict(prefixPtr, ip, ipIndex, matchlimit,
+                                dctx, dictCtxQ, gDictEndIndex)
+                        } else {
+                            LZ4MID_searchHCDict(prefixPtr, ip, ipIndex, matchlimit,
+                                dctx, dictCtxQ, gDictEndIndex)
+                        }
+                        if (Int64(dMatch.len) >= LZ4_MINMATCH) {
+                            /* assert(dMatch.back == 0) */
+                            matchLength = UInt32(Int64(dMatch.len))
+                            matchDistance = UInt32(Int64(dMatch.off))
+                            encode = true
+                        }
+                    case None => ()
+                }
+            }
+            if (!encode) {
+                /* no match found: skip faster over incompressible data */
+                ip += 1 + ((ip - anchor) >> 9)                        /* L689 */
+                continue
+            }
+
+            /* _lz4mid_encode_sequence (L691-716) */
+            /* catch back */
+            while (((ip > anchor) && (UInt32(ip) > matchDistance)) && /* L692: (U32)(ip-prefixPtr) 无符号判定 */
+                    (LZ4_read8(prefixPtr, ip - 1) == LZ4_read8(prefixPtr, ip - Int64(matchDistance) - 1))) {
+                ip -= 1
+                matchLength += 1u32
+            }
+            /* fill table with beginning of match */
+            LZ4MID_addPos8(ctx, prefixPtr, ip + 1, ipIndex + 1u32)    /* L699 */
+            LZ4MID_addPos8(ctx, prefixPtr, ip + 2, ipIndex + 2u32)    /* L700 */
+            LZ4MID_addPos4(ctx, prefixPtr, ip + 1, ipIndex + 1u32)    /* L701 */
+            /* encode */
+            let savedOp: Int64 = op                                   /* L703 */
+            let (issue, nip, nop, nanchor) = LZ4HC_encodeSequence(prefixPtr, ip,
+                dst, op, anchor, Int32(matchLength), Int32(matchDistance), limit, oend)
+            if (issue != 0) {
+                op = savedOp                                          /* L705: 恢复(丢弃推进值) */
+                if (limit != LZ4_OUTPUT_FILL) {
+                    return (0, 0)                                     /* L802-803: compression failed */
+                }
+                overflow = true                                       /* goto _lz4mid_dest_overflow */
+                break
+            }
+            ip = nip
+            op = nop
+            anchor = nanchor
+            /* fill table with end of match */
+            let endMatchIdx: UInt32 = UInt32(ip) + prefixIdx          /* L710 */
+            let posM2: UInt32 = endMatchIdx - 2u32                    /* L711 */
+            if (posM2 < ilimitIdx) {                                  /* L712: U32 */
+                if (ip > 5) {                                         /* L713: ip - prefixPtr > 5 */
+                    LZ4MID_addPos8(ctx, prefixPtr, ip - 5, endMatchIdx - 5u32)   /* L714 */
+                }
+                LZ4MID_addPos8(ctx, prefixPtr, ip - 3, endMatchIdx - 3u32)       /* L716 */
+                LZ4MID_addPos8(ctx, prefixPtr, ip - 2, endMatchIdx - 2u32)       /* L717 */
+                LZ4MID_addPos4(ctx, prefixPtr, ip - 2, endMatchIdx - 2u32)       /* L718 */
+                LZ4MID_addPos4(ctx, prefixPtr, ip - 1, endMatchIdx - 1u32)       /* L719 */
+            }
+        }
+    }
+
+    if (overflow) {
+        /* _lz4mid_dest_overflow(L786-801,仅 fillOutput):ip/anchor/op/
+           matchLength/matchDistance 已就位(op 已恢复 savedOp) */
+        let ll: Int64 = ip - anchor                                   /* L775 */
+        let llAddbytes: Int64 = (ll + 240) / 255                      /* L776 */
+        let llTotalCost: Int64 = 1 + llAddbytes + ll                  /* L777 */
+        let maxLitPos: Int64 = oend - 3                               /* L778: 2 offset + 1 token */
+        if (op + llTotalCost <= maxLitPos) {
+            let bytesLeftForMl: Int64 = maxLitPos - (op + llTotalCost)   /* L781 */
+            let maxMlSize: Int64 = LZ4_MINMATCH + (LZ4_ML_MASK - 1) + bytesLeftForMl * 255   /* L782 */
+            if (Int64(matchLength) > maxMlSize) {
+                matchLength = UInt32(maxMlSize)                       /* L784 */
+            }
+            if ((oend + LZ4_LASTLITERALS) - (op + llTotalCost + 2) - 1 + Int64(matchLength) >= LZ4_MFLIMIT) {   /* L785 */
+                let (issue2, nip2, nop2, nanchor2) = LZ4HC_encodeSequence(prefixPtr, ip,
+                    dst, op, anchor, Int32(matchLength), Int32(matchDistance), LZ4_OUTPUT_NOT_LIMITED, oend)   /* L786: notLimited 不可能 issue */
+                if (issue2 == 0) {
+                    ip = nip2
+                    op = nop2
+                    anchor = nanchor2
+                }
+            }
+        }
+        /* goto _lz4mid_last_literals */
+    }
+
+    /* _lz4mid_last_literals (L758-788) */
+    var lastRunSize: Int64 = iend - anchor                            /* L759 */
+    var llAdd: Int64 = (lastRunSize + 255 - LZ4_RUN_MASK) / 255       /* L760 */
+    let totalSize: Int64 = 1 + llAdd + lastRunSize                    /* L761 */
+    if (limit == LZ4_OUTPUT_FILL) {
+        oend += LZ4_LASTLITERALS                                      /* L762: 恢复真实 oend */
+    }
+    if (limit != LZ4_OUTPUT_NOT_LIMITED && (op + totalSize > oend)) { /* L763 */
+        if (limit == LZ4_OUTPUT_LIMITED) {
+            return (0, 0)                                             /* L764: not enough space in dst */
+        }
+        lastRunSize = (oend - op) - 1                                 /* L766: 适配填满 dst */
+        llAdd = (lastRunSize + 256 - LZ4_RUN_MASK) / 256              /* L767: 255/256 非对称(同 T2) */
+        lastRunSize -= llAdd
+    }
+    ip = anchor + lastRunSize                                         /* L771: fillOutput 时可 < iend */
+    if (lastRunSize >= LZ4_RUN_MASK) {                                /* L773-780 */
+        var accumulator: Int64 = lastRunSize - LZ4_RUN_MASK
+        LZ4_write8(dst, op, UInt8((LZ4_RUN_MASK << LZ4_ML_BITS) & 0xFF))
+        op += 1
+        while (accumulator >= 255) {
+            LZ4_write8(dst, op, 255u8)
+            op += 1
+            accumulator -= 255
+        }
+        LZ4_write8(dst, op, UInt8(accumulator))
+        op += 1
+    } else {
+        LZ4_write8(dst, op, UInt8(lastRunSize << LZ4_ML_BITS))
+        op += 1
+    }
+    LZ4_memcpyPtr(dst, op, prefixPtr, anchor, lastRunSize)            /* L782 */
+    op += lastRunSize
+
+    return (op, ip)                                                   /* L786-787: *srcSizePtr = ip-src; return op-dst */
 }
 
+/* isStateCompatible(L1483-1488):两状态同为 mid 或同为非 mid 才兼容
+   (mid 与 hash-chain 的 hashTable 布局不同:hash4/hash8 对分 vs
+   hash+chain)。T5 流式 dictCtx 挂接(attach 前置校验)消费。 */
+internal func lz4hcIsStateCompatible(ctx1: LZ4_streamHC_t, ctx2: LZ4_streamHC_t): Bool {
+    let isMid1: Bool = lz4hcGetCLevelParams(ctx1.compressionLevel).strat == LZ4HC_STRAT_MID
+    let isMid2: Bool = lz4hcGetCLevelParams(ctx2.compressionLevel).strat == LZ4HC_STRAT_MID
+    return !(isMid1 != isMid2)                                        /* L1487: !(isMid1 ^ isMid2) */
+}
+
+/*-************************************
+*  Optimal-parsing strategy stub (lz4hc.c L1410-1416 前向声明对应,10-12 级)
+**************************************/
 /* LZ4HC_compress_optimal(L1410-1416,10-12 级):T4 实现并替换函数体。
    签名 FINAL:与上游一致(source/dst/srcSizePtr/dstCapacity/nbSearches/
    sufficient_len/limit/fullUpdate=dict/HCfavor_e),指针上下文同上。 */
@@ -1058,7 +1452,7 @@ internal func LZ4HC_compress_generic_internal(s: LZ4_streamHC_t,
     let favor: Bool = s.favorDecSpeed                               /* L1442 */
     var result: (Int64, Int64) = (0, 0)
     if (cParam.strat == LZ4HC_STRAT_MID) {
-        /* lz4mid 策略(L1445-1448):T3 替换 LZ4MID_compress 函数体 */
+        /* lz4mid 策略(L1445-1448):T3 已接通 */
         result = LZ4MID_compress(s, src, dictQ, dictCtxQ, dst, srcSize, dstCapacity, limit, dict)
     } else if (cParam.strat == LZ4HC_STRAT_HC) {
         result = LZ4HC_compress_hashChain(s, src, dictQ, dictCtxQ, dst, srcSize, dstCapacity,   /* L1450-1452 */

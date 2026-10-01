@@ -774,6 +774,259 @@ func lz4hcDestSizeSemanticsTest(): Unit {
 }
 
 /*-************************************
+*  M4 Task 3: lz4mid (levels 1-2) golden vs upstream C, 0774d055
+**************************************/
+// mid rows of corpus/block_golden_ref.txt (rows 376..384): LZ4_compress_HC
+// over levels 1-2 (lz4mid strategy, upstream lz4hc.c L554-803): A/B x lv 1..2,
+// then lv=2 over C..G. lv=1 and lv=2 share the k_clTable mid params (mid,2,16)
+// so their outputs are byte-identical; C..G pin the length regimes (n=13
+// passes the >=minLength guard - the main loop runs, finds no match, all
+// literals; the all-literals goto fires at n<13; n=0 via generic
+// sanitization; n=1 is a single-literal block).
+// (n, mp, seed, lv, size, xxh32, xxh64, fileRowIdx), -1 = no artifact
+let MID_GOLD_REF: Array<(Int64, Float64, UInt32, Int32, Int32, UInt32, UInt64, Int64)> = [
+    (65536, 0.50, 0u32, 1, 34530, 0xc0a48731u32, 0x8ad58e4da6e824f4u64, 376),
+    (65536, 0.50, 0u32, 2, 34530, 0xc0a48731u32, 0x8ad58e4da6e824f4u64, 377),
+    (65536, 0.90, 7u32, 1, 6315, 0x0c3a4dc1u32, 0xac3e7dc606b06671u64, 378),
+    (65536, 0.90, 7u32, 2, 6315, 0x0c3a4dc1u32, 0xac3e7dc606b06671u64, 379),
+    (131072, 0.90, 0u32, 2, 21077, 0x29d2739bu32, 0x43fa195391d7585du64, 380),
+    (255, 0.50, 0u32, 2, 238, 0x0639b5bdu32, 0x645d2f9032bdf162u64, 381),
+    (13, 0.50, 0u32, 2, 14, 0xab784699u32, 0xdd68042376530281u64, 382),
+    (0, 0.00, 0u32, 2, 1, 0xcf65b03eu32, 0xe934a84adb052768u64, 383),
+    (1, 0.00, 0u32, 2, 2, 0x47bed82cu32, 0xec3cae3829bb6262u64, 384),
+]
+
+@Test
+func lz4hcMidGoldenTest(): Unit {
+    var checked = 0
+    var fileCompared = 0
+    for ((n, mp, seed, lv, wantSize, want32, want64, fileRow) in MID_GOLD_REF) {
+        let buf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(buf, n, mp, 0.0, seed)
+        let bound = Int64(LZ4_compressBound(Int32(n)))
+        let out = Array<UInt8>(bound, {_ => 0u8})
+        let c = LZ4_compress_HC(buf, Int32(n), out, Int32(bound), lv)
+        if (c != wantSize) {
+            println("SIZE n=${n} mp=${mp} seed=${seed} lv=${lv}: got ${c} want ${wantSize}")
+        }
+        @Assert(c == wantSize)
+        let got32 = XXH32(out, Int64(c), 0u32)
+        let got64 = XXH64(out, Int64(c), 0u64)
+        if (got32 != want32 || got64 != want64) {
+            println("DIGEST n=${n} mp=${mp} seed=${seed} lv=${lv} size=${c}: got ${got32}/${got64} want ${want32}/${want64}")
+        }
+        @Assert(got32 == want32)
+        @Assert(got64 == want64)
+        if (fileRow >= 0) {
+            let art = hcReadBlockArtifact(fileRow)
+            @Assert(art.size == Int64(c))
+            @Assert(hcBytesEqual(out, Array<UInt8>(art.size, {i => UInt8(art[i])}), Int64(c)))
+            fileCompared += 1
+        }
+        // closure roundtrip: every row standalone-decodes to the input
+        let dec = Array<UInt8>(n, {_ => 0u8})
+        @Assert(LZ4_decompress_safe(out, c, dec, Int32(n)) == Int32(n))
+        @Assert(hcBytesEqual(dec, buf, n))
+        checked += 1
+    }
+    @Assert(checked == 9)
+    @Assert(fileCompared == 9)
+    // lv=1 and lv=2 rows are byte-identical (same k_clTable mid params)
+    @Assert(MID_GOLD_REF[0][4] == 34530 && MID_GOLD_REF[1][4] == 34530)
+    @Assert(MID_GOLD_REF[0][5] == MID_GOLD_REF[1][5])
+    println("mid golden: ${checked}/9 rows, ${fileCompared} byte-exact artifacts")
+}
+
+// hcdest mid row 385: LZ4_compress_HC_destSize lv=2 x A, tg=n*3/4. The whole
+// input compresses below the target, so fillOutput consumes everything
+// (consumed == n) and the bytes equal the lv=2 hc row (row 377 digests).
+// (n, mp, seed, lv, tg, size, consumed, xxh32, xxh64, fileRowIdx)
+let MID_DEST_REF: Array<(Int64, Float64, UInt32, Int32, Int32, Int32, Int32, UInt32, UInt64, Int64)> = [
+    (65536, 0.50, 0u32, 2, 49152, 34530, 65536, 0xc0a48731u32, 0x8ad58e4da6e824f4u64, 385),
+]
+
+@Test
+func lz4hcMidDestSizeGoldenTest(): Unit {
+    var checked = 0
+    for ((n, mp, seed, lv, tg, wantSize, wantConsumed, want32, want64, fileRow) in MID_DEST_REF) {
+        let buf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(buf, n, mp, 0.0, seed)
+        let out = Array<UInt8>(Int64(tg), {_ => 0u8})
+        let st = LZ4_createStreamHC()
+        let (c, consumed) = LZ4_compress_HC_destSize(st, buf, Int32(n), out, tg, lv)
+        if (c != wantSize || consumed != wantConsumed) {
+            println("MIDDEST n=${n} lv=${lv} tg=${tg}: got (${c},${consumed}) want (${wantSize},${wantConsumed})")
+        }
+        @Assert(c == wantSize)
+        @Assert(consumed == wantConsumed)
+        @Assert(c >= 1 && c <= tg)                 // destSize invariants
+        @Assert(consumed >= 0 && consumed <= Int32(n))
+        let got32 = XXH32(out, Int64(c), 0u32)
+        let got64 = XXH64(out, Int64(c), 0u64)
+        if (got32 != want32 || got64 != want64) {
+            println("DIGEST n=${n} lv=${lv} tg=${tg}: got ${got32}/${got64} want ${want32}/${want64}")
+        }
+        @Assert(got32 == want32)
+        @Assert(got64 == want64)
+        if (fileRow >= 0) {
+            let art = hcReadBlockArtifact(fileRow)
+            @Assert(art.size == Int64(c))
+            @Assert(hcBytesEqual(out, Array<UInt8>(art.size, {i => UInt8(art[i])}), Int64(c)))
+        }
+        // decode == src[0..consumed); full consumption => bytes == hc lv=2 row
+        let dec = Array<UInt8>(n, {_ => 0u8})
+        @Assert(LZ4_decompress_safe(out, c, dec, consumed) == consumed)
+        @Assert(hcBytesEqual(dec, buf, Int64(consumed)))
+        checked += 1
+    }
+    @Assert(checked == 1)
+    println("mid dest golden: ${checked}/1 rows")
+}
+
+/*-************************************
+*  M4 Task 3: LZ4MID_fillHTable direct-internal pins
+**************************************/
+// All expectations pinned from a temporary C probe against upstream
+// LZ4MID_fillHTable (0774d055): a 64-byte formula buffer
+// (buf[i] = (i*29+3) % 251) and a 40 KB RDG(0.50, seed=9001) buffer, both
+// filled with the 64KB virtual anchor D (dictLimit = lowLimit =
+// nextToUpdate = 65536). Bucket positions are recomputed with the
+// independently pinned T1 hash helpers; the asserted VALUES are the
+// behavioral pin (3-step dual-table first loop, 1-step hash8 second loop).
+@Test
+func lz4hcMidFillHTableTest(): Unit {
+    let d: UInt32 = 65536u32
+    let buf64 = Array<UInt8>(64, {i => UInt8((i * 29 + 3) % 251)})
+    unsafe {
+        let h = acquireArrayRawData<UInt8>(buf64)
+        // (1) size <= 8: early return (upstream L523-524) - tables stay
+        // zero, nextToUpdate NOT advanced to target
+        let s0 = LZ4_streamHC_t()
+        LZ4_initStreamHC(s0)
+        s0.dictLimit = d
+        s0.lowLimit = d
+        s0.nextToUpdate = d
+        LZ4MID_fillHTable(s0, h.pointer, 8)
+        @Assert(s0.nextToUpdate == d)
+        LZ4MID_fillHTable(s0, h.pointer, 0)
+        @Assert(s0.nextToUpdate == d)
+        var nz: Int64 = 0
+        for (i in 0..32768) {
+            if (s0.hashTable[i] != 0u32) { nz += 1 }
+        }
+        @Assert(nz == 0)
+        // (2) 64-byte dict: target = D+64-8 = D+56; first loop 3-step
+        // (ADDPOS4 at idx, ADDPOS8 at idx+1), second loop (size <= 32KB+8)
+        // restarts at nextToUpdate=D with 1-step ADDPOS8 over [D, D+56)
+        let s = LZ4_streamHC_t()
+        LZ4_initStreamHC(s)
+        s.dictLimit = d
+        s.lowLimit = d
+        s.nextToUpdate = d
+        LZ4MID_fillHTable(s, h.pointer, 64)
+        @Assert(s.nextToUpdate == d + 56u32)
+        // hash4: all 19 3-step positions, buckets unique per the probe
+        let h4offs: Array<Int64> = [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30,
+            33, 36, 39, 42, 45, 48, 51, 54]
+        for (off in h4offs) {
+            @Assert(s.hashTable[Int64(LZ4MID_hash4Ptr(h.pointer, off))] == d + UInt32(off))
+        }
+        // literal bucket cross-checks against the C probe
+        @Assert(LZ4MID_hash4Ptr(h.pointer, 0) == 194u32)
+        @Assert(LZ4MID_hash4Ptr(h.pointer, 3) == 2329u32)
+        @Assert(LZ4MID_hash4Ptr(h.pointer, 54) == 1666u32)
+        // hash8: second loop rewrote every offset [0,56) ascending, so the
+        // final value per bucket = last writer; spot pins incl. both ends
+        @Assert(LZ4MID_hash8Ptr(h.pointer, 0) == 10689u32)
+        @Assert(LZ4MID_hash8Ptr(h.pointer, 55) == 2919u32)
+        @Assert(s.hashTable[16384 + Int64(LZ4MID_hash8Ptr(h.pointer, 0))] == d)
+        @Assert(s.hashTable[16384 + Int64(LZ4MID_hash8Ptr(h.pointer, 1))] == d + 1u32)
+        @Assert(s.hashTable[16384 + Int64(LZ4MID_hash8Ptr(h.pointer, 39))] == d + 39u32)
+        @Assert(s.hashTable[16384 + Int64(LZ4MID_hash8Ptr(h.pointer, 54))] == d + 54u32)
+        @Assert(s.hashTable[16384 + Int64(LZ4MID_hash8Ptr(h.pointer, 55))] == d + 55u32)
+        // counts: 19 hash4 + 56 hash8 nonzero slots (no bucket collisions)
+        var nz4: Int64 = 0
+        var nz8: Int64 = 0
+        for (i in 0..16384) {
+            if (s.hashTable[i] != 0u32) { nz4 += 1 }
+        }
+        for (i in 16384..32768) {
+            if (s.hashTable[i] != 0u32) { nz8 += 1 }
+        }
+        @Assert(nz4 == 19)
+        @Assert(nz8 == 56)
+        releaseArrayRawData<UInt8>(h)
+    }
+    // (3) 40 KB RDG dict (mp=0.50 seed=9001): size > 32KB+8 so the second
+    // loop starts at target-32768 (= D+8184), NOT at nextToUpdate
+    let big = Array<UInt8>(40960, {_ => 0u8})
+    RDG_genBuffer(big, 40960, 0.50, 0.0, 9001u32)
+    unsafe {
+        let hb = acquireArrayRawData<UInt8>(big)
+        let s2 = LZ4_streamHC_t()
+        LZ4_initStreamHC(s2)
+        s2.dictLimit = d
+        s2.lowLimit = d
+        s2.nextToUpdate = d
+        LZ4MID_fillHTable(s2, hb.pointer, 40960)
+        let target: UInt32 = d + 40952u32          // = 106488
+        @Assert(target == 106488u32)
+        @Assert(s2.nextToUpdate == target)         // nextToUpdate = target
+        // A: non-3-step offsets below D+8184 whose buckets stay EMPTY ->
+        // the 1-step loop did not touch anything below target-32768
+        for (off in [506, 507, 516, 530, 531]) {
+            @Assert(s2.hashTable[16384 + Int64(LZ4MID_hash8Ptr(hb.pointer, off))] == 0u32)
+        }
+        // B: first-loop ADDPOS8 writes (off % 3 == 1, off < 8184) that
+        // survived because no second-loop position shares their bucket
+        for (off in [727, 751, 775, 778, 781]) {
+            @Assert(s2.hashTable[16384 + Int64(LZ4MID_hash8Ptr(hb.pointer, off))] == d + UInt32(off))
+        }
+        // C: second-loop-only positions (off % 3 != 1, off >= 8184) that
+        // are the last writers of their buckets
+        for (off in [8186, 8187, 8192, 8193, 8198]) {
+            @Assert(s2.hashTable[16384 + Int64(LZ4MID_hash8Ptr(hb.pointer, off))] == d + UInt32(off))
+        }
+        // D: hash4 3-step positions (off % 3 == 0) - written only by loop 1
+        for (off in [414, 459, 462, 471, 480]) {
+            @Assert(s2.hashTable[Int64(LZ4MID_hash4Ptr(hb.pointer, off))] == d + UInt32(off))
+        }
+        // literal bucket cross-checks against the C probe
+        @Assert(LZ4MID_hash8Ptr(hb.pointer, 506) == 3968u32)
+        @Assert(LZ4MID_hash8Ptr(hb.pointer, 8186) == 3669u32)
+        @Assert(LZ4MID_hash4Ptr(hb.pointer, 414) == 7784u32)
+        releaseArrayRawData<UInt8>(hb)
+    }
+}
+
+/*-************************************
+*  M4 Task 3: isStateCompatible (upstream lz4hc.c L1483-1488)
+**************************************/
+@Test
+func lz4hcStateCompatTest(): Unit {
+    // mid (levels 1-2) vs non-mid (3-12) are incompatible (table layouts
+    // differ: mid uses the hash4/hash8 split, hash-chain uses hash+chain);
+    // lv=2 vs lv=2 -> true; 2v3 / 9v2 / 12v2 -> false; 9v12 -> true
+    let a = LZ4_streamHC_t()
+    let b = LZ4_streamHC_t()
+    LZ4_initStreamHC(a)
+    LZ4_initStreamHC(b)
+    LZ4_setCompressionLevel(a, 2)
+    LZ4_setCompressionLevel(b, 2)
+    @Assert(lz4hcIsStateCompatible(a, b))
+    for (lv in [3, 9, 12]) {
+        LZ4_setCompressionLevel(b, Int32(lv))
+        @Assert(!lz4hcIsStateCompatible(a, b))   // mid vs non-mid
+        @Assert(!lz4hcIsStateCompatible(b, a))
+    }
+    LZ4_setCompressionLevel(a, 9)
+    LZ4_setCompressionLevel(b, 12)
+    @Assert(lz4hcIsStateCompatible(a, b))        // hc vs opt: both non-mid
+    LZ4_setCompressionLevel(a, 1)
+    @Assert(!lz4hcIsStateCompatible(a, b))       // lv=1 is mid as well
+}
+
+/*-************************************
 *  M4 Task 2: _dest_overflow fillOutput regimes (C probe, upstream 0774d055)
 **************************************/
 // scripts/hc_dest_probe.c (temporary, values pinned): n=8192 = 4096 RDG
