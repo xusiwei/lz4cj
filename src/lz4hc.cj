@@ -1859,7 +1859,9 @@ internal func LZ4HC_compress_generic_internal(s: LZ4_streamHC_t,
     (usingDictCtxHc 咨询块要按 dictCtx 的 prefix 读取);此前传 srcQ 的
     写法会让 dictCtx 咨询块读到工作 prefix 的别名——T2 ledger minor。
     **T5 修复轮**:dictBuf / dictCtx.prefixBuf 与 srcBuf 同一分配时禁止
-    重复 acquire(pre-acquire lz4SameBuffer 判定,命中由 srcBase 派生)。
+    重复 acquire(pre-acquire lz4SameBuffer 判定,命中由 srcBase 派生);
+    **T5 修复轮 2**:dictBuf === dictCtx.prefixBuf 且 ≠ srcBuf 同判
+    (命中由已持有的 dict 基址 bh.pointer 派生,见 pbufSameAsDict)。
     4 个分支独立 dispatch:
     (a) dictBuf=None, dictCtx=None → noDictCtx 路径 srcQ 占全部三位置
     (b) dictBuf=Some, dictCtx=None → noDictCtx with extDict
@@ -1876,7 +1878,10 @@ internal func lz4hcCompressRun(s: LZ4_streamHC_t,
        不得在有 raw handle 持有期间调用)。dictBuf === srcBuf(edge④ 几何:
        loadDictHC(D) 后 continue 的块仍驻 D)与 dictCtx.prefixBuf ===
        srcBuf(attach 后以字典流 prefix 缓冲本身作为工作块)都经公共 API
-       可达 —— 命中时禁止重复 acquire,指针由已持有的 srcBase 派生。 */
+       可达 —— 命中时禁止重复 acquire,指针由已持有的 srcBase 派生。
+       dictBuf === dictCtx.prefixBuf(edge⑤ 几何,见下方 pbufSameAsDict)
+       亦经公共 API 可达 —— 命中时 dictCtx 基址由已持有的 dict 侧
+       bh.pointer 派生。 */
     let dictBufOpt = s.dictBuf
     let dictCtxOpt = s.dictCtx
     let dictSameAsSrc: Bool = match (dictBufOpt) {
@@ -1891,6 +1896,21 @@ internal func lz4hcCompressRun(s: LZ4_streamHC_t,
             }
         case None => false
     }
+    /* dictBuf === dictCtx.prefixBuf 且 ≠ srcBuf(edge⑤ 几何:w 与 d 两流
+       loadDictHC 同一 D,attach 后对 B1 缓冲连续 continue —— src==end 免
+       setExternalDict,dictCtx 存活且其 prefixBuf 与 extDict 缓冲同分配):
+       dict 侧 bh 已持有该分配,dictCtxQ 须由 dict 基址派生,免二次
+       acquire。pbuf === srcBuf 的情形由上方 pbufSameAsSrc 哨兵先行覆盖
+       (db === srcBuf ∧ db === pbuf ⟹ pbuf === srcBuf,dispatch 内
+       pbufSameAsSrc 分支先命中)。 */
+    let pbufSameAsDict: Bool = match ((dictBufOpt, dictCtxOpt)) {
+        case (Some(db), Some(dctx)) =>
+            match (dctx.prefixBuf) {
+                case Some(pbuf) => lz4SameBuffer(db, pbuf)
+                case None => false
+            }
+        case _ => false
+    }
     unsafe {
         let sh = acquireArrayRawData<UInt8>(srcBuf)
         let dh = acquireArrayRawData<UInt8>(dst)
@@ -1899,22 +1919,28 @@ internal func lz4hcCompressRun(s: LZ4_streamHC_t,
         var r: (Int64, Int64) = (0, 0)
         if (let Some(db) <- dictBufOpt) {
             if (dictSameAsSrc) {
-                /* db === srcBuf:同一分配已由 sh 持有,免二次 acquire */
+                /* db === srcBuf:同一分配已由 sh 持有,免二次 acquire;
+                    dictBaseQ 位传 srcBase 占位(db === pbuf 的情形并入
+                    pbufSameAsSrc,dispatch 内先命中该分支) */
                 let dictQ = srcBase + s.dictStartIdx
                 r = lz4hcRunDictCtxDispatch(s, srcBuf, srcIdx, srcBase, srcQ,
-                    dictQ, dh.pointer, srcSize, dstCapacity, cLevel, limit, pbufSameAsSrc)
+                    dictQ, srcBase, dh.pointer, srcSize, dstCapacity, cLevel, limit,
+                    pbufSameAsSrc, false)
             } else {
                 let bh = acquireArrayRawData<UInt8>(db)
                 let dictQ = bh.pointer + s.dictStartIdx
                 r = lz4hcRunDictCtxDispatch(s, srcBuf, srcIdx, srcBase, srcQ,
-                    dictQ, dh.pointer, srcSize, dstCapacity, cLevel, limit, pbufSameAsSrc)
+                    dictQ, bh.pointer, dh.pointer, srcSize, dstCapacity, cLevel, limit,
+                    pbufSameAsSrc, pbufSameAsDict)
                 releaseArrayRawData<UInt8>(bh)
             }
         } else {
             /* dictBuf=None:可能 noDictCtx,也可能 usingDictCtxHc consult
-               (dictCtx 自带 prefixBuf 但本流 extDict 空 —— T5 修正) */
+                (dictCtx 自带 prefixBuf 但本流 extDict 空 —— T5 修正);
+                无 dictBuf 故无 dict 侧别名,dictBaseQ 位传 srcBase 占位 */
             r = lz4hcRunDictCtxDispatch(s, srcBuf, srcIdx, srcBase, srcQ,
-                srcQ, dh.pointer, srcSize, dstCapacity, cLevel, limit, pbufSameAsSrc)
+                srcQ, srcBase, dh.pointer, srcSize, dstCapacity, cLevel, limit,
+                pbufSameAsSrc, false)
         }
         releaseArrayRawData<UInt8>(dh)
         releaseArrayRawData<UInt8>(sh)
@@ -1923,14 +1949,18 @@ internal func lz4hcCompressRun(s: LZ4_streamHC_t,
 }
 
 /* lz4hcRunDictCtxDispatch:dictCtx 三态分派(dictBuf 侧 dictQ 指针已由
-    调用方解析)。dctx.prefixBuf 与 srcBuf 同一分配(pbufSameAsSrc,调用方
-    pre-acquire 判定)时以已持有的 srcBase 派生 dictCtxQ,免二次 acquire;
-    不同分配才对 pbuf acquire。 */
+    调用方解析,dictBaseQ 为 dict 侧已持有基址 —— bh 分支即 bh.pointer,
+    其余分支 srcBase 占位)。dctx.prefixBuf 与 srcBuf 同一分配
+    (pbufSameAsSrc)时以已持有的 srcBase 派生 dictCtxQ;与 dictBuf 同一
+    分配且 ≠ srcBuf(pbufSameAsDict,T5 修复轮 2)时以调用方已持有的
+    dictBaseQ 派生 dictCtxQ —— 两种命中均免二次 acquire,不同分配才对
+    pbuf acquire。 */
 internal func lz4hcRunDictCtxDispatch(s: LZ4_streamHC_t,
         srcBuf: Array<UInt8>, srcIdx: Int64, srcBase: CPointer<UInt8>,
-        srcQ: CPointer<UInt8>, dictQ: CPointer<UInt8>, dstQ: CPointer<UInt8>,
+        srcQ: CPointer<UInt8>, dictQ: CPointer<UInt8>, dictBaseQ: CPointer<UInt8>,
+        dstQ: CPointer<UInt8>,
         srcSize: Int64, dstCapacity: Int64, cLevel: Int32, limit: Int32,
-        pbufSameAsSrc: Bool): (Int64, Int64) {
+        pbufSameAsSrc: Bool, pbufSameAsDict: Bool): (Int64, Int64) {
     unsafe {
         match (s.dictCtx) {
             case Some(dctx) =>
@@ -1940,6 +1970,13 @@ internal func lz4hcRunDictCtxDispatch(s: LZ4_streamHC_t,
                             /* dctx.prefixBuf === srcBuf:同分配已持有 */
                             return lz4hcCompressGeneric(s, srcBuf, srcIdx, srcQ, dictQ,
                                 srcBase + dctx.prefixStartIdx,
+                                dstQ, srcSize, dstCapacity, cLevel, limit)
+                        }
+                        if (pbufSameAsDict) {
+                            /* dctx.prefixBuf === dictBuf(≠ srcBuf):该分配
+                                已由调用方 bh 持有,dictCtxQ 由 dict 基址派生 */
+                            return lz4hcCompressGeneric(s, srcBuf, srcIdx, srcQ, dictQ,
+                                dictBaseQ + dctx.prefixStartIdx,
                                 dstQ, srcSize, dstCapacity, cLevel, limit)
                         }
                         let phHandle = acquireArrayRawData<UInt8>(pbuf)

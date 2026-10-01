@@ -7,8 +7,11 @@
    lz4hcStreamEdgeTest (tight-continue 0 + dirty + resetFast recovery ==
    fresh stream; level switch 9->2 mid-stream on the inherited hash-chain
    state; resetStreamHC_fast mid-stream dictLimit shift then continue ==
-   fresh stream; overlap-shrink branch when the post-loadDict block lives
-   inside the dictionary buffer).
+    fresh stream; overlap-shrink branch when the post-loadDict block lives
+    inside the dictionary buffer; dictCtx prefix aliasing when the extDict
+    buffer D doubles as the attached dictCtx's prefix while src sits in a
+    separate buffer and continues contiguously — provenance of
+    lz4hcDictCtxPrefixAliasTest).
    Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs \
           scripts/hc_probe.c $HOME/lz4/tests/datagen.c $HOME/lz4/lib/lz4.c \
           $HOME/lz4/lib/lz4hc.c $HOME/lz4/lib/xxhash.c -o scripts/hc_probe
@@ -158,6 +161,46 @@ int main(void) {
                dictStartOff, ok);
         LZ4_freeStreamHC(ctx);
         free(D); free(out); free(dst);
+    }
+    /* 5) dictCtx prefix aliasing: two streams share dict buffer D. w loads D
+        then compresses B1 from a SEPARATE buffer (setExternalDict ->
+        dictBuf = D, dictCtx cleared); d loads the same D; attach(d to w);
+        then a CONTIGUOUS continue of B1's buffer (src == end skips
+        setExternalDict so dictCtx survives with d.prefixStart === D while
+        w.dictStart === D too — the dictCtx prefix aliases the extDict
+        buffer, distinct from src). Block-2 position = 16384 + 65536 >= 64KB
+        so upstream drops dictCtx (L1503, noDictCtx) and the extDict-D
+        geometry drives the bytes; rolling decode seeded with D
+        reconstructs B1+block2. */
+    {
+        unsigned char* D = mkbuf(65536, 0.5, 907);
+        unsigned char* B = mkbuf(32768, 0.5, 908);  /* block1 [0,16384) block2 [16384,32768) */
+        unsigned char* o1 = (unsigned char*)malloc(bound);
+        unsigned char* o2 = (unsigned char*)malloc(bound);
+        unsigned char* dst = (unsigned char*)malloc(32768);
+        LZ4_streamHC_t* w = LZ4_createStreamHC();
+        LZ4_streamHC_t* d = LZ4_createStreamHC();
+        LZ4_streamDecode_t* sd = LZ4_createStreamDecode();
+        LZ4_resetStreamHC(w, 9);
+        LZ4_resetStreamHC(d, 9);
+        int ld1 = LZ4_loadDictHC(w, (const char*)D, 65536);
+        int c1 = LZ4_compress_HC_continue(w, (const char*)B, (char*)o1, 16384, bound);
+        int ld2 = LZ4_loadDictHC(d, (const char*)D, 65536);
+        int preAttachCtxNull = (w->internal_donotuse.dictCtx == NULL);
+        LZ4_attach_HC_dictionary(w, d);
+        int c2 = LZ4_compress_HC_continue(w, (const char*)(B + 16384), (char*)o2, 16384, bound);
+        int dictCtxCleared = (w->internal_donotuse.dictCtx == NULL);
+        LZ4_setStreamDecode(sd, (const char*)D, 65536);
+        int r1 = LZ4_decompress_safe_continue(sd, (const char*)o1, (char*)dst, c1, 16384);
+        int r2 = LZ4_decompress_safe_continue(sd, (const char*)o2, (char*)(dst + 16384), c2, 16384);
+        int ok = (r1 == 16384) && (r2 == 16384) && memcmp(dst, B, 32768) == 0;
+        printf("hc-dictctx-alias: ld1=%d ld2=%d c1=%d xxh1=%08x c2=%d xxh2=%08x xxh2_64=%016llx preAttachCtxNull=%d dictCtxCleared=%d decode-ok=%d\n",
+               ld1, ld2, c1, XXH32(o1, (size_t)c1, 0), c2,
+               XXH32(o2, (size_t)c2, 0),
+               (unsigned long long)XXH64(o2, (size_t)c2, 0),
+               preAttachCtxNull, dictCtxCleared, ok);
+        LZ4_freeStreamHC(w); LZ4_freeStreamHC(d); LZ4_freeStreamDecode(sd);
+        free(D); free(B); free(o1); free(o2); free(dst);
     }
     return 0;
 }

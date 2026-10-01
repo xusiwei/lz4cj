@@ -2002,3 +2002,81 @@ func lz4hcStreamEdgeTest(): Unit {
     @Assert(hcBytesEqual(dec4, Array<UInt8>(16384, {i => D[i + 32768]}), 16384))
     println("hc edge: tight/lvswitch/resetfast/overlap pins verified")
 }
+
+// lz4hcDictCtxPrefixAliasTest: pins against upstream 0774d055 per
+// scripts/hc_probe.c case 5 (fix round 2, I5 residual). Geometry: streams
+// w and d both loadDictHC the SAME buffer D; w compresses B1 from a
+// SEPARATE buffer (setExternalDict -> dictBuf=D, dictCtx=None); attach(d);
+// then a CONTIGUOUS continue of B1's buffer (srcIdx == prefixEndIdx ->
+// src==end skips setExternalDict so dictCtx survives into
+// lz4hcCompressRun with dictBuf === dictCtx.prefixBuf !== srcBuf — the
+// extDict allocation doubles as the dictCtx prefix, which must not be
+// acquired twice). Probe stdout (upstream 0774d055):
+//   hc-dictctx-alias: ld1=65536 ld2=65536 c1=9672 xxh1=a42a5e0b c2=8393 xxh2=b0bfd6af xxh2_64=b21f1cd1b67f775b preAttachCtxNull=1 dictCtxCleared=1 decode-ok=1
+// Block-2 position = prefixLen 16384 + (dictLimit 131072 - lowLimit 65536)
+// = 81920 >= 64KB, so upstream L1503 drops dictCtx (noDictCtx) and the
+// extDict-D geometry drives the block-2 bytes. Rolling decode seeded with
+// D (LZ4_setStreamDecode) reconstructs B1+block2.
+@Test
+func lz4hcDictCtxPrefixAliasTest(): Unit {
+    let bound = Int64(LZ4_compressBound(16384))
+    let D = Array<UInt8>(65536, {_ => 0u8})
+    RDG_genBuffer(D, 65536, 0.50, 0.0, 907u32)
+    // B1 buffer 32768: block 1 = [0, 16384), block 2 = contiguous extension
+    // [16384, 32768) generated in the same call
+    let B = Array<UInt8>(32768, {_ => 0u8})
+    RDG_genBuffer(B, 32768, 0.50, 0.0, 908u32)
+    let w = LZ4_createStreamHC()
+    let d = LZ4_createStreamHC()
+    LZ4_resetStreamHC(w, 9)
+    LZ4_resetStreamHC(d, 9)
+    // w: loadDictHC(D) then B1 from a separate buffer -> setExternalDict:
+    // dictBuf = D, dictCtx = None (probe preAttachCtxNull=1)
+    @Assert(LZ4_loadDictHC(w, D, 65536) == 65536)
+    let o1 = Array<UInt8>(bound, {_ => 0u8})
+    let c1 = LZ4_compress_HC_continue(w, B, 0, 16384, o1, Int32(bound))
+    @Assert(c1 == 9672)
+    @Assert(XXH32(o1, Int64(c1), 0u32) == 0xa42a5e0bu32)
+    @Assert(w.dictCtx.isNone())
+    // d: the SAME allocation D as its prefix; attach d to w
+    @Assert(LZ4_loadDictHC(d, D, 65536) == 65536)
+    LZ4_attach_HC_dictionary(w, d)
+    // geometry proof BEFORE the block-2 compress: dictCtx alive, its
+    // prefixBuf is the same allocation as w's dictBuf, and srcBuf (B) is a
+    // different allocation — the exact dictBuf === dictCtx.prefixBuf !==
+    // srcBuf shape the pre-acquire sentinels must recognize
+    @Assert(w.dictCtx.isSome())
+    match (w.dictCtx) {
+        case Some(dctx) =>
+            match (dctx.prefixBuf) {
+                case Some(pb) => @Assert(lz4SameBuffer(pb, D))
+                case None => @Assert(false)
+            }
+        case None => @Assert(false)
+    }
+    match (w.dictBuf) {
+        case Some(db) => @Assert(lz4SameBuffer(db, D))
+        case None => @Assert(false)
+    }
+    @Assert(!lz4SameBuffer(B, D))
+    // contiguous continue: src==end keeps dictCtx alive across the boundary
+    @Assert(w.prefixEndIdx == 16384)
+    let o2 = Array<UInt8>(bound, {_ => 0u8})
+    let c2 = LZ4_compress_HC_continue(w, B, 16384, 16384, o2, Int32(bound))
+    @Assert(c2 == 8393)
+    @Assert(XXH32(o2, Int64(c2), 0u32) == 0xb0bfd6afu32)
+    @Assert(XXH64(o2, Int64(c2), 0u64) == 0xb21f1cd1b67f775bu64)
+    // position >= 64KB -> upstream L1503 dropped dictCtx during block 2
+    // (probe dictCtxCleared=1)
+    @Assert(w.dictCtx.isNone())
+    // rolling decode seeded with D reconstructs B1+block2 byte-exactly
+    // (probe decode-ok=1)
+    let sd = LZ4_createStreamDecode()
+    @Assert(LZ4_setStreamDecode(sd, D, 65536) == 1)
+    let dst = Array<UInt8>(32768, {_ => 0u8})
+    @Assert(LZ4_decompress_safe_continue(sd, o1, c1, dst, 0, 16384) == 16384)
+    @Assert(LZ4_decompress_safe_continue(sd, o2, c2, dst, 16384, 16384) == 16384)
+    @Assert(hcBytesEqual(dst, B, 32768))
+    LZ4_freeStreamDecode(sd)
+    println("hc dictctx alias: dictBuf===prefixBuf!==srcBuf no-double-acquire pins verified")
+}
