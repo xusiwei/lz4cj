@@ -54,6 +54,13 @@
 //         mode=hcdestcont (2 contiguous 16384 blocks of RDG(32768,0.50,
 //         906), LZ4_compress_HC_continue_destSize tg=12288; lv=9)
 //         => 2 rows => 426 rows.
+// + M5 Task 2 frame-header rows: mode=frhdr (LZ4F_compressBegin on a fresh
+//         cctx, dst 19B; the written header bytes are the artifact). 10 rows
+//         over A=RDG(65536,0.50,0): (1) NULL prefs = INIT defaults, (2)
+//         contentSize=65536, (3) dictID=0x12345678, (4) both, (5) content+
+//         block checksum flags, (6) blockIndependent, (7)-(9) blockSizeID
+//         5/6/7, (10) compressionLevel=9 - header bytes identical to row 1
+//         but the cctx takes the HC-context allocation path => 436 rows.
 //
 // Manifest line format (contract for M2 Tasks 3/4 and M3 - follow exactly):
 //   n=<n> mp=<mp> seed=<seed> mode=<mode> size=<c> [consumed=<k> ]xxh32=<h32> xxh64=<h64> inxxh32=<h32> inxxh64=<h64>[ file=block/<idx>.lz4]
@@ -122,9 +129,21 @@
 //   extState fast path and leaves *srcSizePtr untouched (consumed = n),
 //   target = n*3/4 exercises real fillOutput (consumed <= n)
 //
+// frhdr rows (M5 Task 2) extend the line format:
+//   n=65536 mp=0.50 seed=0 mode=frhdr bs=<0|4|5|6|7> bm=<0|1> ccs=<0|1>
+//   bcs=<0|1> csz=<v> did=<v> lv=<L> size=<7|11|15|19> xxh32=... xxh64=...
+//   inxxh32=... inxxh64=... file=block/<idx>.lz4
+// - compressBegin writes only the frame header; those bytes are the
+//   compressed output (size = 7 + 8*[csz>0] + 4*[did>0]); the RDG input
+//   A is never consumed, its digests pin row self-description (inxxh)
+// - bs= is the effective blockSizeID (bs=0 documents the begin-time
+//   substitution to 4; every emitted row shows the post-substitution
+//   value), bm= 0=linked 1=independent; row 1 passes NULL prefs
+//
 // Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs \
 //          scripts/gen_golden.c $HOME/lz4/tests/datagen.c $HOME/lz4/lib/lz4.c \
-//          $HOME/lz4/lib/lz4hc.c $HOME/lz4/lib/xxhash.c -o scripts/gen_golden
+//          $HOME/lz4/lib/lz4hc.c $HOME/lz4/lib/lz4frame.c \
+//          $HOME/lz4/lib/xxhash.c -o scripts/gen_golden
 /* expose the static-linking-only declarations used below
    (LZ4_compress_fast_extState_fastReset, LZ4_compress_destSize_extState) */
 #define LZ4_STATIC_LINKING_ONLY
@@ -133,6 +152,9 @@
 #include <string.h>
 #include "lz4.h"
 #include "lz4hc.h"
+/* lz4frame static-linking surface (M5 golden sections) */
+#define LZ4F_STATIC_LINKING_ONLY
+#include "lz4frame.h"
 #include "xxhash.h"
 #include "datagen.h"
 
@@ -1815,6 +1837,85 @@ int main(void) {
             free(buf); free(dstb); free(out);
         }
         free(dictBuf);
+    }
+    /* frhdr rows (M5 Task 2): LZ4F_compressBegin frame-header encoding. Each
+       row runs on a fresh cctx (LZ4F_createCompressionContext) +
+       LZ4F_compressBegin into a 19-byte dst; the written header bytes are the
+       artifact. The input A=RDG(65536,0.50,0) is never consumed (Begin writes
+       no block) - the inxxh fields pin it, matching the manifest v2
+       self-description convention. Row set: (1) NULL prefs = INIT defaults;
+       (2) contentSize=65536 (15B); (3) dictID=0x12345678 (11B); (4) both
+       (19B); (5) contentChecksum+blockChecksum flags; (6) blockIndependent;
+       (7)-(9) blockSizeID 5/6/7; (10) compressionLevel=9 - header bytes
+       identical to row 1, but the cctx takes the HC ctx allocation path
+       (lz4CtxAlloc 0 -> 2) instead of the fast one (0 -> 1). */
+    {
+        const size_t n = 65536;
+        unsigned char* buf = (unsigned char*)malloc(n);
+        if (!buf) { fprintf(stderr, "oom\n"); return 1; }
+        RDG_genBuffer(buf, n, 0.50, 0.0, 0);
+        printf("# frhdr=LZ4F_compressBegin(fresh cctx, dst 19B) over A=RDG(n=65536 mp=0.50 lp=0.00 "
+               "seed=0) xxh32=%08x xxh64=%016llx; header bytes are the artifact "
+               "(size=7+8*[csz>0]+4*[did>0]); row set: NULL-prefs default, csz, did, csz+did, "
+               "ccs+bcs, bm=1(independent), bs 5/6/7, lv=9 (header == default row, HC ctx path)\n",
+               XXH32(buf, n, 0), (unsigned long long)XXH64(buf, n, 0));
+        static const struct {
+            int usePrefs, bs, bm, ccs, bcs, lv;
+            unsigned long long csz;
+            unsigned did;
+        } kFH[10] = {
+            { 0, 4, 0, 0, 0, 0, 0ULL, 0U },          /* 1: NULL prefs */
+            { 1, 4, 0, 0, 0, 0, 65536ULL, 0U },      /* 2: csz */
+            { 1, 4, 0, 0, 0, 0, 0ULL, 305419896U },  /* 3: did=0x12345678 */
+            { 1, 4, 0, 0, 0, 0, 65536ULL, 305419896U }, /* 4: csz+did */
+            { 1, 4, 0, 1, 1, 0, 0ULL, 0U },          /* 5: ccs=1 bcs=1 */
+            { 1, 4, 1, 0, 0, 0, 0ULL, 0U },          /* 6: bm=1 */
+            { 1, 5, 0, 0, 0, 0, 0ULL, 0U },          /* 7: bs=5 */
+            { 1, 6, 0, 0, 0, 0, 0ULL, 0U },          /* 8: bs=6 */
+            { 1, 7, 0, 0, 0, 0, 0ULL, 0U },          /* 9: bs=7 */
+            { 1, 4, 0, 0, 0, 9, 0ULL, 0U },          /* 10: lv=9 */
+        };
+        for (unsigned ri = 0; ri < 10; ri++) {
+            LZ4F_cctx* cctx = NULL;
+            if (LZ4F_isError(LZ4F_createCompressionContext(&cctx, LZ4F_VERSION))) {
+                fprintf(stderr, "frhdr: createCompressionContext failed\n");
+                return 1;
+            }
+            unsigned char dst[19];
+            LZ4F_preferences_t prefs;
+            const LZ4F_preferences_t* pp = NULL;
+            if (kFH[ri].usePrefs) {
+                memset(&prefs, 0, sizeof(prefs));
+                prefs.frameInfo.blockSizeID = (LZ4F_blockSizeID_t)kFH[ri].bs;
+                prefs.frameInfo.blockMode = (LZ4F_blockMode_t)kFH[ri].bm;
+                prefs.frameInfo.contentChecksumFlag = (LZ4F_contentChecksum_t)kFH[ri].ccs;
+                prefs.frameInfo.blockChecksumFlag = (LZ4F_blockChecksum_t)kFH[ri].bcs;
+                prefs.frameInfo.contentSize = kFH[ri].csz;
+                prefs.frameInfo.dictID = kFH[ri].did;
+                prefs.compressionLevel = kFH[ri].lv;
+                pp = &prefs;
+            }
+            size_t r = LZ4F_compressBegin(cctx, dst, sizeof(dst), pp);
+            if (LZ4F_isError(r)) {
+                fprintf(stderr, "frhdr: compressBegin failed ri=%u\n", ri);
+                return 1;
+            }
+            if (r != 7 + (kFH[ri].csz ? 8 : 0) + (kFH[ri].did ? 4 : 0)) {
+                fprintf(stderr, "frhdr: unexpected header size ri=%u r=%zu\n", ri, r);
+                return 1;
+            }
+            printf("n=%zu mp=0.50 seed=0 mode=frhdr bs=%d bm=%d ccs=%d bcs=%d csz=%llu did=%u lv=%d "
+                   "size=%zu xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+                   n, kFH[ri].bs, kFH[ri].bm, kFH[ri].ccs, kFH[ri].bcs,
+                   kFH[ri].csz, kFH[ri].did, kFH[ri].lv, r,
+                   XXH32(dst, r, 0), (unsigned long long)XXH64(dst, r, 0),
+                   XXH32(buf, n, 0), (unsigned long long)XXH64(buf, n, 0));
+            writeArtifact(dst, (int)r, idx);
+            printf("\n");
+            idx++;
+            LZ4F_freeCompressionContext(cctx);
+        }
+        free(buf);
     }
     fprintf(stderr, "cases=%d\n", idx);
     return 0;

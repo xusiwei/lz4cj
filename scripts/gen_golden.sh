@@ -10,7 +10,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 cc -O2 -I"$HOME/lz4/lib" -I"$HOME/lz4/tests" -I"$HOME/lz4/programs" \
    "$ROOT/scripts/gen_golden.c" "$HOME/lz4/tests/datagen.c" "$HOME/lz4/lib/lz4.c" \
-   "$HOME/lz4/lib/lz4hc.c" "$HOME/lz4/lib/xxhash.c" -o "$ROOT/scripts/gen_golden"
+   "$HOME/lz4/lib/lz4hc.c" "$HOME/lz4/lib/lz4frame.c" "$HOME/lz4/lib/xxhash.c" \
+   -o "$ROOT/scripts/gen_golden"
 
 mkdir -p "$ROOT/corpus/block"
 rm -f "$ROOT"/corpus/block/*.lz4
@@ -38,14 +39,18 @@ scripts/gen_golden | tee corpus/block_golden_ref.txt
 #           8192 lv9-dict vs lv2-work incompatible consult)
 #         + 2 hcdestcont rows (M4 Task 5: lv9 2 contiguous blocks via
 #           LZ4_compress_HC_continue_destSize tg=12288)
-# = 426 data rows, plus 17 '#' provenance comments
+#         + 10 frhdr rows (M5 Task 2: LZ4F_compressBegin header encoding,
+#           fresh cctx per row, header bytes = artifact)
+# = 436 data rows, plus 18 '#' provenance comments
 #   (dict / stream / ring / setdict + cont / savedict / dictfast /
 #    dictslow / attach / extdict / destext + hc / hcdest +
-#    hccont / hcsavedict / hcdict / hcattach / hcdestcont sections)
-[ "$(wc -l < corpus/block_golden_ref.txt)" -eq 443 ] \
-    || { echo "ERROR: expected 443 golden lines (426 rows + 17 comments)" >&2; exit 1; }
-[ "$(grep -c '^#' corpus/block_golden_ref.txt)" -eq 17 ] \
-    || { echo "ERROR: expected exactly 17 comment lines" >&2; exit 1; }
+#    hccont / hcsavedict / hcdict / hcattach / hcdestcont + frhdr sections)
+[ "$(wc -l < corpus/block_golden_ref.txt)" -eq 454 ] \
+    || { echo "ERROR: expected 454 golden lines (436 rows + 18 comments)" >&2; exit 1; }
+[ "$(grep -c '^#' corpus/block_golden_ref.txt)" -eq 18 ] \
+    || { echo "ERROR: expected exactly 18 comment lines" >&2; exit 1; }
+[ "$(grep -c 'mode=frhdr' corpus/block_golden_ref.txt)" -eq 10 ] \
+    || { echo "ERROR: expected 10 frhdr rows" >&2; exit 1; }
 [ "$(grep -c 'mode=fastreset' corpus/block_golden_ref.txt)" -eq 10 ] \
     || { echo "ERROR: expected 10 fastreset rows" >&2; exit 1; }
 [ "$(grep -c 'mode=cont seq=' corpus/block_golden_ref.txt)" -eq 7 ] \

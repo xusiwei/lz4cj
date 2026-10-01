@@ -5,6 +5,8 @@
 // Corresponds to upstream lib/lz4frame.c + lib/lz4frame.h (frame format).
 // M5 Task 1: 类型/枚举/错误族/边界数学 + cctx 生命周期骨架(尚无压缩逻辑;
 // 压缩主体由 M5 后续任务落地)。
+// M5 Task 2: compressBegin 家族 —— 帧头字节级编码 + cctx 双标记 ctx 管理
+// + 缓冲管理(lz4frame.c L657-876)。
 
 package lz4
 
@@ -13,6 +15,26 @@ package lz4
 **************************************/
 /* LZ4F_VERSION = 100(1.10.0 编码,lz4frame.h L87 LZ4F_VERSION)。 */
 public const LZ4F_VERSION: UInt32 = 100u32
+
+/*-************************************
+*  帧格式常量(lz4frame.h L281-294 / L406-407)
+**************************************/
+/* 头长随参数变化:最小 7(魔数 4 + FLG 1 + BD 1 + HC 1),
+   最大 19(+contentSize 8 +dictID 4)。 */
+public const LZ4F_HEADER_SIZE_MIN: Int64 = 7
+public const LZ4F_HEADER_SIZE_MAX: Int64 = 19
+/* 块头 4 字节 LE(最高位标记未压缩块)。 */
+public const LZ4F_BLOCK_HEADER_SIZE: Int64 = 4
+/* 块尾校验 4 字节 LE。 */
+public const LZ4F_BLOCK_CHECKSUM_SIZE: Int64 = 4
+/* 帧内容校验 4 字节。 */
+public const LZ4F_CONTENT_CHECKSUM_SIZE: Int64 = 4
+/* 帧尾结束标记 4 字节(全零块头)。 */
+public const LZ4F_ENDMARK_SIZE: Int64 = 4
+/* 魔数与可跳帧前缀(lz4frame.h L406-407;skippable 常量 M6 解码侧消费,
+   先行落位)。 */
+public const LZ4F_MAGICNUMBER: UInt32 = 0x184D2204u32
+public const LZ4F_MAGIC_SKIPPABLE_START: UInt32 = 0x184D2A50u32
 
 /*-************************************
 *  枚举常量族(lz4frame.h L143-167;仓颉无 C 值枚举,以 Int32 常量承载,
@@ -276,6 +298,10 @@ public struct LZ4F_compressOptions_t {
 **************************************/
 public class LZ4F_CDict {
     internal var dictContent: Array<UInt8> = Array<UInt8>(0, {_ => 0u8})
+    /* 预消化字典流(Task 4 的 createCDict 初始化;本任务仅作为
+       lz4fInitStream 挂接目标存在,默认构造即可)。 */
+    internal var fastCtx: LZ4_stream_t = LZ4_stream_t()
+    internal var HCCtx: LZ4_streamHC_t = LZ4_streamHC_t()
 }
 
 /*-************************************
@@ -316,8 +342,255 @@ public func LZ4F_createCompressionContext(version: UInt32): LZ4F_cctx {
 }
 
 /* LZ4F_freeCompressionContext(lz4frame.c L638-647):C 释放 lz4CtxPtr/
-   tmpBuff/cctx 三段堆内存;仓颉由 GC 管理,无动作,恒返回 OK(0)。
-   C 支持 free(NULL),仓颉侧无空引用,不设 None 分支。 */
+    tmpBuff/cctx 三段堆内存;仓颉由 GC 管理,无动作,恒返回 OK(0)。
+    C 支持 free(NULL),仓颉侧无空引用,不设 None 分支。 */
 public func LZ4F_freeCompressionContext(cctx: LZ4F_cctx): Int64 {
     return LZ4F_OK_NoError
+}
+
+/*-************************************
+*  compressBegin 家族 (lz4frame.c L657-876)
+**************************************/
+/* lz4fInitStream —— LZ4F_initStream(lz4frame.c L657-683):为新一轮压缩
+    准备内部 LZ4(HC) 流:复位上下文并挂接字典(如有)。linked 帧头调用
+    一次;blockIndependent 模式逐块调用(M5 后续任务消费)。C 传 void* ctx
+    单指针,仓颉侧按 cctx 拆分字段 + cctx.cdict(调用点刚完成赋值,
+    L777 等价)。 */
+internal func lz4fInitStream(cctx: LZ4F_cctx, level: Int32,
+        blockMode: Int32): Unit {
+    if (level < LZ4HC_CLEVEL_MIN) {                                  /* L660 */
+        if (cctx.cdict.isSome() || blockMode == LZ4F_blockLinked) {  /* L661 */
+            /* 此后走 LZ4_compress_fast_continue(),需要已复位的流;
+               one-shot API 自带复位,此处复位属无效功(L662-666 注释
+               语义照搬)。 */
+            if (let Some(st) <- cctx.lz4CtxFast) {
+                LZ4_resetStream_fast(st)                             /* L667 */
+                if (let Some(cd) <- cctx.cdict) {
+                    LZ4_attach_dictionary(st, cd.fastCtx)            /* L669 */
+                }
+            }
+        }
+    } else {
+        if (let Some(st) <- cctx.lz4CtxHC) {
+            LZ4_resetStreamHC_fast(st, level)                        /* L673 */
+            if (let Some(cd) <- cctx.cdict) {
+                LZ4_attach_HC_dictionary(st, cd.HCCtx)               /* L675 */
+            }
+        }
+    }
+}
+
+/* lz4fCompressBeginInternal —— LZ4F_compressBegin_internal
+    (lz4frame.c L706-830):写帧头 + cctx/缓冲/上下文三段管理。
+    注:C 仅接受 cdict 与 dictBuffer 二者其一非空(L706 注释),
+    assert(cdict == NULL)(L784),仓颉侧同样不设联合分支。 */
+internal func lz4fCompressBeginInternal(cctx: LZ4F_cctx,
+        dstBuf: Array<UInt8>, dstIdx: Int64, dstCapacity: Int64,
+        dictBuffer: Option<Array<UInt8>>, dictSize: Int64,
+        cdict: Option<LZ4F_CDict>,
+        prefsPtr: Option<LZ4F_preferences_t>): Int64 {
+    /* L710:dstCapacity < maxFHSize(19) -> dstMaxSize_tooSmall */
+    if (dstCapacity < LZ4F_HEADER_SIZE_MAX) {
+        return -LZ4F_ERROR_dstMaxSize_tooSmall
+    }
+    /* L716-718:prefsPtr == NULL 时代入 INIT 默认;值拷贝入 cctx.prefs
+       (此后 C 经 preferencesPtr 的读取均与 cctx.prefs 等价)。 */
+    var prefs = LZ4F_preferences_t()
+    match (prefsPtr) {
+        case Some(p) => prefs = p
+        case None => ()
+    }
+    cctx.prefs = prefs                                             /* L718 */
+
+    /* cctx Management(L722-752):ctxTypeID 1=fast 2=hc。C 以字节数比较
+       (allocatedSize < requiredSize);尺寸随类型单调(0 < 16416 < 262200),
+       等价于 lz4CtxAlloc < ctxTypeID 的标记比较。 */
+    let ctxTypeID: Int32 = if (cctx.prefs.compressionLevel < LZ4HC_CLEVEL_MIN) {
+        1
+    } else {
+        2
+    }
+    if (cctx.lz4CtxAlloc < ctxTypeID) {
+        /* 空间不足:整体重分配。C 先 free 旧 lz4CtxPtr 再 malloc 新类型
+           (L727);仓颉侧 = 目标类型建新对象、另一类型字段置 None
+           (free 的镜像),双标记同步更新。 */
+        if (ctxTypeID == 1) {
+            cctx.lz4CtxHC = None                                   /* L727 镜像 */
+            let st = LZ4_stream_t()
+            LZ4_initStream(st)                                     /* L733 */
+            cctx.lz4CtxFast = Some(st)
+        } else {
+            cctx.lz4CtxFast = None                                 /* L727 镜像 */
+            let st = LZ4_streamHC_t()
+            LZ4_initStreamHC(st)                                   /* L737 */
+            cctx.lz4CtxHC = Some(st)
+        }
+        cctx.lz4CtxAlloc = ctxTypeID                               /* L740 */
+        cctx.lz4CtxType = ctxTypeID                                /* L741 */
+    } else if (cctx.lz4CtxType != ctxTypeID) {
+        /* 空间已足但类型不符:原位复位为正确类型,仅更新类型标记
+           (L743-750)。C 将同一块内存按新类型重解释(initStream 整表
+           清零);仓颉侧以对应类型的类实例承载 —— Some 时原位 init、
+           None 时新建,输出等价(设计 §4.4 偏差注记)。 */
+        if (ctxTypeID == 1) {
+            match (cctx.lz4CtxFast) {
+                case Some(st) => LZ4_initStream(st)                 /* L746 */
+                case None =>
+                    let st = LZ4_stream_t()
+                    LZ4_initStream(st)
+                    cctx.lz4CtxFast = Some(st)
+            }
+        } else {
+            match (cctx.lz4CtxHC) {
+                case Some(st) =>
+                    LZ4_initStreamHC(st)                            /* L749 */
+                    LZ4_setCompressionLevel(st, cctx.prefs.compressionLevel)
+                case None =>
+                    let st = LZ4_streamHC_t()
+                    LZ4_initStreamHC(st)
+                    LZ4_setCompressionLevel(st, cctx.prefs.compressionLevel)
+                    cctx.lz4CtxHC = Some(st)
+            }
+        }
+        cctx.lz4CtxType = ctxTypeID                                /* L751 */
+    }
+
+    /* Buffer Management(L754-772) */
+    if (cctx.prefs.frameInfo.blockSizeID == 0) {
+        cctx.prefs.frameInfo.blockSizeID = LZ4F_BLOCKSIZEID_DEFAULT /* L755 */
+    }
+    cctx.maxBlockSize = LZ4F_getBlockSize(cctx.prefs.frameInfo.blockSizeID)
+                                                                    /* L757 */
+    let linked = cctx.prefs.frameInfo.blockMode == LZ4F_blockLinked
+    let requiredBuffSize: Int64 = if (prefs.autoFlush != 0u32) {   /* L760 */
+        if (linked) { 65536 } else { 0 }    /* 仅 linked 需 64KB 历史窗口 */
+    } else {
+        cctx.maxBlockSize + (if (linked) { 131072 } else { 0 })
+    }
+    if (cctx.maxBufferSize < requiredBuffSize) {
+        cctx.maxBufferSize = 0                                     /* L764 */
+        cctx.tmpBuff = Array<UInt8>(requiredBuffSize, {_ => 0u8})  /* L766 */
+        cctx.maxBufferSize = requiredBuffSize                      /* L768 */
+    }
+    cctx.tmpIn = 0                                                 /* L770 */
+    cctx.tmpInSize = 0                                             /* L771 */
+    XXH32_reset(cctx.xxh, 0u32)                                    /* L772 */
+
+    /* context init(L774-794) */
+    cctx.cdict = cdict                                             /* L777 */
+    if (cctx.prefs.frameInfo.blockMode == LZ4F_blockLinked) {
+        /* 仅 blockLinked 帧级初始化;blockIndependent 逐块初始化 */
+        lz4fInitStream(cctx, cctx.prefs.compressionLevel, LZ4F_blockLinked)
+    }                                                              /* L778-780 */
+    if (prefs.compressionLevel >= LZ4HC_CLEVEL_MIN) {
+        if (let Some(hc) <- cctx.lz4CtxHC) {
+            LZ4_favorDecompressionSpeed(hc, Int32(prefs.favorDecSpeed))
+        }
+    }                                                              /* L781-783 */
+    match (dictBuffer) {
+        case Some(dict) =>
+            if (dictSize > Int64(Int32.Max)) {
+                return -LZ4F_ERROR_parameter_invalid               /* L786 */
+            }
+            if (cctx.lz4CtxType == 1) {
+                /* lz4 fast(L787-789) */
+                if (let Some(st) <- cctx.lz4CtxFast) {
+                    LZ4_loadDict(st, dict, Int32(dictSize))
+                }
+            } else {
+                /* lz4hc(L790-793) */
+                if (let Some(st) <- cctx.lz4CtxHC) {
+                    LZ4_loadDictHC(st, dict, Int32(dictSize))
+                }
+            }
+        case None => ()
+    }
+
+    /* Stage 2: Write Frame Header(L796-829);冷路径,安全索引直写 */
+
+    /* Magic Number,LE32(L799) */
+    var p = dstIdx
+    dstBuf[p] = UInt8(LZ4F_MAGICNUMBER & 0xFFu32)
+    dstBuf[p + 1] = UInt8((LZ4F_MAGICNUMBER >> 8) & 0xFFu32)
+    dstBuf[p + 2] = UInt8((LZ4F_MAGICNUMBER >> 16) & 0xFFu32)
+    dstBuf[p + 3] = UInt8((LZ4F_MAGICNUMBER >> 24) & 0xFFu32)
+    p += 4
+    let headerStart = p
+
+    /* FLG Byte(L803-809):版本 '01' <<6 + 各单双位标志 */
+    var flg: UInt32 = (1u32 & 0x3u32) << 6
+    flg += UInt32(cctx.prefs.frameInfo.blockMode & 1) << 5
+    flg += UInt32(cctx.prefs.frameInfo.blockChecksumFlag & 1) << 4
+    flg += (if (cctx.prefs.frameInfo.contentSize > 0u64) { 1u32 } else { 0u32 }) << 3
+    flg += UInt32(cctx.prefs.frameInfo.contentChecksumFlag & 1) << 2
+    flg += if (cctx.prefs.frameInfo.dictID > 0u32) { 1u32 } else { 0u32 }
+    dstBuf[p] = UInt8(flg)
+    p += 1
+
+    /* BD Byte(L810):块号低 3 位左移 4 */
+    dstBuf[p] = UInt8(UInt32(cctx.prefs.frameInfo.blockSizeID & 7) << 4)
+    p += 1
+
+    /* Optional Frame content size field,LE64(L811-814);
+       上游怪癖:仅此分支置 totalInSize = 0。 */
+    if (cctx.prefs.frameInfo.contentSize != 0u64) {
+        let csz = cctx.prefs.frameInfo.contentSize
+        dstBuf[p] = UInt8(csz & 0xFFu64)
+        dstBuf[p + 1] = UInt8((csz >> 8) & 0xFFu64)
+        dstBuf[p + 2] = UInt8((csz >> 16) & 0xFFu64)
+        dstBuf[p + 3] = UInt8((csz >> 24) & 0xFFu64)
+        dstBuf[p + 4] = UInt8((csz >> 32) & 0xFFu64)
+        dstBuf[p + 5] = UInt8((csz >> 40) & 0xFFu64)
+        dstBuf[p + 6] = UInt8((csz >> 48) & 0xFFu64)
+        dstBuf[p + 7] = UInt8((csz >> 56) & 0xFFu64)
+        p += 8
+        cctx.totalInSize = 0
+    }
+
+    /* Optional dictionary ID field,LE32(L815-818) */
+    if (cctx.prefs.frameInfo.dictID != 0u32) {
+        let did = cctx.prefs.frameInfo.dictID
+        dstBuf[p] = UInt8(did & 0xFFu32)
+        dstBuf[p + 1] = UInt8((did >> 8) & 0xFFu32)
+        dstBuf[p + 2] = UInt8((did >> 16) & 0xFFu32)
+        dstBuf[p + 3] = UInt8((did >> 24) & 0xFFu32)
+        p += 4
+    }
+
+    /* Header CRC Byte(L820-821):魔数后区域的 (xxh >> 8) 低 8 位 */
+    let hdrLen = p - headerStart
+    let hdr = Array<UInt8>(hdrLen, {i => dstBuf[headerStart + i]})
+    dstBuf[p] = lz4fHeaderChecksum(hdr, hdrLen)
+    p += 1
+
+    cctx.cStage = 1    /* header written, now request input data block(L826) */
+    return p - dstIdx                                              /* L828 */
+}
+
+/* LZ4F_compressBegin(lz4frame.c L832-839):无字典直通 internal。 */
+public func LZ4F_compressBegin(cctx: LZ4F_cctx, dstBuf: Array<UInt8>,
+        dstIdx: Int64, dstCapacity: Int64,
+        prefsPtr: Option<LZ4F_preferences_t>): Int64 {
+    return lz4fCompressBeginInternal(cctx, dstBuf, dstIdx, dstCapacity,
+        Option<Array<UInt8>>.None, 0, Option<LZ4F_CDict>.None, prefsPtr)
+}
+
+/* LZ4F_compressBegin_usingDict(lz4frame.c L855-866):经 usingDictOnce
+    直通 internal(上游注释照搬:仅首块使用字典的已知不完整实现 ——
+    独立块帧应逐块重挂字典,此处只挂一次)。 */
+public func LZ4F_compressBegin_usingDict(cctx: LZ4F_cctx,
+        dstBuf: Array<UInt8>, dstIdx: Int64, dstCapacity: Int64,
+        dict: Array<UInt8>, dictSize: Int64,
+        prefsPtr: Option<LZ4F_preferences_t>): Int64 {
+    return lz4fCompressBeginInternal(cctx, dstBuf, dstIdx, dstCapacity,
+        Some(dict), dictSize, Option<LZ4F_CDict>.None, prefsPtr)
+}
+
+/* LZ4F_compressBegin_usingCDict(lz4frame.c L868-876):cdict 透传。 */
+public func LZ4F_compressBegin_usingCDict(cctx: LZ4F_cctx,
+        dstBuf: Array<UInt8>, dstIdx: Int64, dstCapacity: Int64,
+        cdict: Option<LZ4F_CDict>,
+        prefsPtr: Option<LZ4F_preferences_t>): Int64 {
+    return lz4fCompressBeginInternal(cctx, dstBuf, dstIdx, dstCapacity,
+        Option<Array<UInt8>>.None, 0, cdict, prefsPtr)
 }
