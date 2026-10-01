@@ -23,6 +23,12 @@
 //         plus 46 M3b streaming-compression rows (8 cont + 6 savedict +
 //         8 dictfast + 8 dictslow + 4 attach + 6 extdict + 6 destext;
 //         M3b Tasks 2-4, see the section comments below) => 356 rows.
+// + M4 Task 2 HC rows: mode=hc (LZ4_compress_HC, hash-chain levels 3-9:
+//         A=RDG(65536,0.50,0) and B=RDG(65536,0.90,7) x lv 3..9, then lv=9
+//         over C=(131072,0.90,0) D=(255,0.50,0) E=(13,0.50,0) F=(0,0.00,0)
+//         G=(1,0.00,0) - empty/tiny inputs take the *dst=0 and all-literal
+//         paths) => 19 rows, plus mode=hcdest (LZ4_compress_HC_destSize,
+//         lv=9 x A, tg=n*3/4) => 1 row => 376 rows.
 //
 // Manifest line format (contract for M2 Tasks 3/4 and M3 - follow exactly):
 //   n=<n> mp=<mp> seed=<seed> mode=<mode> size=<c> [consumed=<k> ]xxh32=<h32> xxh64=<h64> inxxh32=<h32> inxxh64=<h64>[ file=block/<idx>.lz4]
@@ -93,7 +99,7 @@
 //
 // Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs \
 //          scripts/gen_golden.c $HOME/lz4/tests/datagen.c $HOME/lz4/lib/lz4.c \
-//          $HOME/lz4/lib/xxhash.c -o scripts/gen_golden
+//          $HOME/lz4/lib/lz4hc.c $HOME/lz4/lib/xxhash.c -o scripts/gen_golden
 /* expose the static-linking-only declarations used below
    (LZ4_compress_fast_extState_fastReset, LZ4_compress_destSize_extState) */
 #define LZ4_STATIC_LINKING_ONLY
@@ -101,6 +107,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "lz4.h"
+#include "lz4hc.h"
 #include "xxhash.h"
 #include "datagen.h"
 
@@ -1063,6 +1070,126 @@ int main(void) {
             free(buf); free(dst); free(out);
         }
         LZ4_freeStream(st);
+    }
+    /* hc rows (M4 Task 2): LZ4_compress_HC (lz4hc.c L1568) over the
+       hash-chain levels 3-9 (levels 1-2 lz4mid / 10-12 optimal are later
+       M4 tasks). A and B sweep all levels (nbSearches 4..256; lv=9 also
+       flips patternAnalysis on, maxNbAttempts 256 > 128), then lv=9 over
+       size-varied inputs C..G: C crosses the 64KB index regime, D/E stay
+       below/around LZ4_minLength(13) boundaries (E=13 is exactly
+       minLength -> all-literals via the inputSize<LZ4_minLength goto),
+       F=0 (empty: generic_internal writes *dst=0, size=1) and G=1 (1-byte
+       all-literal block). dstCapacity = compressBound => notLimited.
+       Hard check: every row standalone-decodes to the original input. */
+    {
+        static const struct { size_t n; double mp; unsigned seed; } kHCAB[2] = {
+            {65536, 0.50, 0}, {65536, 0.90, 7},
+        };
+        printf("# hc=LZ4_compress_HC(notLimited) hash-chain levels 3-9: "
+               "A=RDG(n=65536 mp=0.50 lp=0.00 seed=0) B=RDG(n=65536 mp=0.90 lp=0.00 seed=7) x lv=3..9; "
+               "lv=9 x C=RDG(n=131072 mp=0.90 lp=0.00 seed=0) D=RDG(n=255 mp=0.50 lp=0.00 seed=0) "
+               "E=RDG(n=13 mp=0.50 lp=0.00 seed=0) F=RDG(n=0 mp=0.00 lp=0.00 seed=0) "
+               "G=RDG(n=1 mp=0.00 lp=0.00 seed=0); every row standalone-decodes\n");
+        for (unsigned ab = 0; ab < 2; ab++)
+        for (int lv = 3; lv <= 9; lv++) {
+            size_t n = kHCAB[ab].n;
+            unsigned char* buf = (unsigned char*)malloc(n ? n : 1);
+            int bound = LZ4_compressBound((int)n);
+            unsigned char* out = (unsigned char*)malloc((size_t)bound);
+            unsigned char* dec = (unsigned char*)malloc(n ? n : 1);
+            if (!buf || !out || !dec) { fprintf(stderr, "oom\n"); return 1; }
+            RDG_genBuffer(buf, n, kHCAB[ab].mp, 0.0, kHCAB[ab].seed);
+            int c = LZ4_compress_HC((const char*)buf, (char*)out, (int)n, bound, lv);
+            if (c <= 0) {
+                fprintf(stderr, "hc: compress failed (n=%zu lv=%d)\n", n, lv);
+                return 1;
+            }
+            int r = LZ4_decompress_safe((const char*)out, (char*)dec, c, (int)n);
+            if (r != (int)n || memcmp(dec, buf, n) != 0) {
+                fprintf(stderr, "hc: decode check failed (n=%zu lv=%d)\n", n, lv);
+                return 1;
+            }
+            printf("n=%zu mp=%.2f seed=%u mode=hc lv=%d size=%d "
+                   "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+                   n, kHCAB[ab].mp, kHCAB[ab].seed, lv, c,
+                   XXH32(out, (size_t)c, 0), (unsigned long long)XXH64(out, (size_t)c, 0),
+                   XXH32(buf, n, 0), (unsigned long long)XXH64(buf, n, 0));
+            writeArtifact(out, c, idx);
+            printf("\n");
+            idx++;
+            free(buf); free(out); free(dec);
+        }
+        static const struct { size_t n; double mp; unsigned seed; } kHCE[5] = {
+            {131072, 0.90, 0}, {255, 0.50, 0}, {13, 0.50, 0}, {0, 0.00, 0}, {1, 0.00, 0},
+        };
+        for (unsigned ei = 0; ei < 5; ei++) {
+            size_t n = kHCE[ei].n;
+            unsigned char* buf = (unsigned char*)malloc(n ? n : 1);
+            int bound = LZ4_compressBound((int)n);
+            unsigned char* out = (unsigned char*)malloc((size_t)bound);
+            unsigned char* dec = (unsigned char*)malloc(n ? n : 1);
+            if (!buf || !out || !dec) { fprintf(stderr, "oom\n"); return 1; }
+            RDG_genBuffer(buf, n, kHCE[ei].mp, 0.0, kHCE[ei].seed);
+            int c = LZ4_compress_HC((const char*)buf, (char*)out, (int)n, bound, 9);
+            if (c <= 0) {
+                fprintf(stderr, "hc: compress failed (n=%zu lv=9)\n", n);
+                return 1;
+            }
+            int r = LZ4_decompress_safe((const char*)out, (char*)dec, c, (int)n);
+            if (r != (int)n || memcmp(dec, buf, n) != 0) {
+                fprintf(stderr, "hc: decode check failed (n=%zu lv=9)\n", n);
+                return 1;
+            }
+            printf("n=%zu mp=%.2f seed=%u mode=hc lv=9 size=%d "
+                   "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+                   n, kHCE[ei].mp, kHCE[ei].seed, c,
+                   XXH32(out, (size_t)c, 0), (unsigned long long)XXH64(out, (size_t)c, 0),
+                   XXH32(buf, n, 0), (unsigned long long)XXH64(buf, n, 0));
+            writeArtifact(out, c, idx);
+            printf("\n");
+            idx++;
+            free(buf); free(out); free(dec);
+        }
+    }
+    /* hcdest row (M4 Task 2): LZ4_compress_HC_destSize (lz4hc.c L1587) with
+       a heap state (LZ4_sizeofStateHC); lv=9 x A, target = n*3/4 exercises
+       the hash-chain fillOutput path (oend hack, _dest_overflow adaptation).
+       consumed= pins *srcSizePtr as written by the core. Hard checks:
+       size <= tg, consumed in [0, n], and the output decodes to exactly the
+       consumed prefix of the input. */
+    {
+        const size_t n = 65536;
+        unsigned char* buf = (unsigned char*)malloc(n);
+        int bound = LZ4_compressBound((int)n);
+        int tg = (int)(n * 3 / 4);
+        unsigned char* out = (unsigned char*)malloc((size_t)(tg > bound ? tg : bound));
+        unsigned char* dec = (unsigned char*)malloc(n);
+        void* hcState = malloc((size_t)LZ4_sizeofStateHC());
+        if (!buf || !out || !dec || !hcState) { fprintf(stderr, "oom\n"); return 1; }
+        RDG_genBuffer(buf, n, 0.50, 0.0, 0);
+        int consumed = (int)n;
+        int c = LZ4_compress_HC_destSize(hcState, (const char*)buf, (char*)out,
+                                         &consumed, tg, 9);
+        if (c <= 0 || c > tg || consumed < 0 || (size_t)consumed > n) {
+            fprintf(stderr, "hcdest: out of contract (c=%d tg=%d consumed=%d)\n", c, tg, consumed);
+            return 1;
+        }
+        int r = LZ4_decompress_safe((const char*)out, (char*)dec, c, consumed);
+        if (r != consumed || (consumed && memcmp(dec, buf, (size_t)consumed) != 0)) {
+            fprintf(stderr, "hcdest: decode check failed (c=%d consumed=%d r=%d)\n", c, consumed, r);
+            return 1;
+        }
+        printf("# hcdest=LZ4_compress_HC_destSize(heap state) lv=9 A=RDG(n=65536 mp=0.50 lp=0.00 seed=0) "
+               "tg=n*3/4 fillOutput; consumed= pins *srcSizePtr; decode out == src[0..consumed)\n");
+        printf("n=%zu mp=0.50 seed=0 mode=hcdest lv=9 tg=%d size=%d consumed=%d "
+               "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+               n, tg, c, consumed,
+               XXH32(out, (size_t)c, 0), (unsigned long long)XXH64(out, (size_t)c, 0),
+               XXH32(buf, n, 0), (unsigned long long)XXH64(buf, n, 0));
+        writeArtifact(out, c, idx);
+        printf("\n");
+        idx++;
+        free(buf); free(out); free(dec); free(hcState);
     }
     fprintf(stderr, "cases=%d\n", idx);
     return 0;

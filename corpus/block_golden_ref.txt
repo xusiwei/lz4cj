@@ -365,3 +365,25 @@ n=65536 mp=0.50 seed=802 mode=destext tg=98304 size=33368 consumed=65536 xxh32=f
 n=65536 mp=0.50 seed=802 mode=destext tg=49152 size=33368 consumed=65536 xxh32=fdb4005a xxh64=22fad74ef55e859f inxxh32=ca1943c2 inxxh64=fbccac0f7f1d13c3 file=block/353.lz4
 n=131072 mp=0.00 seed=803 mode=destext tg=196608 size=131587 consumed=131072 xxh32=78410cba xxh64=7f6ee26b91cadbec inxxh32=264e2b39 inxxh64=c698523d24c90fbc
 n=131072 mp=0.00 seed=803 mode=destext tg=98304 size=98304 consumed=97919 xxh32=e202c7ae xxh64=7bdc460baac80596 inxxh32=264e2b39 inxxh64=c698523d24c90fbc
+# hc=LZ4_compress_HC(notLimited) hash-chain levels 3-9: A=RDG(n=65536 mp=0.50 lp=0.00 seed=0) B=RDG(n=65536 mp=0.90 lp=0.00 seed=7) x lv=3..9; lv=9 x C=RDG(n=131072 mp=0.90 lp=0.00 seed=0) D=RDG(n=255 mp=0.50 lp=0.00 seed=0) E=RDG(n=13 mp=0.50 lp=0.00 seed=0) F=RDG(n=0 mp=0.00 lp=0.00 seed=0) G=RDG(n=1 mp=0.00 lp=0.00 seed=0); every row standalone-decodes
+n=65536 mp=0.50 seed=0 mode=hc lv=3 size=33017 xxh32=01f25a3e xxh64=2fb44d69874b5f38 inxxh32=c20f7bcc inxxh64=197a59a7c9d2bd88 file=block/356.lz4
+n=65536 mp=0.50 seed=0 mode=hc lv=4 size=32961 xxh32=8cea4b88 xxh64=b3acd99f48985ee2 inxxh32=c20f7bcc inxxh64=197a59a7c9d2bd88 file=block/357.lz4
+n=65536 mp=0.50 seed=0 mode=hc lv=5 size=32938 xxh32=04a21636 xxh64=7eaab14f3f69e400 inxxh32=c20f7bcc inxxh64=197a59a7c9d2bd88 file=block/358.lz4
+n=65536 mp=0.50 seed=0 mode=hc lv=6 size=32931 xxh32=fdc17372 xxh64=ca350279a75cb1d7 inxxh32=c20f7bcc inxxh64=197a59a7c9d2bd88 file=block/359.lz4
+n=65536 mp=0.50 seed=0 mode=hc lv=7 size=32921 xxh32=983c6835 xxh64=8136bfa5bc8a9477 inxxh32=c20f7bcc inxxh64=197a59a7c9d2bd88 file=block/360.lz4
+n=65536 mp=0.50 seed=0 mode=hc lv=8 size=32916 xxh32=83385a80 xxh64=f87f6a88866893a5 inxxh32=c20f7bcc inxxh64=197a59a7c9d2bd88 file=block/361.lz4
+n=65536 mp=0.50 seed=0 mode=hc lv=9 size=32916 xxh32=c21308ab xxh64=6b48f5333290f3fa inxxh32=c20f7bcc inxxh64=197a59a7c9d2bd88 file=block/362.lz4
+n=65536 mp=0.90 seed=7 mode=hc lv=3 size=5677 xxh32=45eb6a64 xxh64=dc35aa04f85b5341 inxxh32=99ba8de1 inxxh64=3a798cd5ac65353f file=block/363.lz4
+n=65536 mp=0.90 seed=7 mode=hc lv=4 size=5640 xxh32=97863510 xxh64=726cf3c48474cce4 inxxh32=99ba8de1 inxxh64=3a798cd5ac65353f file=block/364.lz4
+n=65536 mp=0.90 seed=7 mode=hc lv=5 size=5630 xxh32=885cf839 xxh64=0d52007356dac308 inxxh32=99ba8de1 inxxh64=3a798cd5ac65353f file=block/365.lz4
+n=65536 mp=0.90 seed=7 mode=hc lv=6 size=5610 xxh32=d4a63ee3 xxh64=9e3045b1c6c33b86 inxxh32=99ba8de1 inxxh64=3a798cd5ac65353f file=block/366.lz4
+n=65536 mp=0.90 seed=7 mode=hc lv=7 size=5604 xxh32=ac9e2687 xxh64=e52c6d4c0c65ed37 inxxh32=99ba8de1 inxxh64=3a798cd5ac65353f file=block/367.lz4
+n=65536 mp=0.90 seed=7 mode=hc lv=8 size=5597 xxh32=98af4edf xxh64=0f07d127881adf2d inxxh32=99ba8de1 inxxh64=3a798cd5ac65353f file=block/368.lz4
+n=65536 mp=0.90 seed=7 mode=hc lv=9 size=5546 xxh32=422c6bde xxh64=93f68e0df9ef9e3d inxxh32=99ba8de1 inxxh64=3a798cd5ac65353f file=block/369.lz4
+n=131072 mp=0.90 seed=0 mode=hc lv=9 size=17686 xxh32=8ddd3690 xxh64=86264ff432d3e68b inxxh32=bf1377f2 inxxh64=683af1c226081890 file=block/370.lz4
+n=255 mp=0.50 seed=0 mode=hc lv=9 size=238 xxh32=0639b5bd xxh64=645d2f9032bdf162 inxxh32=f125f7b1 inxxh64=42bbcae5695ca49e file=block/371.lz4
+n=13 mp=0.50 seed=0 mode=hc lv=9 size=14 xxh32=ab784699 xxh64=dd68042376530281 inxxh32=979ab100 inxxh64=8e064ca692afdcf9 file=block/372.lz4
+n=0 mp=0.00 seed=0 mode=hc lv=9 size=1 xxh32=cf65b03e xxh64=e934a84adb052768 inxxh32=02cc5d05 inxxh64=ef46db3751d8e999 file=block/373.lz4
+n=1 mp=0.00 seed=0 mode=hc lv=9 size=2 xxh32=47bed82c xxh64=ec3cae3829bb6262 inxxh32=9608f5fb inxxh64=50bd57c8fab35779 file=block/374.lz4
+# hcdest=LZ4_compress_HC_destSize(heap state) lv=9 A=RDG(n=65536 mp=0.50 lp=0.00 seed=0) tg=n*3/4 fillOutput; consumed= pins *srcSizePtr; decode out == src[0..consumed)
+n=65536 mp=0.50 seed=0 mode=hcdest lv=9 tg=49152 size=32916 consumed=65536 xxh32=c21308ab xxh64=6b48f5333290f3fa inxxh32=c20f7bcc inxxh64=197a59a7c9d2bd88 file=block/375.lz4

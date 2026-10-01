@@ -10,6 +10,7 @@
 package lz4
 
 import std.unittest.*
+import std.fs.*
 
 /*-************************************
 *  State family
@@ -492,5 +493,339 @@ func lz4hcEncodeSequenceTest(): Unit {
         @Assert(dst[4] == 0x22u8 && dst[5] == 0x11u8)   // LE16(0x1122)
         releaseArrayRawData<UInt8>(sh)
         releaseArrayRawData<UInt8>(dh)
+    }
+}
+
+/*-************************************
+*  M4 Task 2: hash-chain compression golden (vs upstream C, 0774d055)
+**************************************/
+// hc rows of corpus/block_golden_ref.txt (rows 356..374): LZ4_compress_HC
+// over levels 3-9, A=(65536,0.50,0) and B=(65536,0.90,7) x lv 3..9, then
+// lv=9 over C..G (131072/255/13/0/1). litProba is 0.0 for every row.
+// (n, mp, seed, lv, size, xxh32, xxh64, fileRowIdx), -1 = no artifact
+let HC_GOLD_REF: Array<(Int64, Float64, UInt32, Int32, Int32, UInt32, UInt64, Int64)> = [
+    (65536, 0.50, 0u32, 3, 33017, 0x01f25a3eu32, 0x2fb44d69874b5f38u64, 356),
+    (65536, 0.50, 0u32, 4, 32961, 0x8cea4b88u32, 0xb3acd99f48985ee2u64, 357),
+    (65536, 0.50, 0u32, 5, 32938, 0x04a21636u32, 0x7eaab14f3f69e400u64, 358),
+    (65536, 0.50, 0u32, 6, 32931, 0xfdc17372u32, 0xca350279a75cb1d7u64, 359),
+    (65536, 0.50, 0u32, 7, 32921, 0x983c6835u32, 0x8136bfa5bc8a9477u64, 360),
+    (65536, 0.50, 0u32, 8, 32916, 0x83385a80u32, 0xf87f6a88866893a5u64, 361),
+    (65536, 0.50, 0u32, 9, 32916, 0xc21308abu32, 0x6b48f5333290f3fau64, 362),
+    (65536, 0.90, 7u32, 3, 5677, 0x45eb6a64u32, 0xdc35aa04f85b5341u64, 363),
+    (65536, 0.90, 7u32, 4, 5640, 0x97863510u32, 0x726cf3c48474cce4u64, 364),
+    (65536, 0.90, 7u32, 5, 5630, 0x885cf839u32, 0x0d52007356dac308u64, 365),
+    (65536, 0.90, 7u32, 6, 5610, 0xd4a63ee3u32, 0x9e3045b1c6c33b86u64, 366),
+    (65536, 0.90, 7u32, 7, 5604, 0xac9e2687u32, 0xe52c6d4c0c65ed37u64, 367),
+    (65536, 0.90, 7u32, 8, 5597, 0x98af4edfu32, 0x0f07d127881adf2du64, 368),
+    (65536, 0.90, 7u32, 9, 5546, 0x422c6bdeu32, 0x93f68e0df9ef9e3du64, 369),
+    (131072, 0.90, 0u32, 9, 17686, 0x8ddd3690u32, 0x86264ff432d3e68bu64, 370),
+    (255, 0.50, 0u32, 9, 238, 0x0639b5bdu32, 0x645d2f9032bdf162u64, 371),
+    (13, 0.50, 0u32, 9, 14, 0xab784699u32, 0xdd68042376530281u64, 372),
+    (0, 0.00, 0u32, 9, 1, 0xcf65b03eu32, 0xe934a84adb052768u64, 373),
+    (1, 0.00, 0u32, 9, 2, 0x47bed82cu32, 0xec3cae3829bb6262u64, 374),
+]
+
+// hcdest row 375: LZ4_compress_HC_destSize lv=9 x A, tg=n*3/4. The whole
+// input compresses below the target, so fillOutput consumes everything
+// (consumed == n) and the bytes equal the lv=9 hc row (row 362 digests).
+// (n, mp, seed, lv, tg, size, consumed, xxh32, xxh64, fileRowIdx)
+let HC_DEST_REF: Array<(Int64, Float64, UInt32, Int32, Int32, Int32, Int32, UInt32, UInt64, Int64)> = [
+    (65536, 0.50, 0u32, 9, 49152, 32916, 65536, 0xc21308abu32, 0x6b48f5333290f3fau64, 375),
+]
+
+// readBlockArtifact is private to lz4_test.cj; identical helper here
+private func hcReadBlockArtifact(rowIdx: Int64): Array<Byte> {
+    let s = rowIdx.toString()
+    let padded = if (s.size == 1) { "00${s}" } else if (s.size == 2) { "0${s}" } else { s }
+    let name = "/block/${padded}.lz4"
+    try {
+        return File.readFrom("corpus" + name)
+    } catch (_: Exception) {
+        return File.readFrom("../corpus" + name)
+    }
+}
+
+private func hcBytesEqual(a: Array<UInt8>, b: Array<UInt8>, len: Int64): Bool {
+    if (a.size < len || b.size < len) {
+        return false
+    }
+    for (i in 0..len) {
+        if (a[i] != b[i]) {
+            return false
+        }
+    }
+    return true
+}
+
+@Test
+func lz4hcCompressHCGoldenTest(): Unit {
+    var checked = 0
+    var fileCompared = 0
+    for ((n, mp, seed, lv, wantSize, want32, want64, fileRow) in HC_GOLD_REF) {
+        let buf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(buf, n, mp, 0.0, seed)
+        let bound = Int64(LZ4_compressBound(Int32(n)))
+        let out = Array<UInt8>(bound, {_ => 0u8})
+        let c = LZ4_compress_HC(buf, Int32(n), out, Int32(bound), lv)
+        if (c != wantSize) {
+            println("SIZE n=${n} mp=${mp} seed=${seed} lv=${lv}: got ${c} want ${wantSize}")
+        }
+        @Assert(c == wantSize)
+        let got32 = XXH32(out, Int64(c), 0u32)
+        let got64 = XXH64(out, Int64(c), 0u64)
+        if (got32 != want32 || got64 != want64) {
+            println("DIGEST n=${n} mp=${mp} seed=${seed} lv=${lv} size=${c}: got ${got32}/${got64} want ${want32}/${want64}")
+        }
+        @Assert(got32 == want32)
+        @Assert(got64 == want64)
+        if (fileRow >= 0) {
+            let art = hcReadBlockArtifact(fileRow)
+            @Assert(art.size == Int64(c))
+            @Assert(hcBytesEqual(out, Array<UInt8>(art.size, {i => UInt8(art[i])}), Int64(c)))
+            fileCompared += 1
+        }
+        // closure roundtrip: every row standalone-decodes to the input
+        let dec = Array<UInt8>(n, {_ => 0u8})
+        @Assert(LZ4_decompress_safe(out, c, dec, Int32(n)) == Int32(n))
+        @Assert(hcBytesEqual(dec, buf, n))
+        checked += 1
+    }
+    @Assert(checked == 19)
+    @Assert(fileCompared == 19)
+    println("hc golden: ${checked}/19 rows, ${fileCompared} byte-exact artifacts")
+}
+
+@Test
+func lz4hcCompressHCDestSizeGoldenTest(): Unit {
+    var checked = 0
+    for ((n, mp, seed, lv, tg, wantSize, wantConsumed, want32, want64, fileRow) in HC_DEST_REF) {
+        let buf = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(buf, n, mp, 0.0, seed)
+        let out = Array<UInt8>(Int64(tg), {_ => 0u8})
+        let st = LZ4_createStreamHC()
+        let (c, consumed) = LZ4_compress_HC_destSize(st, buf, Int32(n), out, tg, lv)
+        if (c != wantSize || consumed != wantConsumed) {
+            println("HCDEST n=${n} lv=${lv} tg=${tg}: got (${c},${consumed}) want (${wantSize},${wantConsumed})")
+        }
+        @Assert(c == wantSize)
+        @Assert(consumed == wantConsumed)
+        @Assert(c >= 1 && c <= tg)                 // destSize invariants
+        @Assert(consumed >= 0 && consumed <= Int32(n))
+        let got32 = XXH32(out, Int64(c), 0u32)
+        let got64 = XXH64(out, Int64(c), 0u64)
+        if (got32 != want32 || got64 != want64) {
+            println("DIGEST n=${n} lv=${lv} tg=${tg}: got ${got32}/${got64} want ${want32}/${want64}")
+        }
+        @Assert(got32 == want32)
+        @Assert(got64 == want64)
+        if (fileRow >= 0) {
+            let art = hcReadBlockArtifact(fileRow)
+            @Assert(art.size == Int64(c))
+            @Assert(hcBytesEqual(out, Array<UInt8>(art.size, {i => UInt8(art[i])}), Int64(c)))
+        }
+        // decode == src[0..consumed)
+        let dec = Array<UInt8>(n, {_ => 0u8})
+        @Assert(LZ4_decompress_safe(out, c, dec, consumed) == consumed)
+        @Assert(hcBytesEqual(dec, buf, Int64(consumed)))
+        checked += 1
+    }
+    @Assert(checked == 1)
+    println("hcdest golden: ${checked}/1 rows")
+}
+
+/*-************************************
+*  M4 Task 2: extState family + destSize semantics
+**************************************/
+@Test
+func lz4hcExtStateTest(): Unit {
+    let n: Int64 = 65536
+    let a = Array<UInt8>(n, {_ => 0u8})
+    RDG_genBuffer(a, n, 0.50, 0.0, 0u32)
+    let bound = Int32(LZ4_compressBound(Int32(n)))
+    // (1) same state twice via extStateHC (2nd call full init): outputs
+    // byte-identical to two independent calls
+    let o1 = Array<UInt8>(Int64(bound), {_ => 0u8})
+    let o2 = Array<UInt8>(Int64(bound), {_ => 0u8})
+    let o3 = Array<UInt8>(Int64(bound), {_ => 0u8})
+    let st1 = LZ4_streamHC_t()
+    let c1 = LZ4_compress_HC_extStateHC(st1, a, Int32(n), o1, bound, 5)
+    let c2 = LZ4_compress_HC_extStateHC(st1, a, Int32(n), o2, bound, 5)
+    let st2 = LZ4_streamHC_t()
+    let c3 = LZ4_compress_HC_extStateHC(st2, a, Int32(n), o3, bound, 5)
+    @Assert(c1 > 0 && c1 == c2 && c2 == c3)
+    @Assert(hcBytesEqual(o1, o2, Int64(c1)))
+    @Assert(hcBytesEqual(o1, o3, Int64(c1)))
+    // (2) fastReset same-stream reuse (clean state takes the resetFast
+    // path: dictLimit += prefixLen, tables kept); post-call state pin:
+    // prefixBuf aliases src, dictLimit == 64KB anchor, end == srcSize
+    let f1 = Array<UInt8>(Int64(bound), {_ => 0u8})
+    let f2 = Array<UInt8>(Int64(bound), {_ => 0u8})
+    let f3 = Array<UInt8>(Int64(bound), {_ => 0u8})
+    let stf = LZ4_streamHC_t()
+    LZ4_initStreamHC(stf)
+    let cf1 = LZ4_compress_HC_extStateHC_fastReset(stf, a, Int32(n), f1, bound, 7)
+    @Assert(cf1 > 0)
+    @Assert(stf.prefixBuf.isSome() && lz4SameBuffer(stf.prefixBuf.getOrThrow(), a))
+    @Assert(stf.dictLimit == 65536u32 && stf.lowLimit == 65536u32)
+    @Assert(stf.prefixEndIdx == stf.prefixStartIdx + n)
+    @Assert(stf.dirty == false)
+    // manual resetFast on the clean state: the reuse path accumulates
+    // dictLimit by the prefix length (upstream L1652)
+    LZ4_resetStreamHC_fast(stf, 7)
+    @Assert(stf.dictLimit == 65536u32 + UInt32(n))
+    @Assert(stf.prefixBuf.isNone() && stf.dictCtx.isNone())
+    // second fastReset call reuses the dirty table via the +64KB re-anchor;
+    // output still byte-identical (stale entries fall below lowLimit) and
+    // equal to a fresh-state one-shot LZ4_compress_HC
+    let cf2 = LZ4_compress_HC_extStateHC_fastReset(stf, a, Int32(n), f2, bound, 7)
+    @Assert(cf2 == cf1)
+    @Assert(hcBytesEqual(f1, f2, Int64(cf1)))
+    let cf3 = LZ4_compress_HC(a, Int32(n), f3, bound, 7)
+    @Assert(cf3 == cf1)
+    @Assert(hcBytesEqual(f1, f3, Int64(cf1)))
+    @Assert(stf.dirty == false)
+    // (3) dirty stream (dirty=true manual): fastReset does a full init,
+    // output identical
+    stf.dirty = true
+    let f4 = Array<UInt8>(Int64(bound), {_ => 0u8})
+    let cf4 = LZ4_compress_HC_extStateHC_fastReset(stf, a, Int32(n), f4, bound, 7)
+    @Assert(cf4 == cf1)
+    @Assert(hcBytesEqual(f1, f4, Int64(cf1)))
+    @Assert(stf.dirty == false)
+    // (4) failure modes: insufficient capacity -> 0 and dirty (core fail,
+    // upstream L1461); dstCapacity==0 -> 0 (sanitization, no dirty change);
+    // srcSize==0 -> 1 (dst[0]==0); srcSize=-1 -> 0 (U32 cast > MAX)
+    let tiny = Array<UInt8>(4096, {_ => 0u8})
+    RDG_genBuffer(tiny, 4096, 0.0, 0.0, 0u32)
+    let small = Array<UInt8>(16, {_ => 0xFFu8})
+    let st4 = LZ4_streamHC_t()
+    LZ4_initStreamHC(st4)
+    @Assert(LZ4_compress_HC_extStateHC(st4, tiny, 4096, small, 16, 9) == 0)
+    @Assert(st4.dirty == true)
+    st4.dirty = false
+    @Assert(LZ4_compress_HC_extStateHC(st4, tiny, 4096, small, 0, 9) == 0)
+    @Assert(st4.dirty == false)
+    small[0] = 0xFFu8
+    @Assert(LZ4_compress_HC_extStateHC(st4, tiny, 0, small, 16, 9) == 1 && small[0] == 0u8)
+    @Assert(LZ4_compress_HC_extStateHC(st4, tiny, -1, small, 16, 9) == 0)
+    // one-shot LZ4_compress_HC delegates to extStateHC (temp state)
+    let f5 = Array<UInt8>(Int64(bound), {_ => 0u8})
+    let c5 = LZ4_compress_HC(a, Int32(n), f5, bound, 5)
+    @Assert(c5 == c1)
+    @Assert(hcBytesEqual(o1, f5, Int64(c1)))
+}
+
+@Test
+func lz4hcDestSizeSemanticsTest(): Unit {
+    let n: Int64 = 8192
+    let a = Array<UInt8>(n, {_ => 0u8})
+    RDG_genBuffer(a, n, 0.50, 0.0, 5u32)
+    let bound = LZ4_compressBound(Int32(n))
+    // target >= compressBound: fillOutput completes with full consumption;
+    // bytes identical to regular LZ4_compress_HC, consumed == srcSize,
+    // clean exit, and a second call on the same state reproduces (init)
+    let reg = Array<UInt8>(Int64(bound), {_ => 0u8})
+    let cref = LZ4_compress_HC(a, Int32(n), reg, bound, 9)
+    @Assert(cref > 0)
+    let st = LZ4_streamHC_t()
+    let o1 = Array<UInt8>(Int64(bound), {_ => 0u8})
+    let (c1, k1) = LZ4_compress_HC_destSize(st, a, Int32(n), o1, bound, 9)
+    @Assert(c1 == cref && k1 == Int32(n))
+    @Assert(hcBytesEqual(o1, reg, Int64(c1)))
+    @Assert(st.dirty == false)
+    @Assert(st.prefixEndIdx == st.prefixStartIdx + Int64(k1))
+    let o2 = Array<UInt8>(Int64(bound), {_ => 0u8})
+    let (c2, k2) = LZ4_compress_HC_destSize(st, a, Int32(n), o2, bound, 9)
+    @Assert(c2 == c1 && k2 == k1)
+    @Assert(hcBytesEqual(o1, o2, Int64(c1)))
+    // target <= 0: dstCapacity<1 sanitization -> (0, srcSize)
+    let (c0, k0) = LZ4_compress_HC_destSize(st, a, Int32(n), o1, 0, 9)
+    @Assert(c0 == 0 && k0 == Int32(n))
+    let (cm, km) = LZ4_compress_HC_destSize(st, a, Int32(n), o1, -7, 9)
+    @Assert(cm == 0 && km == Int32(n))
+    // tg = n*3/4 shrink correctness (C golden pins the A-shaped row);
+    // here the input compresses below target so all n bytes are consumed,
+    // and upstream advances end by the full *srcSizePtr (lz4hc.c L1440),
+    // which equals consumed in this regime
+    let tg = Int32(n * 3 / 4)
+    let o3 = Array<UInt8>(Int64(tg), {_ => 0u8})
+    let (c3, k3) = LZ4_compress_HC_destSize(st, a, Int32(n), o3, tg, 9)
+    @Assert(c3 >= 1 && c3 <= tg)
+    @Assert(k3 == Int32(n))
+    @Assert(st.prefixEndIdx == st.prefixStartIdx + Int64(k3))
+    let dec = Array<UInt8>(n, {_ => 0u8})
+    @Assert(LZ4_decompress_safe(o3, c3, dec, k3) == k3)
+    @Assert(hcBytesEqual(dec, a, n))
+    // real shrink (incompressible input, target below the literal cost):
+    // consumed < n; end is still advanced by the FULL input (L1440), the
+    // consumed prefix is what the emitted block decodes to
+    let ni: Int64 = 4096
+    let b = Array<UInt8>(ni, {_ => 0u8})
+    RDG_genBuffer(b, ni, 0.0, 0.0, 9u32)
+    let tgi = Int32(ni * 3 / 4)
+    let ob = Array<UInt8>(Int64(tgi), {_ => 0u8})
+    let (cb, kb) = LZ4_compress_HC_destSize(st, b, Int32(ni), ob, tgi, 9)
+    @Assert(cb >= 1 && cb <= tgi)
+    @Assert(kb >= 1 && kb < Int32(ni))
+    @Assert(st.prefixEndIdx == st.prefixStartIdx + ni)
+    let decb = Array<UInt8>(ni, {_ => 0u8})
+    @Assert(LZ4_decompress_safe(ob, cb, decb, kb) == kb)
+    @Assert(hcBytesEqual(decb, b, Int64(kb)))
+}
+
+/*-************************************
+*  M4 Task 2: _dest_overflow fillOutput regimes (C probe, upstream 0774d055)
+**************************************/
+// scripts/hc_dest_probe.c (temporary, values pinned): n=8192 = 4096 RDG
+// noise bytes (mp=0.0 lp=0.0 seed=0) + 8-byte-period tail; lv=9 targets
+//   tg=4100: first-sequence literal check fails (encodeSequence L330) ->
+//            _dest_overflow skips (ll cost > maxLitPos) -> last-literals
+//            fill adaptation: c == tg, consumed < n
+//   tg=4123: overflow block writes: literals ok, match clamped to
+//            maxMlSize = MINMATCH+(ML_MASK-1)+bytesLeftForMl*255 (L1397),
+//            truncated sequence + tail adaptation: c == tg
+//   tg=4200: sequence fits within oend hack -> full consumption, bytes
+//            equal regular lv=9 LZ4_compress_HC output
+// (tg, size, consumed, xxh32, xxh64)
+let HC_DEST_OVERFLOW_REF: Array<(Int32, Int32, Int32, UInt32, UInt64)> = [
+    (4100, 4100, 4083, 0x4a58aca9u32, 0x2c0a4610e887539bu64),
+    (4123, 4123, 4105, 0x7509eb3au32, 0x46e556c2dd3edf37u64),
+    (4200, 4146, 8192, 0x58ae42e3u32, 0xe4cb540bc1f37e5eu64),
+]
+
+@Test
+func lz4hcDestOverflowTest(): Unit {
+    let n: Int64 = 8192
+    let a = Array<UInt8>(n, {_ => 0u8})
+    let head = Array<UInt8>(4096, {_ => 0u8})
+    RDG_genBuffer(head, 4096, 0.0, 0.0, 0u32)
+    for (i in 0..4096) {
+        a[i] = head[i]
+    }
+    for (i in 4096..n) {
+        a[i] = UInt8(0xAAu8 ^ UInt8(Int64(i) % 8))
+    }
+    let reg = Array<UInt8>(Int64(LZ4_compressBound(Int32(n))), {_ => 0u8})
+    let creg = LZ4_compress_HC(a, Int32(n), reg, LZ4_compressBound(Int32(n)), 9)
+    @Assert(creg == 4146)
+    for ((tg, wantSize, wantConsumed, want32, want64) in HC_DEST_OVERFLOW_REF) {
+        let out = Array<UInt8>(Int64(tg), {_ => 0u8})
+        let st = LZ4_createStreamHC()
+        let (c, consumed) = LZ4_compress_HC_destSize(st, a, Int32(n), out, tg, 9)
+        if (c != wantSize || consumed != wantConsumed) {
+            println("OVERFLOW tg=${tg}: got (${c},${consumed}) want (${wantSize},${wantConsumed})")
+        }
+        @Assert(c == wantSize)
+        @Assert(consumed == wantConsumed)
+        @Assert(c >= 1 && c <= tg)
+        @Assert(XXH32(out, Int64(c), 0u32) == want32)
+        @Assert(XXH64(out, Int64(c), 0u64) == want64)
+        if (tg == 4200) {
+            // full-consumption regime: bytes equal the regular output
+            @Assert(hcBytesEqual(out, reg, Int64(c)))
+        }
+        let dec = Array<UInt8>(n, {_ => 0u8})
+        @Assert(LZ4_decompress_safe(out, c, dec, consumed) == consumed)
+        @Assert(hcBytesEqual(dec, a, Int64(consumed)))
     }
 }
