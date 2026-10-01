@@ -33,6 +33,14 @@
 //         then lv=2 over C..G (same inputs as Task 2; E=13 passes the
 //         >=minLength guard - main loop runs, no match, all literals) => 9
 //         rows, plus mode=hcdest lv=2 x A (tg=n*3/4) => 1 row => 386 rows.
+// + M4 Task 4 optimal rows: mode=hc levels 10-12 (lz4opt strategy,
+//         LZ4HC_compress_optimal): lv 10/11/12 x A/B, then lv=12 over C..G
+//         (same inputs as Tasks 2-3), plus favor rows fav=1 (fresh heap
+//         stream, LZ4_favorDecompressionSpeed(ctx,1) then
+//         LZ4_compress_HC_extStateHC_fastReset - the full-init extStateHC
+//         variant would wipe the flag; the new fav=1 field marks the row)
+//         over lv=10 x A, lv=12 x A, lv=12 x B => 14 rows, plus mode=hcdest
+//         lv=10 and lv=12 x A (tg=n*3/4) => 2 rows => 402 rows.
 //
 // Manifest line format (contract for M2 Tasks 3/4 and M3 - follow exactly):
 //   n=<n> mp=<mp> seed=<seed> mode=<mode> size=<c> [consumed=<k> ]xxh32=<h32> xxh64=<h64> inxxh32=<h32> inxxh64=<h64>[ file=block/<idx>.lz4]
@@ -1307,6 +1315,170 @@ int main(void) {
         printf("\n");
         idx++;
         free(buf); free(out); free(dec); free(hcState);
+    }
+    /* hc optimal rows (M4 Task 4): LZ4_compress_HC over the optimal-parser
+       levels 10-12 (lz4hc.c L1879-2186). Appended after every Task 2/3
+       section so all existing artifact indices are preserved; the rows join
+       the mode=hc / mode=hcdest sections (no new '#' comments). lv=12 runs
+       with fullUpdate=1 (cLevel >= LZ4HC_CLEVEL_MAX) and sufficient_len =
+       4095 (targetLength 4096 clamped to LZ4_OPT_NUM-1); lv=10/11 run
+       partial with 64/128. C..G pin the length regimes with the opt parser
+       (E=13: main loop runs - no match, all literals; F=0 via generic
+       sanitization; G=1 single-literal block). Hard check: every row
+       standalone-decodes to the original input. */
+    {
+        static const struct { size_t n; double mp; unsigned seed; } kOptAB[2] = {
+            {65536, 0.50, 0}, {65536, 0.90, 7},
+        };
+        for (int lv = 10; lv <= 12; lv++)
+        for (unsigned ab = 0; ab < 2; ab++) {
+            size_t n = kOptAB[ab].n;
+            unsigned char* buf = (unsigned char*)malloc(n ? n : 1);
+            int bound = LZ4_compressBound((int)n);
+            unsigned char* out = (unsigned char*)malloc((size_t)bound);
+            unsigned char* dec = (unsigned char*)malloc(n ? n : 1);
+            if (!buf || !out || !dec) { fprintf(stderr, "oom\n"); return 1; }
+            RDG_genBuffer(buf, n, kOptAB[ab].mp, 0.0, kOptAB[ab].seed);
+            int c = LZ4_compress_HC((const char*)buf, (char*)out, (int)n, bound, lv);
+            if (c <= 0) {
+                fprintf(stderr, "hcopt: compress failed (n=%zu lv=%d)\n", n, lv);
+                return 1;
+            }
+            int r = LZ4_decompress_safe((const char*)out, (char*)dec, c, (int)n);
+            if (r != (int)n || memcmp(dec, buf, n) != 0) {
+                fprintf(stderr, "hcopt: decode check failed (n=%zu lv=%d)\n", n, lv);
+                return 1;
+            }
+            printf("n=%zu mp=%.2f seed=%u mode=hc lv=%d size=%d "
+                   "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+                   n, kOptAB[ab].mp, kOptAB[ab].seed, lv, c,
+                   XXH32(out, (size_t)c, 0), (unsigned long long)XXH64(out, (size_t)c, 0),
+                   XXH32(buf, n, 0), (unsigned long long)XXH64(buf, n, 0));
+            writeArtifact(out, c, idx);
+            printf("\n");
+            idx++;
+            free(buf); free(out); free(dec);
+        }
+        static const struct { size_t n; double mp; unsigned seed; } kOptE[5] = {
+            {131072, 0.90, 0}, {255, 0.50, 0}, {13, 0.50, 0}, {0, 0.00, 0}, {1, 0.00, 0},
+        };
+        for (unsigned ei = 0; ei < 5; ei++) {
+            size_t n = kOptE[ei].n;
+            unsigned char* buf = (unsigned char*)malloc(n ? n : 1);
+            int bound = LZ4_compressBound((int)n);
+            unsigned char* out = (unsigned char*)malloc((size_t)bound);
+            unsigned char* dec = (unsigned char*)malloc(n ? n : 1);
+            if (!buf || !out || !dec) { fprintf(stderr, "oom\n"); return 1; }
+            RDG_genBuffer(buf, n, kOptE[ei].mp, 0.0, kOptE[ei].seed);
+            int c = LZ4_compress_HC((const char*)buf, (char*)out, (int)n, bound, 12);
+            if (c <= 0) {
+                fprintf(stderr, "hcopt: compress failed (n=%zu lv=12)\n", n);
+                return 1;
+            }
+            int r = LZ4_decompress_safe((const char*)out, (char*)dec, c, (int)n);
+            if (r != (int)n || memcmp(dec, buf, n) != 0) {
+                fprintf(stderr, "hcopt: decode check failed (n=%zu lv=12)\n", n);
+                return 1;
+            }
+            printf("n=%zu mp=%.2f seed=%u mode=hc lv=12 size=%d "
+                   "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+                   n, kOptE[ei].mp, kOptE[ei].seed, c,
+                   XXH32(out, (size_t)c, 0), (unsigned long long)XXH64(out, (size_t)c, 0),
+                   XXH32(buf, n, 0), (unsigned long long)XXH64(buf, n, 0));
+            writeArtifact(out, c, idx);
+            printf("\n");
+            idx++;
+            free(buf); free(out); free(dec);
+        }
+        /* favor rows (fav=1): fresh heap stream + LZ4_favorDecompressionSpeed
+           (upstream L1668-1671) + LZ4_compress_HC_extStateHC_fastReset. The
+           full LZ4_compress_HC / LZ4_compress_HC_extStateHC one-shots run
+           LZ4_initStreamHC, which zeroes favorDecSpeed; fastReset on the
+           clean fresh state preserves the flag. The flag biases match
+           lengths (FindLongerMatch truncates len in (18,36] to 18) and the
+           price write condition (price <= opt[pos].price - 1). */
+        static const struct { size_t n; double mp; unsigned seed; int lv; } kOptFav[3] = {
+            {65536, 0.50, 0, 10}, {65536, 0.50, 0, 12}, {65536, 0.90, 7, 12},
+        };
+        for (unsigned fi = 0; fi < 3; fi++) {
+            size_t n = kOptFav[fi].n;
+            unsigned char* buf = (unsigned char*)malloc(n ? n : 1);
+            int bound = LZ4_compressBound((int)n);
+            unsigned char* out = (unsigned char*)malloc((size_t)bound);
+            unsigned char* dec = (unsigned char*)malloc(n ? n : 1);
+            if (!buf || !out || !dec) { fprintf(stderr, "oom\n"); return 1; }
+            RDG_genBuffer(buf, n, kOptFav[fi].mp, 0.0, kOptFav[fi].seed);
+            LZ4_streamHC_t* hcs = LZ4_createStreamHC();
+            if (!hcs) { fprintf(stderr, "hcoptfav: alloc failed\n"); return 1; }
+            LZ4_favorDecompressionSpeed(hcs, 1);
+            int c = LZ4_compress_HC_extStateHC_fastReset((void*)hcs, (const char*)buf,
+                                                         (char*)out, (int)n, bound,
+                                                         kOptFav[fi].lv);
+            LZ4_freeStreamHC(hcs);
+            if (c <= 0) {
+                fprintf(stderr, "hcoptfav: compress failed (n=%zu lv=%d)\n",
+                        n, kOptFav[fi].lv);
+                return 1;
+            }
+            int r = LZ4_decompress_safe((const char*)out, (char*)dec, c, (int)n);
+            if (r != (int)n || memcmp(dec, buf, n) != 0) {
+                fprintf(stderr, "hcoptfav: decode check failed (n=%zu lv=%d)\n",
+                        n, kOptFav[fi].lv);
+                return 1;
+            }
+            printf("n=%zu mp=%.2f seed=%u mode=hc lv=%d fav=1 size=%d "
+                   "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+                   n, kOptFav[fi].mp, kOptFav[fi].seed, kOptFav[fi].lv, c,
+                   XXH32(out, (size_t)c, 0), (unsigned long long)XXH64(out, (size_t)c, 0),
+                   XXH32(buf, n, 0), (unsigned long long)XXH64(buf, n, 0));
+            writeArtifact(out, c, idx);
+            printf("\n");
+            idx++;
+            free(buf); free(out); free(dec);
+        }
+    }
+    /* hcdest opt rows (M4 Task 4): LZ4_compress_HC_destSize with heap states
+       over lv=10 and lv=12 x A, tg = n*3/4 - exercises the optimal-parser
+       fillOutput path (oend hack, _dest_overflow adaptation with ovml/ovoff
+       propagation from both encode sites). consumed= pins *srcSizePtr.
+       Hard checks: size <= tg, consumed in [0, n], decode == the consumed
+       prefix of the input. */
+    {
+        const size_t n = 65536;
+        int tg = (int)(n * 3 / 4);
+        static const int kOptDestLv[2] = { 10, 12 };
+        for (unsigned li = 0; li < 2; li++) {
+            unsigned char* buf = (unsigned char*)malloc(n);
+            int bound = LZ4_compressBound((int)n);
+            unsigned char* out = (unsigned char*)malloc((size_t)(tg > bound ? tg : bound));
+            unsigned char* dec = (unsigned char*)malloc(n);
+            void* hcState = malloc((size_t)LZ4_sizeofStateHC());
+            if (!buf || !out || !dec || !hcState) { fprintf(stderr, "oom\n"); return 1; }
+            RDG_genBuffer(buf, n, 0.50, 0.0, 0);
+            int consumed = (int)n;
+            int c = LZ4_compress_HC_destSize(hcState, (const char*)buf, (char*)out,
+                                             &consumed, tg, kOptDestLv[li]);
+            if (c <= 0 || c > tg || consumed < 0 || (size_t)consumed > n) {
+                fprintf(stderr, "hcdestopt: out of contract (lv=%d c=%d tg=%d consumed=%d)\n",
+                        kOptDestLv[li], c, tg, consumed);
+                return 1;
+            }
+            int r = LZ4_decompress_safe((const char*)out, (char*)dec, c, consumed);
+            if (r != consumed || (consumed && memcmp(dec, buf, (size_t)consumed) != 0)) {
+                fprintf(stderr, "hcdestopt: decode check failed (lv=%d c=%d consumed=%d r=%d)\n",
+                        kOptDestLv[li], c, consumed, r);
+                return 1;
+            }
+            printf("n=%zu mp=0.50 seed=0 mode=hcdest lv=%d tg=%d size=%d consumed=%d "
+                   "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+                   n, kOptDestLv[li], tg, c, consumed,
+                   XXH32(out, (size_t)c, 0), (unsigned long long)XXH64(out, (size_t)c, 0),
+                   XXH32(buf, n, 0), (unsigned long long)XXH64(buf, n, 0));
+            writeArtifact(out, c, idx);
+            printf("\n");
+            idx++;
+            free(buf); free(out); free(dec); free(hcState);
+        }
     }
     fprintf(stderr, "cases=%d\n", idx);
     return 0;

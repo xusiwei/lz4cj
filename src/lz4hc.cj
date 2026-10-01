@@ -3,9 +3,9 @@
 // Port: Copyright (c) 2026, lz4cj contributors, BSD-2-Clause.
 // See LICENSE for full text.
 // Corresponds to upstream lib/lz4hc.c (HC high-compression mode).
-// M4 Task 1: state family + level table + hash/count/pattern primitives +
-// encodeSequence. The three compression cores (lz4mid 1-2 / hash-chain 3-9 /
-// optimal 10-12) land in Tasks 2-4.
+// M4 Tasks 1-4: state family + level table + hash/count/pattern primitives +
+// encodeSequence, hash-chain core (levels 3-9), lz4mid core (levels 1-2),
+// optimal parser (levels 10-12) + favorDecompressionSpeed, generic dispatch.
 
 package lz4
 
@@ -1411,19 +1411,378 @@ internal func lz4hcIsStateCompatible(ctx1: LZ4_streamHC_t, ctx2: LZ4_streamHC_t)
 }
 
 /*-************************************
-*  Optimal-parsing strategy stub (lz4hc.c L1410-1416 前向声明对应,10-12 级)
+*  Optimal parser, levels 10-12 (lz4hc.c L1816-2186)
 **************************************/
-/* LZ4HC_compress_optimal(L1410-1416,10-12 级):T4 实现并替换函数体。
-   签名 FINAL:与上游一致(source/dst/srcSizePtr/dstCapacity/nbSearches/
-   sufficient_len/limit/fullUpdate=dict/HCfavor_e),指针上下文同上。 */
+/* LZ4HC_optimal_t(L1819-1824):opt[pos] = 位置 pos 的最优解析状态;
+   mlen==1 表示字面量路径,price 按字节计。 */
+internal struct LZ4HC_optimal {
+    var price: Int32
+    var off: Int32
+    var mlen: Int32
+    var litlen: Int32
+    init(price: Int32, off: Int32, mlen: Int32, litlen: Int32) {
+        this.price = price
+        this.off = off
+        this.mlen = mlen
+        this.litlen = litlen
+    }
+}
+
+/* LZ4HC_literalsPrice(L1827-1834):litlen + litlen>=RUN_MASK(15) →
+   1 + (litlen-15)/255(截断除)。 */
+internal func LZ4HC_literalsPrice(litlen: Int32): Int32 {
+    var price: Int32 = litlen                                    /* L1829 */
+    if (litlen >= Int32(LZ4_RUN_MASK)) {                         /* L1831 */
+        price += 1 + ((litlen - Int32(LZ4_RUN_MASK)) / 255)
+    }
+    return price
+}
+
+/* LZ4HC_sequencePrice(L1837-1849):token(1)+ 16 位 offset(2)+
+   literalsPrice + mlen>=ML_MASK+MINMATCH(19) → 1 + (mlen-19)/255。
+   要求 mlen >= MINMATCH(调用点保证)。 */
+internal func LZ4HC_sequencePrice(litlen: Int32, mlen: Int32): Int32 {
+    var price: Int32 = 1 + 2                                     /* L1840 */
+    price += LZ4HC_literalsPrice(litlen)                         /* L1844 */
+    if (mlen >= Int32(LZ4_ML_MASK + LZ4_MINMATCH)) {             /* L1846 */
+        price += 1 + ((mlen - Int32(LZ4_ML_MASK + LZ4_MINMATCH)) / 255)
+    }
+    return price
+}
+
+/* LZ4HC_FindLongerMatch(L1851-1869):wider 搜索(iLowLimit==ip 禁回看,
+   故 md.back==0)+ favor 截断(len∈(18,36] → 18,解压速度优先捷径)。 */
+internal func LZ4HC_findLongerMatch(ctx: LZ4_streamHC_t,
+        prefixPtr: CPointer<UInt8>, dictBase: CPointer<UInt8>, dictCtxBase: CPointer<UInt8>,
+        ip: Int64, iHighLimit: Int64, minLen: Int32, nbSearches: Int32,
+        dict: Int32, favorDecSpeed: Bool): LZ4HC_match {
+    var md = LZ4HC_insertAndGetWiderMatch(ctx, prefixPtr, dictBase, dictCtxBase,
+        ip, ip, iHighLimit, minLen, nbSearches,
+        true /* patternAnalysis */, true /* chainSwap */,
+        dict, favorDecSpeed)                                     /* L1861-1862 */
+    if (md.len <= minLen) {                                      /* L1863 */
+        return LZ4HC_match(0, 0, 0)                              /* match0 */
+    }
+    if (favorDecSpeed) {                                         /* L1865 */
+        if ((md.len > 18) && (md.len <= 36)) {                   /* L1866:(len>18)&(len<=36) */
+            md.len = 18                                          /* favor dec.speed shortcut */
+        }
+    }
+    return md
+}
+
+/* LZ4HC_compress_optimal(L1879-2186,10-12 级):最优解析核心。前置:
+   1 ≤ srcSize ≤ LZ4_MAX_INPUT_SIZE、dstCapacity ≥ 1(清洗在
+   generic_internal 完成);返回 (cSize, consumed),consumed 即 C 的
+   *srcSizePtr 出值(L1896 先置 0,末尾写 ip;limitedOutput 失败保持 0)。
+   opt 数组每次调用新建(C HEAPMODE LZ4HC_HEAPMODE==1 每调用 ALLOC 的等价
+   结构:先分配、后运行;元素整体赋值,读槽位均已被同轮写入 —— C 未初始化
+   读风险不可达)。C 的 goto 以 encodeNow(自 cur 扫描转出至 encode 块)/
+   overflow(→ _dest_overflow)标志重组;_dest_overflow 仅 fillOutput 落
+   overflow 适配,非 fillOutput 直落 (0,0)(C retval==0)。ovml/ovoff 自
+   两处 encode 位点(即时编码 + encode 循环)传播。opt 写入条件
+   `pos > last_match_pos+3 || price <= opt[pos].price - favor`,favor 为
+   (int)favorDecSpeed ∈ {0,1}。回溯改写 while(true) 的 break 条件
+   `next_matchLength > candidate_pos` 逐字(双交换次序保持)。 */
 internal func LZ4HC_compress_optimal(ctx: LZ4_streamHC_t,
         source: CPointer<UInt8>, dictQ: CPointer<UInt8>, dictCtxQ: CPointer<UInt8>,
         dst: CPointer<UInt8>, srcSize: Int64, dstCapacity: Int64,
         nbSearches: Int32, sufficientLen: Int64,
         limit: Int32, fullUpdate: Bool,
         dict: Int32, favorDecSpeed: Bool): (Int64, Int64) {
-    /* T4 占位:未实现策略一律失败 */
-    return (0, 0)
+    /* C HEAPMODE 每次 ALLOC(L1890-1893) —— 仓颉侧每次调用新建,等价 */
+    let opt = Array<LZ4HC_optimal>(Int64(LZ4_OPT_NUM) + 3, {_ => LZ4HC_optimal(0, 0, 1, 0)})
+
+    let favor: Int32 = if (favorDecSpeed) { 1 } else { 0 }       /* (int)favorDecSpeed */
+    var sufficientLenLocal: Int64 = sufficientLen
+    let iend: Int64 = srcSize
+    let mflimit: Int64 = iend - LZ4_MFLIMIT
+    let matchlimit: Int64 = iend - LZ4_LASTLITERALS
+    var ip: Int64 = 0
+    var anchor: Int64 = 0
+    var op: Int64 = 0
+    var opSaved: Int64 = 0
+    var oend: Int64 = dstCapacity
+    var ovml: Int32 = Int32(LZ4_MINMATCH)                        /* L1899: overflow - last sequence */
+    var ovoff: Int32 = 0
+
+    if (limit == LZ4_OUTPUT_FILL) {
+        oend -= LZ4_LASTLITERALS                                 /* L1903: fillOutput 尾量预留 hack */
+    }
+    if (sufficientLenLocal >= Int64(LZ4_OPT_NUM)) {              /* L1904 */
+        sufficientLenLocal = Int64(LZ4_OPT_NUM) - 1
+    }
+
+    var overflow = false                                         /* goto _dest_overflow */
+
+    /* Main Loop (L1906) */
+    while (ip <= mflimit) {
+        let llen: Int32 = Int32(ip - anchor)                     /* L1908 */
+        var bestMlen: Int32 = 0
+        var bestOff: Int32 = 0
+        var cur: Int32 = 0
+        var lastMatchPos: Int32 = 0
+
+        let firstMatch = LZ4HC_findLongerMatch(ctx, source, dictQ, dictCtxQ,
+            ip, matchlimit, Int32(LZ4_MINMATCH) - 1, nbSearches, dict, favorDecSpeed)   /* L1912 */
+        if (firstMatch.len == 0) {                               /* L1913 */
+            ip += 1
+            continue
+        }
+
+        if (Int64(firstMatch.len) > sufficientLenLocal) {        /* L1915: 足够好 → 即时编码 */
+            let firstML: Int32 = firstMatch.len
+            opSaved = op
+            let (issue, nip, nop, nanchor) = LZ4HC_encodeSequence(source, ip,
+                dst, op, anchor, firstML, firstMatch.off, limit, oend)
+            if (issue != 0) {
+                op = nop
+                ovml = firstML                                   /* L1920-1921 */
+                ovoff = firstMatch.off
+                overflow = true
+                break
+            }
+            ip = nip
+            op = nop
+            anchor = nanchor
+            continue
+        }
+
+        /* 首位置字面量价格(L1924-1933) */
+        var rPos: Int32 = 0
+        while (rPos < Int32(LZ4_MINMATCH)) {
+            let cost: Int32 = LZ4HC_literalsPrice(llen + rPos)
+            opt[Int64(rPos)] = LZ4HC_optimal(cost, 0, 1, llen + rPos)
+            rPos += 1
+        }
+        /* 初始 match 价格(L1935-1945);matchML < sufficient_len < LZ4_OPT_NUM */
+        let matchML: Int32 = firstMatch.len
+        let offset0: Int32 = firstMatch.off
+        var mlen: Int32 = Int32(LZ4_MINMATCH)
+        while (mlen <= matchML) {
+            let cost: Int32 = LZ4HC_sequencePrice(llen, mlen)
+            opt[Int64(mlen)] = LZ4HC_optimal(cost, offset0, mlen, llen)
+            mlen += 1
+        }
+        lastMatchPos = firstMatch.len                            /* L1946 */
+        var addLit: Int32 = 1
+        while (addLit <= 3) {                                    /* TRAILING_LITERALS */
+            let lmp: Int64 = Int64(lastMatchPos)
+            let litCost: Int32 = opt[lmp].price + LZ4HC_literalsPrice(addLit)
+            opt[lmp + Int64(addLit)] = LZ4HC_optimal(litCost, 0, 1, addLit)
+            addLit += 1
+        }
+
+        /* cur 扫描(L1954) */
+        var encodeNow = false                                    /* goto encode */
+        cur = 1
+        while (cur < lastMatchPos) {
+            let curPtr: Int64 = ip + Int64(cur)
+            if (curPtr > mflimit) {                              /* L1958 */
+                break
+            }
+            if (fullUpdate) {                                    /* L1962-1966: 双条件剪枝 */
+                if ((opt[Int64(cur) + 1].price <= opt[Int64(cur)].price) &&
+                        (opt[Int64(cur) + Int64(LZ4_MINMATCH)].price < opt[Int64(cur)].price + 3)) {
+                    cur += 1
+                    continue
+                }
+            } else {
+                if (opt[Int64(cur) + 1].price <= opt[Int64(cur)].price) {   /* L1968 */
+                    cur += 1
+                    continue
+                }
+            }
+            let newMatch = LZ4HC_findLongerMatch(ctx, source, dictQ, dictCtxQ,
+                curPtr, matchlimit,
+                if (fullUpdate) { Int32(LZ4_MINMATCH) - 1 } else { lastMatchPos - cur },
+                nbSearches, dict, favorDecSpeed)                 /* L1970-1974 */
+            if (newMatch.len == 0) {                             /* L1975 */
+                cur += 1
+                continue
+            }
+
+            if ((Int64(newMatch.len) > sufficientLenLocal) ||
+                    (newMatch.len + cur >= LZ4_OPT_NUM)) {       /* L1979: 即时编码 */
+                bestMlen = newMatch.len
+                bestOff = newMatch.off
+                lastMatchPos = cur + 1
+                encodeNow = true
+                break
+            }
+
+            /* match 前:字面量前缀改价(L1988-1998) */
+            let baseLitlen: Int32 = opt[Int64(cur)].litlen
+            var litlen: Int32 = 1
+            while (litlen < Int32(LZ4_MINMATCH)) {
+                let price: Int32 = opt[Int64(cur)].price -
+                    LZ4HC_literalsPrice(baseLitlen) + LZ4HC_literalsPrice(baseLitlen + litlen)
+                let pos: Int32 = cur + litlen
+                if (price < opt[Int64(pos)].price) {
+                    opt[Int64(pos)] = LZ4HC_optimal(price, 0, 1, baseLitlen + litlen)
+                }
+                litlen += 1
+            }
+
+            /* cur 处 match 定价(L2001-2030) */
+            let matchML2: Int32 = newMatch.len
+            var ml: Int32 = Int32(LZ4_MINMATCH)
+            while (ml <= matchML2) {
+                let pos: Int32 = cur + ml
+                let offsetM: Int32 = newMatch.off
+                var price: Int32 = 0
+                var ll: Int32 = 0
+                if (opt[Int64(cur)].mlen == 1) {                 /* L2013 */
+                    ll = opt[Int64(cur)].litlen
+                    price = (if (cur > ll) {                     /* L2015 */
+                        opt[Int64(cur - ll)].price
+                    } else {
+                        0
+                    }) + LZ4HC_sequencePrice(ll, ml)
+                } else {
+                    ll = 0
+                    price = opt[Int64(cur)].price + LZ4HC_sequencePrice(0, ml)   /* L2019-2020 */
+                }
+                if ((pos > lastMatchPos + 3) ||                  /* L2026 */
+                        (price <= opt[Int64(pos)].price - favor)) {   /* L2027: favor 偏置 */
+                    if ((ml == matchML2) && (lastMatchPos < pos)) {   /* L2030-2031 */
+                        lastMatchPos = pos
+                    }
+                    opt[Int64(pos)] = LZ4HC_optimal(price, offsetM, ml, ll)
+                }
+                ml += 1
+            }
+            /* 尾随字面量补全(L2032-2039) */
+            var addLit2: Int32 = 1
+            while (addLit2 <= 3) {
+                let lmp: Int64 = Int64(lastMatchPos)
+                let litCost: Int32 = opt[lmp].price + LZ4HC_literalsPrice(addLit2)
+                opt[lmp + Int64(addLit2)] = LZ4HC_optimal(litCost, 0, 1, addLit2)
+                addLit2 += 1
+            }
+            cur += 1
+        }
+        if (!encodeNow) {                                        /* L2042-2045 */
+            bestMlen = opt[Int64(lastMatchPos)].mlen
+            bestOff = opt[Int64(lastMatchPos)].off
+            cur = lastMatchPos - bestMlen
+        }
+
+        /* encode(L2048):回溯链改写(L2053-2066,自尾向头交换;
+           price/litlen 保持,mlen/off 双交换) */
+        var candidatePos: Int32 = cur
+        var selectedMatchLength: Int32 = bestMlen
+        var selectedOffset: Int32 = bestOff
+        while (true) {
+            let nextMatchLength: Int32 = opt[Int64(candidatePos)].mlen   /* L2056: 可为 1 = 字面量 */
+            let nextOffset: Int32 = opt[Int64(candidatePos)].off
+            let keep = opt[Int64(candidatePos)]
+            opt[Int64(candidatePos)] = LZ4HC_optimal(keep.price, selectedOffset,
+                selectedMatchLength, keep.litlen)                /* L2057-2058 */
+            selectedMatchLength = nextMatchLength                /* L2059 */
+            selectedOffset = nextOffset                          /* L2060 */
+            if (nextMatchLength > candidatePos) {                /* L2062: 首 match 当选 */
+                break
+            }
+            candidatePos -= nextMatchLength                      /* L2064 */
+        }
+
+        /* encode all recorded sequences in order (L2069-2081) */
+        var rPos2: Int32 = 0
+        while (rPos2 < lastMatchPos) {
+            let ml: Int32 = opt[Int64(rPos2)].mlen
+            let offset: Int32 = opt[Int64(rPos2)].off
+            if (ml == 1) {                                       /* L2074: 字面量跳过 */
+                ip += 1
+                rPos2 += 1
+                continue
+            }
+            rPos2 += ml
+            opSaved = op
+            let (issue, nip, nop, nanchor) = LZ4HC_encodeSequence(source, ip,
+                dst, op, anchor, ml, offset, limit, oend)
+            if (issue != 0) {
+                op = nop
+                ovml = ml                                        /* L2078-2079 */
+                ovoff = offset
+                overflow = true
+                break
+            }
+            ip = nip
+            op = nop
+            anchor = nanchor
+        }
+        if (overflow) {
+            break
+        }
+    }
+
+    /* _dest_overflow(L2087-2106,仅 fillOutput;非 fillOutput → retval 0) */
+    if (overflow) {
+        if (limit == LZ4_OUTPUT_FILL) {
+            let ll: Int64 = ip - anchor                          /* L2090 */
+            let llAddbytes: Int64 = (ll + 240) / 255             /* L2091 */
+            let llTotalCost: Int64 = 1 + llAddbytes + ll         /* L2092 */
+            let maxLitPos: Int64 = oend - 3                      /* L2093: 2 offset + 1 token */
+            op = opSaved                                         /* L2095: 恢复输出指针 */
+            if (op + llTotalCost <= maxLitPos) {
+                let bytesLeftForMl: Int64 = maxLitPos - (op + llTotalCost)   /* L2098 */
+                let maxMlSize: Int64 = LZ4_MINMATCH + (LZ4_ML_MASK - 1) + bytesLeftForMl * 255   /* L2099 */
+                if (Int64(ovml) > maxMlSize) {                   /* L2101 */
+                    ovml = Int32(maxMlSize)
+                }
+                if ((oend + LZ4_LASTLITERALS) - (op + llTotalCost + 2) - 1 + Int64(ovml) >= LZ4_MFLIMIT) {   /* L2103 */
+                    let (issue, nip, nop, nanchor) = LZ4HC_encodeSequence(source, ip,
+                        dst, op, anchor, ovml, ovoff, LZ4_OUTPUT_NOT_LIMITED, oend)   /* L2105: notLimited 不可能 issue */
+                    if (issue == 0) {
+                        ip = nip
+                        op = nop
+                        anchor = nanchor
+                    }
+                }
+            }
+            /* goto _last_literals */
+        } else {
+            return (0, 0)                                        /* _return_label: retval == 0 */
+        }
+    }
+
+    /* _last_literals(L2110-2131) */
+    var lastRunSize: Int64 = iend - anchor                       /* L2111 */
+    var llAdd: Int64 = (lastRunSize + 255 - LZ4_RUN_MASK) / 255
+    let totalSize: Int64 = 1 + llAdd + lastRunSize
+    if (limit == LZ4_OUTPUT_FILL) {
+        oend += LZ4_LASTLITERALS                                 /* L2115: 恢复真实 oend */
+    }
+    if (limit != LZ4_OUTPUT_NOT_LIMITED && (op + totalSize > oend)) {   /* L2116 */
+        if (limit == LZ4_OUTPUT_LIMITED) {
+            return (0, 0)                                        /* L2117 */
+        }
+        lastRunSize = (oend - op) - 1                            /* L2120: 适配填满 dst */
+        llAdd = (lastRunSize + 256 - LZ4_RUN_MASK) / 256         /* L2121: 255/256 非对称(同 T2) */
+        lastRunSize -= llAdd
+    }
+    ip = anchor + lastRunSize                                    /* L2125: fillOutput 时可 < iend */
+
+    if (lastRunSize >= LZ4_RUN_MASK) {                           /* L2127-2128 */
+        var accumulator: Int64 = lastRunSize - LZ4_RUN_MASK
+        LZ4_write8(dst, op, UInt8((LZ4_RUN_MASK << LZ4_ML_BITS) & 0xFF))
+        op += 1
+        while (accumulator >= 255) {
+            LZ4_write8(dst, op, 255u8)
+            op += 1
+            accumulator -= 255
+        }
+        LZ4_write8(dst, op, UInt8(accumulator))
+        op += 1
+    } else {
+        LZ4_write8(dst, op, UInt8(lastRunSize << LZ4_ML_BITS))
+        op += 1
+    }
+    LZ4_memcpyPtr(dst, op, source, anchor, lastRunSize)          /* L2129 */
+    op += lastRunSize
+
+    return (op, ip)                                              /* L2134-2135: *srcSizePtr = ip; retval = op */
 }
 
 /*-************************************
@@ -1458,7 +1817,9 @@ internal func LZ4HC_compress_generic_internal(s: LZ4_streamHC_t,
         result = LZ4HC_compress_hashChain(s, src, dictQ, dictCtxQ, dst, srcSize, dstCapacity,   /* L1450-1452 */
             cParam.nbSearches, limit, dict)
     } else {
-        /* lz4opt 策略(L1455-1459):T4 替换 LZ4HC_compress_optimal 函数体 */
+        /* lz4opt strategy (L1455-1459): T4 connected — fullUpdate = cLevel >=
+           LZ4HC_CLEVEL_MAX (ultra mode), sufficient_len = targetLength, favor
+           read from the stream state (L1442). */
         result = LZ4HC_compress_optimal(s, src, dictQ, dictCtxQ, dst, srcSize, dstCapacity,
             cParam.nbSearches, Int64(cParam.targetLength), limit,
             cLevel >= LZ4HC_CLEVEL_MAX, dict, favor)
