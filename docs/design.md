@@ -161,11 +161,11 @@ C 中"用户提供裸缓冲当状态"的 API(`LZ4_compress_fast_extState(void* s
 
 **frame(`lz4frame.h`)**:
 
-- 类型:`LZ4F_preferences_t`、`LZ4F_frameInfo_t`、`LZ4F_compressOptions_t`、`LZ4F_decompressOptions_t`、`LZ4F_errorCodes`(枚举 + 数值互转辅助)
+- 类型:`LZ4F_preferences_t`、`LZ4F_frameInfo_t`、`LZ4F_compressOptions_t`、`LZ4F_decompressOptions_t`、`LZ4F_errorCodes`(枚举 + 数值互转辅助)。注记(M5-T1 实测订正):仓颉无 C 值枚举(`enum E { A = 0 }` 语法错误,cjc 1.0.5 实证),五个 `LZ4F_*` 枚举(blockSizeID/blockMode/contentChecksum/blockChecksum/frameType)以 **Int32 常量族**承载、错误码以 **Int64 常量族**承载,成员名逐字;结构体 `reserved[3]` 等保留字段省略(默认值结构体 + 显式 `init()` 等价覆盖 INIT 宏语义,登记为语义偏离)
 - 枚举:`LZ4F_blockSizeID_t`、`LZ4F_blockMode_t`、`LZ4F_contentChecksum_t`、`LZ4F_blockChecksum_t`、`LZ4F_frameType_t`(成员名逐字:`LZ4F_max64KB`…、`LZ4F_blockLinked/blockIndependent`、`LZ4F_noContentChecksum/contentChecksumEnabled`、`LZ4F_noBlockChecksum/blockChecksumEnabled`、`LZ4F_frame/skippableFrame`)
 - 版本/错误:`LZ4F_getVersion`、`LZ4F_isError`、`LZ4F_getErrorName`、`LZ4F_getErrorCode`、`LZ4F_compressionLevel_max`
 - 一次性:`LZ4F_compressFrame`、`LZ4F_compressFrameBound`、`LZ4F_compressFrame_usingCDict`
-- 流式压缩:`LZ4F_createCompressionContext`、`LZ4F_freeCompressionContext`、`LZ4F_compressBegin`、`LZ4F_compressBegin_usingCDict`、`LZ4F_compressUpdate`、`LZ4F_uncompressedUpdate`、`LZ4F_flush`、`LZ4F_compressEnd`、`LZ4F_compressBound`
+- 流式压缩:`LZ4F_createCompressionContext`、`LZ4F_freeCompressionContext`、`LZ4F_compressBegin`、`LZ4F_compressBegin_usingDict`(lz4frame.h L561,v1.10 稳定;原清单漏记,M5-T1 订正)、`LZ4F_compressBegin_usingCDict`、`LZ4F_compressUpdate`、`LZ4F_uncompressedUpdate`、`LZ4F_flush`、`LZ4F_compressEnd`、`LZ4F_compressBound`
 - 字典:`LZ4F_createCDict`、`LZ4F_freeCDict`
 - 解压:`LZ4F_createDecompressionContext`、`LZ4F_freeDecompressionContext`、`LZ4F_resetDecompressionContext`、`LZ4F_headerSize`、`LZ4F_getFrameInfo`、`LZ4F_decompress`、`LZ4F_decompress_usingDict`、`LZ4F_decompress_usingCDict`、`LZ4F_isSkippedFrame`、`LZ4F_getBlockSize`
 
@@ -181,6 +181,9 @@ C 中"用户提供裸缓冲当状态"的 API(`LZ4_compress_fast_extState(void* s
 | `LZ4_decompress_fast`、`LZ4_decompress_fast_usingDict` | 语义上"不校验输入边界、不要求已知压缩长度",在仓颉安全模型下无忠实等价物;且无法仅凭 `originalSize` 安全别名到 `LZ4_decompress_safe`。不提供,README 注明用 `LZ4_decompress_safe` |
 | `lz4file.h` 全部 | 范围裁剪,基于 `LZ4F_*` 可直接实现,后续版本可增补 |
 | `XXH64`、`XXH3`、`XXH128` | `lz4frame.c` 未使用 |
+| `LZ4F_customMem` 自定义分配器族(`LZ4F_customMem`、`LZ4F_defaultCMem` 等)及 `LZ4F_createCompressionContext_advanced` / `LZ4F_createCDict_advanced`(M5-T1 订正补记) | 仓颉由 GC 管理内存,无自定义 malloc/free 契约可履行 |
+| `LZ4F_cctx_size` / `LZ4F_dctx_size`(M5-T1 订正补记) | C 布局信息性 API(暴露结构体字节数供栈/堆预分配);仓颉状态由类承载,布局尺寸无意义 |
+| `LZ4F_ENABLE_OBSOLETE_ENUMS` 旧别名族(如 `LZ4F_OBSOLETE_ENUM(...)`)(M5-T1 订正补记) | 上游默认关闭的兼容别名,新移植不暴露 |
 
 ### 4.7 错误处理
 
@@ -329,11 +332,12 @@ C 侧 `LZ4_compress_generic` 是一个多态宏展开的状态机(字典模式 �
 
 ### 8.2 golden 语料设计
 
-**生成方式**:`scripts/gen_golden.sh` 编译 `gen_golden.c`(链接 `~/lz4/lib` 源码),以与仓颉侧 `datagen.cj` **完全相同的 PRNG 序列**生成输入(移植上游 `datagen.c` 的 `RDG_genBuffer`,固定 seed),压缩后连同 manifest 写入 `corpus/` 入库。
+**生成方式**:`scripts/gen_golden.sh` 编译 `gen_golden.c`(链接 `~/lz4/lib` 源码),以与仓颉侧 `datagen.cj` **完全相同的 PRNG 序列**生成输入(移植上游 `datagen.c` 的 `RDG_genBuffer`,固定 seed),压缩后连同 manifest 写入 `corpus/`。
+**入库政策(2026-10-01 裁定,M5-T1 落地)**:corpus 二进制不入库(`.gitignore` 忽略 `corpus/`,历史条目已 `git rm --cached`);由 `scripts/gen_golden.sh` 本地再生(生成脚本本身保持跟踪)。上文"入库"字样按此政策读作"落盘"。
 
 **输入语料(15 类,单件 ≤ 256KB,原始输入只存一份)**:空、1B、16B、255B(literal 边界)、256B、64KB±1(块边界)、256KB 高重复、256KB 文本、256KB 随机(不可压缩)、字典友好模式(共享前缀)、长匹配游程、交替块、全零、CRC 式短记录、混合。
 
-**体积控制**:输入文件与压缩产物入库;压缩产物 ≤ 64KB 的存原件用于逐字节比对,超过的只存摘要(SHA-256,由 C 侧 harness 一并写入 manifest,仓颉侧计算摘要比对——确定性校验强度等价,仅省体积);corpus 总量控制在 **8MB** 内。
+**体积控制**:输入文件与压缩产物落盘(见上方入库政策);压缩产物 ≤ 64KB 的存原件用于逐字节比对,超过的只存摘要(SHA-256,由 C 侧 harness 一并写入 manifest,仓颉侧计算摘要比对——确定性校验强度等价,仅省体积);corpus 总量控制在 **8MB** 内。
 
 **参数矩阵(约 200 个用例)**:
 
