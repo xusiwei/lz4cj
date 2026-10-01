@@ -155,9 +155,9 @@ C 中"用户提供裸缓冲当状态"的 API(`LZ4_compress_fast_extState(void* s
 
 **HC(`lz4hc.h`,非弃用全量)**:
 
-- `LZ4_compress_HC`、`LZ4_compress_HC_extStateHC`、`LZ4_compress_HC_extStateHC_reset`、`LZ4_sizeofStateHC`
-- 流式:`LZ4_createStreamHC`、`LZ4_freeStreamHC`、`LZ4_resetStreamHC`、`LZ4_resetStreamHC_fast`、`LZ4_loadDictHC`、`LZ4_compress_HC_continue`、`LZ4_saveDictHC`、`LZ4_attach_HC_dictionary`、`LZ4_setCompressionLevel`、`LZ4_favorDecompressionSpeed`
-- 常量:`LZ4HC_CLEVEL_MAX(12)`、`LZ4HC_CLEVEL_DEFAULT`、`LZ4HC_CLEVEL_OPT_MIN`
+- `LZ4_compress_HC`、`LZ4_compress_HC_extStateHC`、`LZ4_compress_HC_extStateHC_fastReset`、`LZ4_compress_HC_destSize`、`LZ4_sizeofStateHC`
+- 流式:`LZ4_createStreamHC`、`LZ4_freeStreamHC`、`LZ4_initStreamHC`、`LZ4_resetStreamHC`、`LZ4_resetStreamHC_fast`、`LZ4_loadDictHC`、`LZ4_compress_HC_continue`、`LZ4_saveDictHC`、`LZ4_attach_HC_dictionary`、`LZ4_setCompressionLevel`、`LZ4_favorDecompressionSpeed`
+- 常量:`LZ4HC_CLEVEL_MIN(2)`、`LZ4HC_CLEVEL_MAX(12)`、`LZ4HC_CLEVEL_DEFAULT`、`LZ4HC_CLEVEL_OPT_MIN`
 
 **frame(`lz4frame.h`)**:
 
@@ -225,12 +225,13 @@ C 侧 `LZ4_compress_generic` 是一个多态宏展开的状态机(字典模式 �
 
 ### 5.4 lz4hc.cj —— 高压缩模式
 
-- 移植完整级别区间 `1..12`:
-  - `clevel < LZ4HC_CLEVEL_OPT_MIN(10)`:贪心 + 可选 lazy 匹配(`nbAttempts` 随级别变化表照搬);
-  - `>= 10`:最优解析(`LZ4HC_compress_optimal` 的代价数组回溯,`favorDecompressionSpeed` 分支照搬);
-- 匹配查找:链表(`chainTable`)+ 高级别切换二叉树(`LZ4HC_BinTree`),`deriving` 哈希 `LZ4HC_hashPtr` 照搬;
+- 移植完整级别区间 `1..12`,三策略分派(`cParams_t` 级别表照搬;0774d055 无二叉树 `LZ4HC_BinTree`):
+  - 级 1-2 `lz4mid`:hash4/hash8 双哈希短匹配策略(`LZ4MID_compress`);
+  - 级 3-9 `lz4hc`:链表匹配查找(`chainTable`)+ 贪心/可选 lazy(`nbAttempts` 随级别变化表照搬);
+  - 级 10-12 `lz4opt`:最优解析(`LZ4HC_compress_optimal` 的代价数组回溯,`favorDecompressionSpeed` 分支照搬);
+- 哈希 `LZ4HC_hashPtr`/`LZ4MID_hash4`/`LZ4MID_hash7` 照搬;
 - `LZ4_compress_HC_destSize` 的目标尺寸反推逻辑照搬;
-- HC 确定性同样受第 5.2 节保真点约束(golden 测试覆盖 levels 2/4/9/12)。
+- HC 确定性同样受第 5.2 节保真点约束(golden 测试覆盖 levels 1-12 全采样)。
 
 ### 5.5 lz4frame*.cj —— Frame 格式
 
@@ -339,7 +340,7 @@ C 侧 `LZ4_compress_generic` 是一个多态宏展开的状态机(字典模式 �
 | 维度 | 取值 |
 |---|---|
 | block 压缩 | `compress_default`、`fast(acc=1/8)`、`destSize` |
-| HC | levels 2/4/9/12,`favorDecompressionSpeed` 0/1 |
+| HC | levels 1-12 全采样,`favorDecompressionSpeed` 0/1 |
 | frame blockSize | 64KB/256KB/1MB/4MB |
 | blockMode | linked/independent |
 | contentChecksum | 0/1 |
