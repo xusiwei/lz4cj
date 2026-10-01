@@ -7,6 +7,9 @@
 // 压缩主体由 M5 后续任务落地)。
 // M5 Task 2: compressBegin 家族 —— 帧头字节级编码 + cctx 双标记 ctx 管理
 // + 缓冲管理(lz4frame.c L657-876)。
+// M5 Task 3: 块压缩机制(makeBlock + 5 路压缩分派 + localSaveDict)+
+// 流式家族 compressUpdate/uncompressedUpdate/flush/compressEnd
+// (lz4frame.c L899-1259)。
 
 package lz4
 
@@ -593,4 +596,409 @@ public func LZ4F_compressBegin_usingCDict(cctx: LZ4F_cctx,
         prefsPtr: Option<LZ4F_preferences_t>): Int64 {
     return lz4fCompressBeginInternal(cctx, dstBuf, dstIdx, dstCapacity,
         Option<Array<UInt8>>.None, 0, cdict, prefsPtr)
+}
+
+/*-************************************
+*  Block compression machinery (lz4frame.c L899-993)
+**************************************/
+/* LZ4B 块压缩模式常量(lz4frame.c L226-227 附近,上游私有枚举
+   LZ4F_BlockCompressMode_e;仓颉以 internal Int32 常量承载)。 */
+internal const LZ4F_LZ4B_COMPRESSED: Int32 = 0
+internal const LZ4F_LZ4B_UNCOMPRESSED: Int32 = 1
+
+/* LZ4F_BLOCKUNCOMPRESSED_FLAG(lz4frame.h L291):块头最高位 = 原样存储。 */
+internal const LZ4F_BLOCKUNCOMPRESSED_FLAG: UInt32 = 0x80000000u32
+
+/* lz4fWriteLE32:LZ4F_writeLE32 对应物,小端 4 字节直写(块头/校验尾/
+   endmark 公共助手;compressBegin 头区直写保持原样,不复用此处)。 */
+internal func lz4fWriteLE32(dst: Array<UInt8>, idx: Int64, v: UInt32): Unit {
+    dst[idx] = UInt8(v & 0xFFu32)
+    dst[idx + 1] = UInt8((v >> 8) & 0xFFu32)
+    dst[idx + 2] = UInt8((v >> 16) & 0xFFu32)
+    dst[idx + 3] = UInt8((v >> 24) & 0xFFu32)
+}
+
+/* lz4fSelectCompressionKind —— LZ4F_selectCompression(L970-980):按
+   块模式/级别/压缩模式选出压缩函数编号:
+   0=compressBlock(fast 独立) 1=compressBlock_continue(fast 连续)
+   2=compressBlockHC(HC 独立) 3=compressBlockHC_continue(HC 连续)
+   4=doNotCompressBlock(UNCOMPRESSED 判定优先于级别分支)。 */
+internal func lz4fSelectCompressionKind(blockMode: Int32, level: Int32,
+        compressMode: Int32): Int32 {
+    if (compressMode == LZ4F_LZ4B_UNCOMPRESSED) {
+        return 4                                              /* L972-973 */
+    }
+    if (level < LZ4HC_CLEVEL_MIN) {                           /* L974 */
+        if (blockMode == LZ4F_blockIndependent) {
+            return 0                                          /* L975 */
+        }
+        return 1                                              /* L976 */
+    }
+    if (blockMode == LZ4F_blockIndependent) {
+        return 2                                              /* L978 */
+    }
+    return 3                                                  /* L979 */
+}
+
+/* lz4fCompressBlock —— 四个 compressBlock 变体 + doNotCompress
+   (L929-968)按 kind 分派;块数据写起点 = dst[dstIdx](makeBlock 传入
+   块头之后的偏移)。cdict != None 时独立块亦走 continue(挂接预消化
+   字典);dst 偏移经内部 At 变体(lz4CompressFastContinueAt /
+   lz4hcCompressHCContinueAt / lz4CompressExtStateFastResetAt /
+   lz4hcExtStateHCFastResetAt)穿透到单一 unsafe 域,无临时数组。 */
+internal func lz4fCompressBlock(kind: Int32, cctx: LZ4F_cctx,
+        srcBuf: Array<UInt8>, srcIdx: Int64, srcSize: Int32,
+        dst: Array<UInt8>, dstIdx: Int64, dstCapacity: Int32): Int32 {
+    let level: Int32 = cctx.prefs.compressionLevel
+    match (kind) {
+        case 0 =>
+            /* compressBlock(L929-942):独立 fast,逐块 initStream */
+            let acceleration: Int32 = if (level < 0) { -level + 1 } else { 1 }   /* L931 */
+            lz4fInitStream(cctx, level, LZ4F_blockIndependent)   /* L934 */
+            match (cctx.cdict) {
+                case Some(_) =>
+                    if (let Some(st) <- cctx.lz4CtxFast) {
+                        return lz4CompressFastContinueAt(st, srcBuf, srcIdx,
+                            srcSize, dst, dstIdx, dstCapacity, acceleration)
+                    }                                          /* L936-937 */
+                case None =>
+                    if (let Some(st) <- cctx.lz4CtxFast) {
+                        return lz4CompressExtStateFastResetAt(st, srcBuf, srcIdx,
+                            srcSize, dst, dstIdx, dstCapacity, acceleration)
+                    }                                          /* L939 */
+            }
+            return 0
+        case 1 =>
+            /* compressBlock_continue(L944-948):帧头一次初始化,逐块续压 */
+            let acceleration: Int32 = if (level < 0) { -level + 1 } else { 1 }   /* L945 */
+            if (let Some(st) <- cctx.lz4CtxFast) {
+                return lz4CompressFastContinueAt(st, srcBuf, srcIdx,
+                    srcSize, dst, dstIdx, dstCapacity, acceleration)
+            }
+            return 0
+        case 2 =>
+            /* compressBlockHC(L950-958):独立 HC,逐块 initStream */
+            lz4fInitStream(cctx, level, LZ4F_blockIndependent)   /* L955 */
+            match (cctx.cdict) {
+                case Some(_) =>
+                    if (let Some(st) <- cctx.lz4CtxHC) {
+                        return lz4hcCompressHCContinueAt(st, srcBuf, srcIdx,
+                            srcSize, dst, dstIdx, dstCapacity)
+                    }                                          /* L957 */
+                case None =>
+                    if (let Some(st) <- cctx.lz4CtxHC) {
+                        return lz4hcExtStateHCFastResetAt(st, srcBuf, srcIdx,
+                            srcSize, dst, dstIdx, dstCapacity, level)
+                    }                                          /* L959 */
+            }
+            return 0
+        case 3 =>
+            /* compressBlockHC_continue(L960-964):level/cdict 帧级已定 */
+            if (let Some(st) <- cctx.lz4CtxHC) {
+                return lz4hcCompressHCContinueAt(st, srcBuf, srcIdx,
+                    srcSize, dst, dstIdx, dstCapacity)
+            }
+            return 0
+        case _ =>
+            /* doNotCompressBlock(L966-968):占位,返回 0 令 makeBlock
+               走原样存储分支 */
+            return 0
+    }
+}
+
+/* lz4fMakeBlock —— LZ4F_makeBlock(L899-926):压缩单块 + 块头 + 可选
+   块校验;假设 dst 容量 >= BHSize + srcSize + crcSize。压缩空间刻意取
+   srcSize-1(srcSize<=1 时取 1)—— 不可压缩输入必然落回原样存储分支
+   (C 的 (int)srcSize-1 截断语义:srcSize 为 size_t,本侧 Int64 恒 >= 0,
+   仅 srcSize==0/1 取 1)。块校验 = XXH32(存储区, seed 0);XXH32
+   一次性接口无偏移形参,以 reset + update(offset 具名参)+ digest 组合
+   免拷贝(块校验为冷路径,不参与压缩主循环)。 */
+internal func lz4fMakeBlock(dst: Array<UInt8>, dstIdx: Int64,
+        srcBuf: Array<UInt8>, srcIdx: Int64, srcSize: Int64,
+        kind: Int32, cctx: LZ4F_cctx, crcFlag: Int32): Int64 {
+    let dstCapacity: Int32 = if (srcSize > 1) {
+        Int32(srcSize - 1)                                     /* L907 */
+    } else {
+        1
+    }
+    var cSize: Int64 = Int64(lz4fCompressBlock(kind, cctx, srcBuf, srcIdx,
+        Int32(srcSize), dst, dstIdx + LZ4F_BLOCK_HEADER_SIZE, dstCapacity))
+    if (cSize == 0 || cSize >= srcSize) {                      /* L916 */
+        cSize = srcSize
+        lz4fWriteLE32(dst, dstIdx, UInt32(srcSize) | LZ4F_BLOCKUNCOMPRESSED_FLAG)
+        var i: Int64 = 0
+        while (i < srcSize) {
+            dst[dstIdx + LZ4F_BLOCK_HEADER_SIZE + i] = srcBuf[srcIdx + i]
+            i += 1
+        }
+    } else {
+        lz4fWriteLE32(dst, dstIdx, UInt32(cSize))              /* L921 */
+    }
+    if (crcFlag != 0) {                                        /* L922-925 */
+        let crcSt = XXH32_state_t()
+        XXH32_reset(crcSt, 0u32)
+        XXH32_update(crcSt, dst, cSize, offset: dstIdx + LZ4F_BLOCK_HEADER_SIZE)
+        lz4fWriteLE32(dst, dstIdx + LZ4F_BLOCK_HEADER_SIZE + cSize, XXH32_digest(crcSt))
+    }
+    return LZ4F_BLOCK_HEADER_SIZE + cSize +
+        (if (crcFlag != 0) { LZ4F_BLOCK_CHECKSUM_SIZE } else { 0 })   /* L926 */
+}
+
+/* lz4fLocalSaveDict —— LZ4F_localSaveDict(L983-989):把至多 64KB 历史
+   显式保存进 tmpBuff,并令 tmpIn 越过已存字典(level<2 走 fast 流,
+   否则 HC 流;Begin 后 ctx 必在,lz4Ctx 双 None 防御返 0)。 */
+internal func lz4fLocalSaveDict(cctx: LZ4F_cctx): Unit {
+    let dictSize: Int32 = if (cctx.prefs.compressionLevel < LZ4HC_CLEVEL_MIN) {
+        if (let Some(st) <- cctx.lz4CtxFast) {
+            LZ4_saveDict(st, cctx.tmpBuff, 65536)              /* L986 */
+        } else {
+            0
+        }
+    } else {
+        if (let Some(st) <- cctx.lz4CtxHC) {
+            LZ4_saveDictHC(st, cctx.tmpBuff, 65536)            /* L987 */
+        } else {
+            0
+        }
+    }
+    cctx.tmpIn = Int64(dictSize)                               /* L988 */
+}
+
+/* LZ4F_lastBlockStatus(L991-992):notDone=0 / fromTmpBuffer=1 /
+   fromSrcBuffer=2(Int32 承载)。k_cOptionsNull(L993)以
+   Option< LZ4F_compressOptions_t >.None 表达,不设具名常量。 */
+
+/* lz4fCompressUpdateImpl —— LZ4F_compressUpdateImpl(L1008-1121)全量
+   保真:cStage / bound(已缓冲量计入)/ UNCOMPRESSED 追加容量检查;
+   模式切换先 flush(上游此处无错误透传 —— bound 前置检查已排除 flush
+   失败,照抄不添检);tmpIn 补块自 src 头部拷贝(C 的 srcBuffer 即本
+   调用 srcIdx 起的数据);整块循环自 srcPtr 起;autoFlush 余块;
+   linked+fromSrcBuffer → stableSrc?tmpIn=0:localSaveDict;
+   !autoFlush 且 tmpIn+blockSize>maxBufferSize → localSaveDict;余量入
+   tmpIn;ccs → XXH32_update(offset 具名参携 srcIdx 位置对);
+   totalInSize 累加。 */
+internal func lz4fCompressUpdateImpl(cctx: LZ4F_cctx,
+        dstBuf: Array<UInt8>, dstIdx: Int64, dstCapacity: Int64,
+        srcBuf: Array<UInt8>, srcIdx: Int64, srcSize: Int64,
+        cOptPtr: Option<LZ4F_compressOptions_t>, blockCompression: Int32): Int64 {
+    let blockSize: Int64 = cctx.maxBlockSize                    /* L1029 */
+    var srcPtr: Int64 = srcIdx            /* srcBuf 内读游标(C srcPtr) */
+    let srcEnd: Int64 = srcIdx + srcSize
+    var dstPtr: Int64 = dstIdx
+    var lastBlockCompressed: Int32 = 0    /* 0=notDone 1=fromTmp 2=fromSrc */
+    /* 压缩函数在本函数入口选定(C L1039),键于入参 blockCompression */
+    let kind: Int32 = lz4fSelectCompressionKind(cctx.prefs.frameInfo.blockMode,
+        cctx.prefs.compressionLevel, blockCompression)
+
+    if (cctx.cStage != 1) {
+        return -LZ4F_ERROR_compressionState_uninitialized      /* L1042 */
+    }
+    if (dstCapacity < lz4fCompressBoundInternal(srcSize, Some(cctx.prefs),
+            cctx.tmpInSize)) {
+        return -LZ4F_ERROR_dstMaxSize_tooSmall                  /* L1044-1045 */
+    }
+    if (blockCompression == LZ4F_LZ4B_UNCOMPRESSED && dstCapacity < srcSize) {
+        return -LZ4F_ERROR_dstMaxSize_tooSmall                  /* L1047-1048 */
+    }
+
+    /* L1051-1055:flush 已写块以切换块压缩模式 */
+    if (cctx.blockCompressMode != blockCompression) {
+        let bytesWritten = lz4fFlushImpl(cctx, dstBuf, dstPtr, dstCapacity - (dstPtr - dstIdx))
+        dstPtr += bytesWritten    /* 上游无错误透传(bound 已排除失败) */
+        cctx.blockCompressMode = blockCompression               /* L1054 */
+    }
+
+    var stableSrc: UInt32 = 0u32            /* cOptPtr==None 即 k_cOptionsNull */
+    match (cOptPtr) {
+        case Some(o) => stableSrc = o.stableSrc
+        case None => ()
+    }
+
+    /* L1060-1074:补全 tmp 缓冲中的块 */
+    if (cctx.tmpInSize > 0) {
+        let sizeToCopy: Int64 = blockSize - cctx.tmpInSize      /* L1061 */
+        if (sizeToCopy > srcSize) {
+            /* src 全部并入 tmpIn(C memcpy 源 = srcBuffer 头部,即本调用
+               srcIdx 起的数据) */
+            var i: Int64 = 0
+            while (i < srcSize) {
+                cctx.tmpBuff[cctx.tmpIn + cctx.tmpInSize + i] = srcBuf[srcIdx + i]
+                i += 1
+            }
+            srcPtr = srcEnd                                    /* L1067 */
+            cctx.tmpInSize += srcSize                          /* L1068 */
+        } else {
+            /* 补满 tmpIn 成整块并压缩 */
+            lastBlockCompressed = 1                            /* fromTmpBuffer */
+            var i: Int64 = 0
+            while (i < sizeToCopy) {
+                cctx.tmpBuff[cctx.tmpIn + cctx.tmpInSize + i] = srcBuf[srcIdx + i]
+                i += 1
+            }
+            srcPtr += sizeToCopy                               /* L1073 */
+            dstPtr += lz4fMakeBlock(dstBuf, dstPtr, cctx.tmpBuff, cctx.tmpIn,
+                blockSize, kind, cctx, cctx.prefs.frameInfo.blockChecksumFlag)
+            if (cctx.prefs.frameInfo.blockMode == LZ4F_blockLinked) {
+                cctx.tmpIn += blockSize                        /* L1080 */
+            }
+            cctx.tmpInSize = 0                                 /* L1081 */
+        }
+    }
+
+    /* L1076-1084:整块循环(srcPtr .. srcEnd 每 blockSize 一块) */
+    while (srcEnd - srcPtr >= blockSize) {
+        lastBlockCompressed = 2                                /* fromSrcBuffer */
+        dstPtr += lz4fMakeBlock(dstBuf, dstPtr, srcBuf, srcPtr, blockSize,
+            kind, cctx, cctx.prefs.frameInfo.blockChecksumFlag)
+        srcPtr += blockSize                                    /* L1083 */
+    }
+
+    /* L1086-1093:autoFlush:剩余输入(< blockSize)立即出块 */
+    if (cctx.prefs.autoFlush != 0u32 && srcPtr < srcEnd) {
+        lastBlockCompressed = 2
+        dstPtr += lz4fMakeBlock(dstBuf, dstPtr, srcBuf, srcPtr, srcEnd - srcPtr,
+            kind, cctx, cctx.prefs.frameInfo.blockChecksumFlag)
+        srcPtr = srcEnd                                        /* L1092 */
+    }
+
+    /* L1096-1103:linked 且末块来自 src → 保留字典(stableSrc 时源跨调用
+       稳定,字典留在 src,tmpIn 归零即可) */
+    if (cctx.prefs.frameInfo.blockMode == LZ4F_blockLinked && lastBlockCompressed == 2) {
+        if (stableSrc != 0u32) {
+            cctx.tmpIn = 0                                     /* L1100 */
+        } else {
+            lz4fLocalSaveDict(cctx)                            /* L1102 */
+        }
+    }
+
+    /* L1106-1112:tmpIn 保持在界限内(仅 !autoFlush 有滞留数据) */
+    if (cctx.prefs.autoFlush == 0u32 &&
+            (cctx.tmpIn + blockSize) > cctx.maxBufferSize) {
+        lz4fLocalSaveDict(cctx)                                /* L1111 */
+    }
+
+    /* L1115-1119:剩余输入(必 < blockSize)入 tmp 缓冲 */
+    if (srcPtr < srcEnd) {
+        let sizeToCopy: Int64 = srcEnd - srcPtr
+        var i: Int64 = 0
+        while (i < sizeToCopy) {
+            cctx.tmpBuff[cctx.tmpIn + i] = srcBuf[srcPtr + i]
+            i += 1
+        }
+        cctx.tmpInSize = sizeToCopy                            /* L1119 */
+    }
+
+    if (cctx.prefs.frameInfo.contentChecksumFlag == LZ4F_contentChecksumEnabled) {
+        XXH32_update(cctx.xxh, srcBuf, srcSize, offset: srcIdx) /* L1121 */
+    }
+    cctx.totalInSize += UInt64(srcSize)                        /* L1123 */
+    return dstPtr - dstIdx                                     /* L1125 */
+}
+
+/* LZ4F_compressUpdate(L1135-1144):可重复调用直至数据压尽;成功时
+   srcBuffer 必被整体消费(入缓冲或已压缩)。返回写入字节数(可为 0 =
+   仅缓冲)或错误码。 */
+public func LZ4F_compressUpdate(cctx: LZ4F_cctx, dstBuf: Array<UInt8>,
+        dstIdx: Int64, dstCapacity: Int64,
+        srcBuf: Array<UInt8>, srcIdx: Int64, srcSize: Int64,
+        cOptPtr: Option<LZ4F_compressOptions_t>): Int64 {
+    return lz4fCompressUpdateImpl(cctx, dstBuf, dstIdx, dstCapacity,
+        srcBuf, srcIdx, srcSize, cOptPtr, LZ4F_LZ4B_COMPRESSED)
+}
+
+/* LZ4F_uncompressedUpdate(L1155-1164):同 compressUpdate,但请求块以
+   原样发送;仅 blockIndependent 模式支持(上游文档注记)。 */
+public func LZ4F_uncompressedUpdate(cctx: LZ4F_cctx, dstBuf: Array<UInt8>,
+        dstIdx: Int64, dstCapacity: Int64,
+        srcBuf: Array<UInt8>, srcIdx: Int64, srcSize: Int64,
+        cOptPtr: Option<LZ4F_compressOptions_t>): Int64 {
+    return lz4fCompressUpdateImpl(cctx, dstBuf, dstIdx, dstCapacity,
+        srcBuf, srcIdx, srcSize, cOptPtr, LZ4F_LZ4B_UNCOMPRESSED)
+}
+
+/*-************************************
+*  Flush / compressEnd (lz4frame.c L1175-1259)
+**************************************/
+/* lz4fFlushImpl —— LZ4F_flush 主体(L1175-1212)。顺序严格:tmpInSize==0
+   先返 0(未 Begin 的 fresh cctx 亦走此分支 —— 上游怪癖,cStage 检查在
+   其后);cStage!=1 → -20;dstCapacity < tmpInSize+BHSize+BFSize → -11;
+   压缩 tmp 缓冲;linked → tmpIn 前移;tmpIn+maxBlockSize>maxBufferSize →
+   localSaveDict。 */
+internal func lz4fFlushImpl(cctx: LZ4F_cctx, dstBuf: Array<UInt8>,
+        dstIdx: Int64, dstCapacity: Int64): Int64 {
+    if (cctx.tmpInSize == 0) {
+        return 0                                               /* L1187 */
+    }
+    if (cctx.cStage != 1) {
+        return -LZ4F_ERROR_compressionState_uninitialized      /* L1188 */
+    }
+    if (dstCapacity < cctx.tmpInSize + LZ4F_BLOCK_HEADER_SIZE +
+            LZ4F_BLOCK_CHECKSUM_SIZE) {
+        return -LZ4F_ERROR_dstMaxSize_tooSmall                  /* L1189 */
+    }
+    /* 压缩函数按 cctx.blockCompressMode 选(当前生效模式,区别于
+       Update 入口按键于入参的选择) */
+    let kind: Int32 = lz4fSelectCompressionKind(cctx.prefs.frameInfo.blockMode,
+        cctx.prefs.compressionLevel, cctx.blockCompressMode)   /* L1194 */
+
+    let written: Int64 = lz4fMakeBlock(dstBuf, dstIdx, cctx.tmpBuff, cctx.tmpIn,
+        cctx.tmpInSize, kind, cctx, cctx.prefs.frameInfo.blockChecksumFlag)
+    if (cctx.prefs.frameInfo.blockMode == LZ4F_blockLinked) {
+        cctx.tmpIn += cctx.tmpInSize                           /* L1204-1205 */
+    }
+    cctx.tmpInSize = 0                                         /* L1206 */
+
+    /* L1209-1211:tmpIn 保持在界限内 */
+    if (cctx.tmpIn + cctx.maxBlockSize > cctx.maxBufferSize) {
+        lz4fLocalSaveDict(cctx)
+    }
+    return written                                             /* L1213 */
+}
+
+/* LZ4F_flush(L1175):立即压出 cctx 内滞留数据;可为 0(无滞留)。 */
+public func LZ4F_flush(cctx: LZ4F_cctx, dstBuf: Array<UInt8>,
+        dstIdx: Int64, dstCapacity: Int64,
+        cOptPtr: Option<LZ4F_compressOptions_t>): Int64 {
+    /* (void)compressOptionsPtr;not useful (yet)(L1191)—— 形参保留
+       以对齐上游签名,仓颉侧同样不读取。 */
+    return lz4fFlushImpl(cctx, dstBuf, dstIdx, dstCapacity)
+}
+
+/* LZ4F_compressEnd(L1224-1259):flush 残留 + endMark + 可选内容校验;
+   cStage 归 0(同参偏好可复用);csz 声明与实际 totalInSize 不符 →
+   -14(注意:检出在 cStage=0 之后,上游顺序保真)。返回写入字节数
+   (必 >= 4)或错误码。 */
+public func LZ4F_compressEnd(cctx: LZ4F_cctx, dstBuf: Array<UInt8>,
+        dstIdx: Int64, dstCapacity: Int64,
+        cOptPtr: Option<LZ4F_compressOptions_t>): Int64 {
+    let flushSize: Int64 = LZ4F_flush(cctx, dstBuf, dstIdx, dstCapacity, cOptPtr)
+    if (LZ4F_isError(flushSize)) {
+        return flushSize                                       /* FORWARD_IF_ERROR */
+    }
+    var dstPtr: Int64 = dstIdx + flushSize
+    var capLeft: Int64 = dstCapacity - flushSize               /* L1240 */
+
+    if (capLeft < LZ4F_ENDMARK_SIZE) {
+        return -LZ4F_ERROR_dstMaxSize_tooSmall                  /* L1242 */
+    }
+    lz4fWriteLE32(dstBuf, dstPtr, 0u32)                        /* L1243 endMark */
+    dstPtr += 4
+
+    if (cctx.prefs.frameInfo.contentChecksumFlag == LZ4F_contentChecksumEnabled) {
+        let xxh: UInt32 = XXH32_digest(cctx.xxh)               /* L1247 */
+        if (capLeft < LZ4F_ENDMARK_SIZE + LZ4F_CONTENT_CHECKSUM_SIZE) {
+            return -LZ4F_ERROR_dstMaxSize_tooSmall              /* L1248 */
+        }
+        lz4fWriteLE32(dstBuf, dstPtr, xxh)
+        dstPtr += 4                                            /* L1252 */
+    }
+
+    cctx.cStage = 0                                            /* L1254 */
+
+    if (cctx.prefs.frameInfo.contentSize != 0u64) {
+        if (cctx.prefs.frameInfo.contentSize != cctx.totalInSize) {
+            return -LZ4F_ERROR_frameSize_wrong                  /* L1257-1258 */
+        }
+    }
+    return dstPtr - dstIdx
 }

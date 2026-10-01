@@ -1869,10 +1869,12 @@ internal func LZ4HC_compress_generic_internal(s: LZ4_streamHC_t,
         (dictCtx 也可能是已 memcpy 后 dictBuf=None,见 (d))
     (d) dictBuf=None, dictCtx=Some → usingDictCtxHc consult
         dictCtxQ = dictCtx.prefixBuf + dictCtx.prefixStartIdx
-    返回 (result, srcSizeOut)。 */
+    返回 (result, srcSizeOut)。
+    M5 Task 3:dstIdx 形参化(makeBlock 块数据写在块头之后;公开家族以
+    idx=0 委托,行为不变)。 */
 internal func lz4hcCompressRun(s: LZ4_streamHC_t,
         srcBuf: Array<UInt8>, srcIdx: Int64, srcSize: Int64,
-        dst: Array<UInt8>, dstCapacity: Int64,
+        dst: Array<UInt8>, dstIdx: Int64, dstCapacity: Int64,
         cLevel: Int32, limit: Int32): (Int32, Int64) {
     /* 同分配判定必须在任何 acquire 之前完成(lz4SameBuffer 带哨兵写,
        不得在有 raw handle 持有期间调用)。dictBuf === srcBuf(edge④ 几何:
@@ -1916,6 +1918,7 @@ internal func lz4hcCompressRun(s: LZ4_streamHC_t,
         let dh = acquireArrayRawData<UInt8>(dst)
         let srcBase = sh.pointer
         let srcQ = srcBase + srcIdx
+        let dstQ = dh.pointer + dstIdx
         var r: (Int64, Int64) = (0, 0)
         if (let Some(db) <- dictBufOpt) {
             if (dictSameAsSrc) {
@@ -1924,13 +1927,13 @@ internal func lz4hcCompressRun(s: LZ4_streamHC_t,
                     pbufSameAsSrc,dispatch 内先命中该分支) */
                 let dictQ = srcBase + s.dictStartIdx
                 r = lz4hcRunDictCtxDispatch(s, srcBuf, srcIdx, srcBase, srcQ,
-                    dictQ, srcBase, dh.pointer, srcSize, dstCapacity, cLevel, limit,
+                    dictQ, srcBase, dstQ, srcSize, dstCapacity, cLevel, limit,
                     pbufSameAsSrc, false)
             } else {
                 let bh = acquireArrayRawData<UInt8>(db)
                 let dictQ = bh.pointer + s.dictStartIdx
                 r = lz4hcRunDictCtxDispatch(s, srcBuf, srcIdx, srcBase, srcQ,
-                    dictQ, bh.pointer, dh.pointer, srcSize, dstCapacity, cLevel, limit,
+                    dictQ, bh.pointer, dstQ, srcSize, dstCapacity, cLevel, limit,
                     pbufSameAsSrc, pbufSameAsDict)
                 releaseArrayRawData<UInt8>(bh)
             }
@@ -1939,7 +1942,7 @@ internal func lz4hcCompressRun(s: LZ4_streamHC_t,
                 (dictCtx 自带 prefixBuf 但本流 extDict 空 —— T5 修正);
                 无 dictBuf 故无 dict 侧别名,dictBaseQ 位传 srcBase 占位 */
             r = lz4hcRunDictCtxDispatch(s, srcBuf, srcIdx, srcBase, srcQ,
-                srcQ, srcBase, dh.pointer, srcSize, dstCapacity, cLevel, limit,
+                srcQ, srcBase, dstQ, srcSize, dstCapacity, cLevel, limit,
                 pbufSameAsSrc, false)
         }
         releaseArrayRawData<UInt8>(dh)
@@ -2002,19 +2005,27 @@ internal func lz4hcRunDictCtxDispatch(s: LZ4_streamHC_t,
 *  One-shot public APIs (lz4hc.c L1549-1594)
 **************************************/
 /* LZ4_compress_HC_extStateHC_fastReset(L1549-1559):快复位 + 新块锚定 +
-   compressBound 择 notLimited/limitedOutput(C 的对齐检查对类状态不可达)。 */
-public func LZ4_compress_HC_extStateHC_fastReset(state: LZ4_streamHC_t, src: Array<UInt8>,
-        srcSize: Int32, dst: Array<UInt8>, dstCapacity: Int32, compressionLevel: Int32): Int32 {
+    compressBound 择 notLimited/limitedOutput(C 的对齐检查对类状态不可达)。
+    M5 Task 3:内部 At 变体带 srcIdx/dstIdx(lz4frame makeBlock 块数据写
+    在块头之后;src 为 cctx.tmpBuff 的内部偏移),公开签名以 idx=0 委托。 */
+internal func lz4hcExtStateHCFastResetAt(state: LZ4_streamHC_t, src: Array<UInt8>, srcIdx: Int64,
+        srcSize: Int32, dst: Array<UInt8>, dstIdx: Int64,
+        dstCapacity: Int32, compressionLevel: Int32): Int32 {
     LZ4_resetStreamHC_fast(state, compressionLevel)                 /* L1553 */
-    LZ4HC_initInternal(state, src, 0)                               /* L1554 */
+    LZ4HC_initInternal(state, src, srcIdx)                          /* L1554 */
     let limit: Int32 = if (dstCapacity < LZ4_compressBound(srcSize)) {
         LZ4_OUTPUT_LIMITED                                          /* L1555-1556 */
     } else {
         LZ4_OUTPUT_NOT_LIMITED                                      /* L1557-1558 */
     }
-    let (r, _) = lz4hcCompressRun(state, src, 0, Int64(srcSize), dst,
+    let (r, _) = lz4hcCompressRun(state, src, srcIdx, Int64(srcSize), dst, dstIdx,
         Int64(dstCapacity), compressionLevel, limit)
     return r
+}
+
+public func LZ4_compress_HC_extStateHC_fastReset(state: LZ4_streamHC_t, src: Array<UInt8>,
+        srcSize: Int32, dst: Array<UInt8>, dstCapacity: Int32, compressionLevel: Int32): Int32 {
+    return lz4hcExtStateHCFastResetAt(state, src, 0, srcSize, dst, 0, dstCapacity, compressionLevel)
 }
 
 /* LZ4_compress_HC_extStateHC(L1561-1566):全量 init 后走 fastReset 共体。 */
@@ -2041,7 +2052,7 @@ public func LZ4_compress_HC_destSize(state: LZ4_streamHC_t, src: Array<UInt8>, s
     LZ4_initStreamHC(state)                                         /* L1589 */
     LZ4HC_initInternal(state, src, 0)                               /* L1591 */
     LZ4_setCompressionLevel(state, cLevel)                          /* L1592 */
-    let (r, consumed) = lz4hcCompressRun(state, src, 0, Int64(srcSize), dst,
+    let (r, consumed) = lz4hcCompressRun(state, src, 0, Int64(srcSize), dst, 0,
         Int64(targetDstSize), cLevel, LZ4_OUTPUT_FILL)              /* L1593 */
     if (r <= 0) {
         return (0, srcSize)
@@ -2312,7 +2323,7 @@ internal func LZ4HC_setExternalDict(s: LZ4_streamHC_t, newBlockBuf: Array<UInt8>
    lowLimit/dictStartIdx 至 sourceEnd,过短则丢弃 dict)。 */
 internal func lz4hcContinueGeneric(s: LZ4_streamHC_t,
         srcBuf: Array<UInt8>, srcIdx: Int64, srcSize: Int64,
-        dst: Array<UInt8>, dstCapacity: Int64,
+        dst: Array<UInt8>, dstIdx: Int64, dstCapacity: Int64,
         cLevel: Int32, limit: Int32): (Int32, Int64) {
     let prefixBufBefore = s.prefixBuf                                     /* L1740 */
     if (prefixBufBefore.isNone()) {
@@ -2365,7 +2376,7 @@ internal func lz4hcContinueGeneric(s: LZ4_streamHC_t,
             }
         case None => ()
     }
-    return lz4hcCompressRun(s, srcBuf, srcIdx, srcSize, dst, dstCapacity, cLevel, limit)
+    return lz4hcCompressRun(s, srcBuf, srcIdx, srcSize, dst, dstIdx, dstCapacity, cLevel, limit)
 }
 
 /* LZ4_loadDictHC(L1675-1701):>64KB 截尾(以 dictStartIdx 偏移表达,
@@ -2421,11 +2432,13 @@ public func LZ4_attach_HC_dictionary(workingStream: LZ4_streamHC_t,
 }
 
 /* LZ4_compress_HC_continue(L1771-1778):(state, srcBuf, srcIdx, srcSize,
-   dst, dstCapacity):Int32。compressBound 择限 + defensive srcIdx/srcSize
-   越界 → 0(M3b continue 先例)。 */
-public func LZ4_compress_HC_continue(state: LZ4_streamHC_t,
+    dst, dstCapacity):Int32。compressBound 择限 + defensive srcIdx/srcSize
+    越界 → 0(M3b continue 先例)。
+    M5 Task 3:内部 At 变体带 dstIdx(lz4frame makeBlock 块数据写在块头
+    之后),公开签名以 dstIdx=0 委托,行为不变。 */
+internal func lz4hcCompressHCContinueAt(state: LZ4_streamHC_t,
         srcBuf: Array<UInt8>, srcIdx: Int64, srcSize: Int32,
-        dst: Array<UInt8>, dstCapacity: Int32): Int32 {
+        dst: Array<UInt8>, dstIdx: Int64, dstCapacity: Int32): Int32 {
     if (srcIdx < 0 || srcIdx > srcBuf.size || srcSize < 0 ||
             srcIdx + Int64(srcSize) > srcBuf.size) {
         return 0                                                           /* defensive */
@@ -2436,13 +2449,19 @@ public func LZ4_compress_HC_continue(state: LZ4_streamHC_t,
         LZ4_OUTPUT_NOT_LIMITED
     }
     let (r, _) = lz4hcContinueGeneric(state, srcBuf, srcIdx, Int64(srcSize),
-        dst, Int64(dstCapacity), state.compressionLevel, limit)
+        dst, dstIdx, Int64(dstCapacity), state.compressionLevel, limit)
     return r
 }
 
+public func LZ4_compress_HC_continue(state: LZ4_streamHC_t,
+        srcBuf: Array<UInt8>, srcIdx: Int64, srcSize: Int32,
+        dst: Array<UInt8>, dstCapacity: Int32): Int32 {
+    return lz4hcCompressHCContinueAt(state, srcBuf, srcIdx, srcSize, dst, 0, dstCapacity)
+}
+
 /* LZ4_compress_HC_continue_destSize(L1780-1783):fillOutput。返回
-   (cSize, consumed);失败 (r<=0) → (0, srcSize)。委托语义同
-   LZ4_compress_HC_destSize。 */
+    (cSize, consumed);失败 (r<=0) → (0, srcSize)。委托语义同
+    LZ4_compress_HC_destSize。 */
 public func LZ4_compress_HC_continue_destSize(state: LZ4_streamHC_t,
         srcBuf: Array<UInt8>, srcIdx: Int64, srcSize: Int32,
         dst: Array<UInt8>, targetDestSize: Int32): (Int32, Int32) {
@@ -2451,7 +2470,7 @@ public func LZ4_compress_HC_continue_destSize(state: LZ4_streamHC_t,
         return (0, srcSize)                                                /* defensive */
     }
     let (r, consumed) = lz4hcContinueGeneric(state, srcBuf, srcIdx,
-        Int64(srcSize), dst, Int64(targetDestSize), state.compressionLevel,
+        Int64(srcSize), dst, 0, Int64(targetDestSize), state.compressionLevel,
         LZ4_OUTPUT_FILL)
     if (r <= 0) {
         return (0, srcSize)

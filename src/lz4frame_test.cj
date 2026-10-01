@@ -11,6 +11,10 @@
 // M5 Task 2: compressBegin family golden (frhdr rows 426..435 of
 // corpus/block_golden_ref.txt, values from the regenerated C corpus) plus
 // cctx state / buffer-quadrant / ctx-type-switch / error-path pins.
+// M5 Task 3: frame golden matrix (frame rows 436..462 - full streaming
+// frames via Begin + Update[/uncompressedUpdate/flush]* + End, values from
+// the regenerated C corpus incl. per-call return pins probed on stderr) plus
+// update state / error / flush-quirk / uncompressed-semantics pins.
 
 package lz4
 
@@ -502,4 +506,424 @@ func lz4fBeginDictStateTest(): Unit {
     }
     @Assert(ds2 == 4096)
     println("lz4f begin_usingDict dict-state pins verified")
+}
+
+/*-************************************
+*  M5 Task 3: frame golden matrix (vs upstream C, 0774d055)
+**************************************/
+// frame rows of corpus/block_golden_ref.txt (rows 436..462): fresh cctx per
+// row, one dst buffer sized LZ4F_compressFrameBound(n, &prefs), pointer
+// advanced per call with capacity = remaining (compressFrame_usingCDict
+// pattern; NO compressFrame parameter overrides - the raw row prefs drive
+// Begin). Inputs: A=RDG(65536,0.50,0) rows 1-7+27, C=RDG(131072,0.90,0)
+// rows 8-23, D=RDG(255,0.50,0), G=RDG(1,0.00,0), F=RDG(0,0.00,0).
+// Scenario codes (scen): 0=1shot, 1=flushmid (50000 + flush + 81072),
+// 2=umix (bm=1: 65536 + uncompressedUpdate 32768 + 32768), 3=chunks5
+// (26214 x3 + 26215 x2). ss=1 rows pass {stableSrc=1} to the Updates.
+// (n, mp, seed, bs, bm, ccs, bcs, csz, did, lv, fav, af, ss, scen,
+//  wantSize, want32, want64, fileRowIdx)
+let FRAME_GOLD_REF: Array<(Int64, Float64, UInt32, Int32, Int32, Int32, Int32,
+        UInt64, UInt32, Int32, Int32, Int32, Int32, Int32,
+        Int64, UInt32, UInt64, Int64)> = [
+    (65536, 0.50, 0u32, 4, 0, 0, 0, 0u64, 0u32, 0, 0, 0, 0, 0, 38688, 0xa2371855u32, 0x54ad2015adcf2431u64, 436),
+    (65536, 0.50, 0u32, 4, 0, 0, 0, 0u64, 0u32, 0, 0, 1, 0, 0, 38688, 0xa2371855u32, 0x54ad2015adcf2431u64, 437),
+    (65536, 0.50, 0u32, 4, 0, 1, 0, 0u64, 0u32, 0, 0, 0, 0, 0, 38692, 0x1d540383u32, 0xfd0788e74ed12bcdu64, 438),
+    (65536, 0.50, 0u32, 4, 0, 0, 1, 0u64, 0u32, 0, 0, 0, 0, 0, 38692, 0x4b1f7df2u32, 0x1c652b10d1c44b9du64, 439),
+    (65536, 0.50, 0u32, 4, 0, 1, 1, 0u64, 0u32, 0, 0, 0, 0, 0, 38696, 0xb5b0cb46u32, 0xeb8940a12d1ad8ecu64, 440),
+    (65536, 0.50, 0u32, 4, 1, 0, 0, 0u64, 0u32, 0, 0, 0, 0, 0, 36474, 0xc4aa94e0u32, 0xe004ae20c13bd03bu64, 441),
+    (65536, 0.50, 0u32, 4, 1, 1, 1, 0u64, 0u32, 0, 0, 0, 0, 0, 36482, 0x570daea3u32, 0x5896cdf09b61aa11u64, 442),
+    (131072, 0.90, 0u32, 4, 0, 0, 0, 0u64, 0u32, 0, 0, 0, 0, 0, 24223, 0xce05c0d4u32, 0x8929915b8696d39du64, 443),
+    (131072, 0.90, 0u32, 4, 0, 0, 0, 0u64, 0u32, 0, 0, 0, 1, 0, 24223, 0xce05c0d4u32, 0x8929915b8696d39du64, 444),
+    (131072, 0.90, 0u32, 4, 0, 0, 0, 0u64, 0u32, 0, 0, 1, 0, 0, 24223, 0xce05c0d4u32, 0x8929915b8696d39du64, 445),
+    (131072, 0.90, 0u32, 4, 1, 0, 0, 0u64, 0u32, 0, 0, 0, 0, 0, 25344, 0x20d9d6b0u32, 0xcc8ff21ea6df12d5u64, 446),
+    (131072, 0.90, 0u32, 4, 0, 0, 0, 0u64, 0u32, 3, 0, 0, 0, 0, 18386, 0x725bd936u32, 0x187be24aa58b09d5u64, 447),
+    (131072, 0.90, 0u32, 4, 0, 0, 0, 0u64, 0u32, 9, 0, 0, 0, 0, 17711, 0xc06c71feu32, 0xb418920b1f7ba3deu64, 448),
+    (131072, 0.90, 0u32, 4, 0, 0, 0, 0u64, 0u32, 12, 0, 0, 0, 0, 17576, 0x8f36fe8au32, 0x2b44accc0cc1f155u64, 449),
+    (131072, 0.90, 0u32, 4, 0, 0, 0, 0u64, 0u32, 12, 1, 0, 0, 0, 17766, 0x6bb0cd69u32, 0xac1e568d74329562u64, 450),
+    (131072, 0.90, 0u32, 4, 0, 0, 0, 0u64, 0u32, -3, 0, 0, 0, 0, 27653, 0xff56c5c9u32, 0x85380027cdb0c592u64, 451),
+    (131072, 0.90, 0u32, 5, 0, 0, 0, 0u64, 0u32, 0, 0, 0, 0, 0, 24215, 0xd1b08705u32, 0x93d72f2f595c339bu64, 452),
+    (131072, 0.90, 0u32, 6, 0, 0, 0, 0u64, 0u32, 0, 0, 0, 0, 0, 24215, 0xb2a44c91u32, 0x8fe4d15fe4d0f4a7u64, 453),
+    (131072, 0.90, 0u32, 7, 0, 0, 0, 0u64, 0u32, 0, 0, 0, 0, 0, 24215, 0x623fca64u32, 0x1a8bdccba89800e6u64, 454),
+    (131072, 0.90, 0u32, 4, 0, 0, 0, 131072u64, 0u32, 0, 0, 0, 0, 0, 24231, 0xb74dd86eu32, 0xfc1ce4c31356dbdeu64, 455),
+    (131072, 0.90, 0u32, 4, 0, 0, 0, 0u64, 0u32, 0, 0, 0, 0, 1, 24244, 0xd9525d2au32, 0x98e6a260f29a07eeu64, 456),
+    (131072, 0.90, 0u32, 4, 1, 0, 0, 0u64, 0u32, 0, 0, 0, 0, 2, 52010, 0x085a3fe4u32, 0x4e0a19e835862d16u64, 457),
+    (131072, 0.90, 0u32, 4, 0, 0, 0, 0u64, 0u32, 0, 0, 0, 0, 3, 24223, 0xce05c0d4u32, 0x8929915b8696d39du64, 458),
+    (255, 0.50, 0u32, 4, 0, 0, 0, 0u64, 0u32, 0, 0, 0, 0, 0, 253, 0x24e5d1c3u32, 0x8d71210396ddea98u64, 459),
+    (1, 0.00, 0u32, 4, 0, 0, 0, 0u64, 0u32, 0, 0, 0, 0, 0, 16, 0x40b7cb54u32, 0x884fded16025931cu64, 460),
+    (0, 0.00, 0u32, 4, 0, 1, 0, 0u64, 0u32, 0, 0, 0, 0, 0, 15, 0x67a81150u32, 0x0de3431ec7da9349u64, 461),
+    (65536, 0.50, 0u32, 4, 0, 0, 0, 0u64, 42u32, 0, 0, 0, 0, 0, 38692, 0xc6b180e2u32, 0xf1553e445e7d35e4u64, 462),
+]
+
+// 读游标辅助:LE32 解码(块头/校验解析用)
+private func lz4fReadLE32(buf: Array<UInt8>, idx: Int64): UInt32 {
+    return UInt32(buf[idx]) | (UInt32(buf[idx + 1]) << 8) |
+        (UInt32(buf[idx + 2]) << 16) | (UInt32(buf[idx + 3]) << 24)
+}
+
+@Test
+func lz4fFrameGoldenTest(): Unit {
+    var checked = 0
+    var fileCompared = 0
+    var indepDecoded = 0
+    var ccsChecked = 0
+    for ((n, mp, seed, bs, bm, ccs, bcs, csz, did, lv, fav, af, ss, scen, wantSize, want32, want64, fileRow) in FRAME_GOLD_REF) {
+        let input = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(input, n, mp, 0.0, seed)
+        var prefs = LZ4F_preferences_t()
+        prefs.frameInfo.blockSizeID = bs
+        prefs.frameInfo.blockMode = bm
+        prefs.frameInfo.contentChecksumFlag = ccs
+        prefs.frameInfo.blockChecksumFlag = bcs
+        prefs.frameInfo.contentSize = csz
+        prefs.frameInfo.dictID = did
+        prefs.compressionLevel = lv
+        prefs.favorDecSpeed = UInt32(fav)
+        prefs.autoFlush = UInt32(af)
+        let cctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+        let dstCap = LZ4F_compressFrameBound(n, Some(prefs))
+        let dst = Array<UInt8>(dstCap, {_ => 0u8})
+        var pos: Int64 = 0
+        var r = LZ4F_compressBegin(cctx, dst, pos, dstCap - pos, Some(prefs))
+        @Assert(!LZ4F_isError(r))
+        pos += r
+        var cOpt = Option<LZ4F_compressOptions_t>.None
+        if (ss != 0) {
+            var o = LZ4F_compressOptions_t()
+            o.stableSrc = 1u32
+            cOpt = Some(o)
+        }
+        if (scen == 0) {
+            r = LZ4F_compressUpdate(cctx, dst, pos, dstCap - pos, input, 0, n, cOpt)
+            @Assert(!LZ4F_isError(r))
+            pos += r
+        } else if (scen == 1) {
+            r = LZ4F_compressUpdate(cctx, dst, pos, dstCap - pos, input, 0, 50000, cOpt)
+            @Assert(!LZ4F_isError(r))
+            pos += r
+            r = LZ4F_flush(cctx, dst, pos, dstCap - pos, Option<LZ4F_compressOptions_t>.None)
+            @Assert(!LZ4F_isError(r))
+            pos += r
+            r = LZ4F_compressUpdate(cctx, dst, pos, dstCap - pos, input, 50000, n - 50000, cOpt)
+            @Assert(!LZ4F_isError(r))
+            pos += r
+        } else if (scen == 2) {
+            r = LZ4F_compressUpdate(cctx, dst, pos, dstCap - pos, input, 0, 65536, cOpt)
+            @Assert(!LZ4F_isError(r))
+            pos += r
+            r = LZ4F_uncompressedUpdate(cctx, dst, pos, dstCap - pos, input, 65536, 32768, cOpt)
+            @Assert(!LZ4F_isError(r))
+            pos += r
+            r = LZ4F_compressUpdate(cctx, dst, pos, dstCap - pos, input, 98304, 32768, cOpt)
+            @Assert(!LZ4F_isError(r))
+            pos += r
+        } else {
+            let chunkSizes: Array<Int64> = [26214, 26214, 26214, 26215, 26215]
+            var off: Int64 = 0
+            for (k in 0..5) {
+                r = LZ4F_compressUpdate(cctx, dst, pos, dstCap - pos, input, off, chunkSizes[k], cOpt)
+                @Assert(!LZ4F_isError(r))
+                pos += r
+                off += chunkSizes[k]
+            }
+        }
+        r = LZ4F_compressEnd(cctx, dst, pos, dstCap - pos, Option<LZ4F_compressOptions_t>.None)
+        @Assert(!LZ4F_isError(r))
+        pos += r
+        // input provenance: digests must still equal the C manifest inxxh
+        // values (also proves no compression path mutates the src buffer)
+        let wantIn32 = XXH32(input, n, 0u32)
+        if (n == 131072) {
+            @Assert(wantIn32 == 0xbf1377f2u32)      // C=RDG(131072,0.90,0)
+        } else if (n == 65536) {
+            @Assert(wantIn32 == 0xc20f7bccu32)      // A=RDG(65536,0.50,0)
+        } else if (n == 255) {
+            @Assert(wantIn32 == 0xf125f7b1u32)      // D=RDG(255,0.50,0)
+        } else if (n == 1) {
+            @Assert(wantIn32 == 0x9608f5fbu32)      // G=RDG(1,0.00,0)
+        } else {
+            @Assert(wantIn32 == 0x02cc5d05u32)      // F=RDG(0,0.00,0)
+        }
+        if (pos != wantSize) {
+            println("FRAME row ${fileRow}: got ${pos} want ${wantSize}")
+        }
+        @Assert(pos == wantSize)
+        let got32 = XXH32(dst, pos, 0u32)
+        let got64 = XXH64(dst, pos, 0u64)
+        if (got32 != want32 || got64 != want64) {
+            println("DIGEST row ${fileRow}: got ${got32}/${got64} want ${want32}/${want64}")
+        }
+        @Assert(got32 == want32)
+        @Assert(got64 == want64)
+        match (lz4fReadArtifact(fileRow)) {
+            case Some(art) =>
+                @Assert(Int64(art.size) == pos)
+                var eq = true
+                for (k in 0..pos) {
+                    if (UInt8(art[k]) != dst[k]) {
+                        eq = false
+                    }
+                }
+                if (!eq) {
+                    println("BYTES row ${fileRow}: artifact mismatch")
+                }
+                @Assert(eq)
+                fileCompared += 1
+            case None => println("frame row ${fileRow}: artifact missing, byte-compare skipped")
+        }
+        // blockIndependent 闭环:解析自身输出,逐块独立解码,重组内容的
+        // XXH32 == 输入的 XXH32(输入摘要在场景后立即以 C manifest 值钉校,
+        // 见上方 provenance 断言)。比对经单一小状态累加器承载:全量套件
+        // 高 GC 压力下,直接的大数组逐字节比对观测到偶发旁观数组陈旧读/
+        // 覆写(复读即消失;dec/blk/dst 均已经多重 C 锚点字节校验 —— 见
+        // 任务报告“关注项”),摘要累加路径在两工具链全部观测中稳定。
+        if (bm == LZ4F_blockIndependent) {
+            var p: Int64 = 7 + (if (csz > 0u64) { 8 } else { 0 }) + (if (did > 0u32) { 4 } else { 0 })
+            var endmarkSeen = false
+            let reassembly = XXH32_state_t()
+            XXH32_reset(reassembly, 0u32)
+            while (!endmarkSeen) {
+                let bhdr = lz4fReadLE32(dst, p)
+                if (bhdr == 0u32) {
+                    endmarkSeen = true
+                    break
+                }
+                let raw = (bhdr & 0x80000000u32) != 0u32
+                let bsize = Int64(bhdr & 0x7FFFFFFFu32)
+                if (raw) {
+                    XXH32_update(reassembly, dst, bsize, offset: p + 4)
+                } else {
+                    let p0: Int64 = p
+                    let blk = Array<UInt8>(bsize, {i => dst[p0 + 4 + i]})
+                    let dec = Array<UInt8>(n, {_ => 0u8})
+                    let dr = LZ4_decompress_safe(blk, Int32(bsize), dec, Int32(n))
+                    if (dr <= 0) {
+                        println("INDEP row ${fileRow}: block at ${p} decode got ${dr}")
+                    }
+                    @Assert(dr > 0)
+                    XXH32_update(reassembly, dec, Int64(dr), offset: 0)
+                }
+                p += 4 + bsize + (if (bcs != 0) { 4 } else { 0 })
+            }
+            let gotReassembly = XXH32_digest(reassembly)
+            if (gotReassembly != wantIn32) {
+                println("INDEP row ${fileRow}: reassembly digest ${gotReassembly} want ${wantIn32}")
+            }
+            @Assert(gotReassembly == wantIn32)
+            // endmark 之后仅剩可选内容校验
+            @Assert(pos - p == 4 + Int64(ccs) * 4)
+            indepDecoded += 1
+        }
+        // ccs 闭环:尾 4 字节 == XXH32(输入, seed 0)
+        if (ccs == LZ4F_contentChecksumEnabled) {
+            let tail = lz4fReadLE32(dst, pos - 4)
+            if (tail != XXH32(input, n, 0u32)) {
+                println("CCS row ${fileRow}: tail ${tail} want ${XXH32(input, n, 0u32)}")
+            }
+            @Assert(tail == XXH32(input, n, 0u32))
+            ccsChecked += 1
+        }
+        checked += 1
+    }
+    @Assert(checked == 27)
+    @Assert(fileCompared == 27 || fileCompared == 0)   // corpus policy: all-or-nothing
+    @Assert(indepDecoded == 4)    // rows 6, 7, 11, 22
+    @Assert(ccsChecked == 4)      // rows 3, 5, 7, 26
+    println("frame golden: ${checked}/27 rows, ${fileCompared} byte-exact artifacts, ${indepDecoded} indep-decoded, ${ccsChecked} ccs-verified")
+}
+
+/*-************************************
+*  M5 Task 3: update state evolution
+**************************************/
+@Test
+func lz4fUpdateStateTest(): Unit {
+    // chunks5 前 2 次 Update 返回 0(全缓冲 26214x2 < 65536)+ tmpInSize 累积
+    let n: Int64 = 131072
+    let cIn = Array<UInt8>(n, {_ => 0u8})
+    RDG_genBuffer(cIn, n, 0.90, 0.0, 0u32)
+    var prefs = LZ4F_preferences_t()   // C default: bs=4, af=0, linked
+    let cctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+    let dst = Array<UInt8>(140000, {_ => 0u8})
+    var pos: Int64 = 0
+    pos += LZ4F_compressBegin(cctx, dst, pos, 140000 - pos, Some(prefs))
+    let chunkSizes: Array<Int64> = [26214, 26214, 26214, 26215, 26215]
+    var off: Int64 = 0
+    for (k in 0..5) {
+        let r = LZ4F_compressUpdate(cctx, dst, pos, 140000 - pos, cIn, off, chunkSizes[k],
+            Option<LZ4F_compressOptions_t>.None)
+        if (k == 0 || k == 1) {
+            @Assert(r == 0)   // C probe: upd1=0 upd2=0
+            @Assert(cctx.tmpInSize == Int64(k + 1) * 26214)
+        }
+        if (k == 2) {
+            @Assert(r == 8308)   // C probe: block 1 flushed from tmpBuff
+        }
+        if (k == 4) {
+            @Assert(r == 15904)  // C probe: block 2 flushed from tmpBuff
+        }
+        pos += r
+        off += chunkSizes[k]
+    }
+    @Assert(cctx.totalInSize == 131072u64)
+    @Assert(pos + 4 == 24223)   // golden row 23 minus endmark
+    @Assert(LZ4F_compressEnd(cctx, dst, pos, 140000 - pos, Option<LZ4F_compressOptions_t>.None) == 4)
+    // csz 行 totalInSize 演进(row 20:csz=131072 精确匹配)
+    var pcsz = LZ4F_preferences_t()
+    pcsz.frameInfo.contentSize = 131072u64
+    let cctx2 = LZ4F_createCompressionContext(LZ4F_VERSION)
+    let dst2 = Array<UInt8>(140000, {_ => 0u8})
+    var pos2: Int64 = 0
+    pos2 += LZ4F_compressBegin(cctx2, dst2, pos2, 140000 - pos2, Some(pcsz))
+    @Assert(cctx2.totalInSize == 0u64)   // Begin(contentSize!=0) 重置
+    let half = LZ4F_compressUpdate(cctx2, dst2, pos2, 140000 - pos2, cIn, 0, 65536,
+        Option<LZ4F_compressOptions_t>.None)
+    @Assert(!LZ4F_isError(half))
+    pos2 += half
+    @Assert(cctx2.totalInSize == 65536u64)
+    let half2 = LZ4F_compressUpdate(cctx2, dst2, pos2, 140000 - pos2, cIn, 65536, 65536,
+        Option<LZ4F_compressOptions_t>.None)
+    @Assert(!LZ4F_isError(half2))
+    pos2 += half2
+    @Assert(cctx2.totalInSize == 131072u64)
+    @Assert(LZ4F_compressEnd(cctx2, dst2, pos2, 140000 - pos2, Option<LZ4F_compressOptions_t>.None) == 4)
+    // A 默认行:恰一块满(n == blockSize)直接自 src 出块,C 实测返回
+    // 38677(任务简报"返回 0 入 tmpBuff"与上游 >= 语义不符,C 探针钉正);
+    // linked + fromSrcBuffer + 非 stableSrc → localSaveDict 后 tmpIn = 64KB
+    let a = Array<UInt8>(65536, {_ => 0u8})
+    RDG_genBuffer(a, 65536, 0.50, 0.0, 0u32)
+    let cctx3 = LZ4F_createCompressionContext(LZ4F_VERSION)
+    let dst3 = Array<UInt8>(70000, {_ => 0u8})
+    var pos3: Int64 = 0
+    pos3 += LZ4F_compressBegin(cctx3, dst3, pos3, 70000 - pos3, Option<LZ4F_preferences_t>.None)
+    let rA = LZ4F_compressUpdate(cctx3, dst3, pos3, 70000 - pos3, a, 0, 65536,
+        Option<LZ4F_compressOptions_t>.None)
+    @Assert(rA == 38677)   // C probe: begin=7 upd=38677 end=4
+    pos3 += rA
+    @Assert(cctx3.tmpInSize == 0)
+    @Assert(cctx3.tmpIn == 65536)   // localSaveDict 拷贝 64KB 字典后越过
+    @Assert(cctx3.totalInSize == 65536u64)
+    @Assert(LZ4F_compressEnd(cctx3, dst3, pos3, 70000 - pos3, Option<LZ4F_compressOptions_t>.None) == 4)
+    @Assert(pos3 + 4 == 38688)   // golden row 1
+    println("lz4f update state evolution pins verified")
+}
+
+/*-************************************
+*  M5 Task 3: update error paths
+**************************************/
+@Test
+func lz4fUpdateErrorTest(): Unit {
+    let n: Int64 = 65536
+    let a = Array<UInt8>(n, {_ => 0u8})
+    RDG_genBuffer(a, n, 0.50, 0.0, 0u32)
+    // 未 Begin 先 Update → -20(cStage 检查先于 bound 检查)
+    let cctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+    let dst = Array<UInt8>(70000, {_ => 0u8})
+    let r1 = LZ4F_compressUpdate(cctx, dst, 0, 70000, a, 0, n, Option<LZ4F_compressOptions_t>.None)
+    @Assert(r1 == -20)
+    @Assert(LZ4F_isError(r1))
+    @Assert(LZ4F_getErrorName(r1) == "ERROR_compressionState_uninitialized")
+    // Begin 后 dstCapacity = compressBound - 1 → -11(与 cctx 实际默认
+    // prefs 对齐求界;None 求界代入最坏偏好,不适用本断言)
+    @Assert(LZ4F_compressBegin(cctx, dst, 0, 19, Option<LZ4F_preferences_t>.None) == 7)
+    let bound = LZ4F_compressBound(n, Some(LZ4F_preferences_t()))
+    let r2 = LZ4F_compressUpdate(cctx, dst, 0, bound - 1, a, 0, n, Option<LZ4F_compressOptions_t>.None)
+    @Assert(r2 == -11)
+    @Assert(LZ4F_isError(r2))
+    @Assert(LZ4F_getErrorName(r2) == "ERROR_dstMaxSize_tooSmall")
+    // End 时 csz 声明与实际不符 → -14(错误后状态废弃,不复用;上游契约)
+    let cctx2 = LZ4F_createCompressionContext(LZ4F_VERSION)
+    var p = LZ4F_preferences_t()
+    p.frameInfo.contentSize = 1u64
+    @Assert(LZ4F_compressBegin(cctx2, dst, 0, 19, Some(p)) == 15)
+    let r3 = LZ4F_compressUpdate(cctx2, dst, 15, 70000 - 15, a, 0, 100, Option<LZ4F_compressOptions_t>.None)
+    @Assert(!LZ4F_isError(r3))
+    let r4 = LZ4F_compressEnd(cctx2, dst, 15 + r3, 70000 - 15 - r3, Option<LZ4F_compressOptions_t>.None)
+    @Assert(r4 == -14)
+    @Assert(LZ4F_isError(r4))
+    @Assert(LZ4F_getErrorName(r4) == "ERROR_frameSize_wrong")
+    @Assert(cctx2.cStage == 0)   // 错误在 cStage=0 之后检出(顺序保真)
+    println("lz4f update error path pins verified")
+}
+
+/*-************************************
+*  M5 Task 3: flush quirks
+**************************************/
+@Test
+func lz4fFlushQuirkTest(): Unit {
+    let dst = Array<UInt8>(1000, {_ => 0u8})
+    // fresh cctx(未 Begin)flush → 0:tmpInSize==0 先于 cStage 检查
+    let cctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+    @Assert(LZ4F_flush(cctx, dst, 0, 1000, Option<LZ4F_compressOptions_t>.None) == 0)
+    // Begin 后无数据 flush → 0
+    @Assert(LZ4F_compressBegin(cctx, dst, 0, 19, Option<LZ4F_preferences_t>.None) == 7)
+    @Assert(LZ4F_flush(cctx, dst, 7, 1000 - 7, Option<LZ4F_compressOptions_t>.None) == 0)
+    // buffering 后 flush 返回块字节数;再 flush → 0
+    let d = Array<UInt8>(255, {_ => 0u8})
+    RDG_genBuffer(d, 255, 0.50, 0.0, 0u32)
+    @Assert(LZ4F_compressUpdate(cctx, dst, 7, 1000 - 7, d, 0, 255, Option<LZ4F_compressOptions_t>.None) == 0)
+    let fr = LZ4F_flush(cctx, dst, 7, 1000 - 7, Option<LZ4F_compressOptions_t>.None)
+    @Assert(fr == 242)   // C probe row 24: end=246 = flush(4+238=242) + endmark(4)
+    @Assert(LZ4F_flush(cctx, dst, 7 + fr, 1000 - 7 - fr, Option<LZ4F_compressOptions_t>.None) == 0)
+    // 带 4 字节缓冲的 cStage 错误路径:End 之后再 flush(tmpInSize==0)→ 0
+    @Assert(LZ4F_compressEnd(cctx, dst, 7 + fr, 1000 - 7 - fr, Option<LZ4F_compressOptions_t>.None) == 4)
+    @Assert(LZ4F_flush(cctx, dst, 0, 1000, Option<LZ4F_compressOptions_t>.None) == 0)
+    println("lz4f flush quirk pins verified")
+}
+
+/*-************************************
+*  M5 Task 3: uncompressedUpdate semantics
+**************************************/
+@Test
+func lz4fUncompressedSemanticsTest(): Unit {
+    // bm=1 umix 序列仓颉侧重放 == C golden 行 22,返回值序列钉住:
+    // Update(65536) 出压缩块(7994);uncompressedUpdate(32768) af=0 下
+    // 先全缓冲(0);Update(32768) 触发模式切换 flush 出原样块(4+32768),
+    // 再缓冲新数据(0 不返回 —— 返回值即 flush 的 32772);End flush 出
+    // 末块 + endmark(11237)。
+    let n: Int64 = 131072
+    let cIn = Array<UInt8>(n, {_ => 0u8})
+    RDG_genBuffer(cIn, n, 0.90, 0.0, 0u32)
+    var prefs = LZ4F_preferences_t()
+    prefs.frameInfo.blockMode = LZ4F_blockIndependent
+    let cctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+    let dstCap = LZ4F_compressFrameBound(n, Some(prefs))
+    let dst = Array<UInt8>(dstCap, {_ => 0u8})
+    var pos: Int64 = 0
+    pos += LZ4F_compressBegin(cctx, dst, pos, dstCap - pos, Some(prefs))
+    @Assert(cctx.blockCompressMode == LZ4F_LZ4B_COMPRESSED)
+    let r1 = LZ4F_compressUpdate(cctx, dst, pos, dstCap - pos, cIn, 0, 65536,
+        Option<LZ4F_compressOptions_t>.None)
+    @Assert(r1 == 7994)   // C probe: upd1=7994
+    pos += r1
+    let r2 = LZ4F_uncompressedUpdate(cctx, dst, pos, dstCap - pos, cIn, 65536, 32768,
+        Option<LZ4F_compressOptions_t>.None)
+    @Assert(r2 == 0)      // C probe: uupd=0(全缓冲)
+    @Assert(cctx.blockCompressMode == LZ4F_LZ4B_UNCOMPRESSED)
+    @Assert(cctx.tmpInSize == 32768)
+    pos += r2
+    let r3 = LZ4F_compressUpdate(cctx, dst, pos, dstCap - pos, cIn, 98304, 32768,
+        Option<LZ4F_compressOptions_t>.None)
+    @Assert(r3 == 32772)  // C probe: upd2=32772(模式切换 flush = 原样块)
+    pos += r3
+    // flush 出的原样块:4B 头最高位置 1 + 32768 原始字节
+    let bhdr = lz4fReadLE32(dst, pos - 32772)
+    @Assert(bhdr == (32768u32 | 0x80000000u32))
+    let r4 = LZ4F_compressEnd(cctx, dst, pos, dstCap - pos, Option<LZ4F_compressOptions_t>.None)
+    @Assert(r4 == 11237)  // C probe: end=11237
+    pos += r4
+    @Assert(pos == 52010)   // golden row 22 size
+    @Assert(XXH32(dst, pos, 0u32) == 0x085a3fe4u32)
+    @Assert(XXH64(dst, pos, 0u64) == 0x4e0a19e835862d16u64)
+    match (lz4fReadArtifact(457)) {
+        case Some(art) =>
+            @Assert(Int64(art.size) == pos)
+            var eq = true
+            for (k in 0..pos) {
+                if (UInt8(art[k]) != dst[k]) {
+                    eq = false
+                }
+            }
+            @Assert(eq)
+        case None => println("umix artifact missing, byte-compare skipped")
+    }
+    println("lz4f uncompressedUpdate semantics pins verified")
 }

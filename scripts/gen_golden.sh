@@ -41,14 +41,21 @@ scripts/gen_golden | tee corpus/block_golden_ref.txt
 #           LZ4_compress_HC_continue_destSize tg=12288)
 #         + 10 frhdr rows (M5 Task 2: LZ4F_compressBegin header encoding,
 #           fresh cctx per row, header bytes = artifact)
-# = 436 data rows, plus 18 '#' provenance comments
+#         + 27 frame rows (M5 Task 3: full streaming frames via Begin +
+#           Update[/uncompressedUpdate/flush]* + End; A variants rows 1-7 +
+#           27 did=42, C variants 8-20 + flushmid/umix/chunks5 scenarios
+#           21-23, D/G/F edge inputs 24-26, F with ccs=1)
+# = 463 data rows, plus 19 '#' provenance comments
 #   (dict / stream / ring / setdict + cont / savedict / dictfast /
 #    dictslow / attach / extdict / destext + hc / hcdest +
-#    hccont / hcsavedict / hcdict / hcattach / hcdestcont + frhdr sections)
-[ "$(wc -l < corpus/block_golden_ref.txt)" -eq 454 ] \
-    || { echo "ERROR: expected 454 golden lines (436 rows + 18 comments)" >&2; exit 1; }
-[ "$(grep -c '^#' corpus/block_golden_ref.txt)" -eq 18 ] \
-    || { echo "ERROR: expected exactly 18 comment lines" >&2; exit 1; }
+#    hccont / hcsavedict / hcdict / hcattach / hcdestcont + frhdr + frame
+#    sections)
+[ "$(wc -l < corpus/block_golden_ref.txt)" -eq 482 ] \
+    || { echo "ERROR: expected 482 golden lines (463 rows + 19 comments)" >&2; exit 1; }
+[ "$(grep -c '^#' corpus/block_golden_ref.txt)" -eq 19 ] \
+    || { echo "ERROR: expected exactly 19 comment lines" >&2; exit 1; }
+[ "$(grep -c 'mode=frame ' corpus/block_golden_ref.txt)" -eq 27 ] \
+    || { echo "ERROR: expected 27 frame rows" >&2; exit 1; }
 [ "$(grep -c 'mode=frhdr' corpus/block_golden_ref.txt)" -eq 10 ] \
     || { echo "ERROR: expected 10 frhdr rows" >&2; exit 1; }
 [ "$(grep -c 'mode=fastreset' corpus/block_golden_ref.txt)" -eq 10 ] \

@@ -768,12 +768,16 @@ internal func lz4CompressDispatch(state: LZ4_stream_t, srcQ: CPointer<UInt8>, sr
 }
 
 /* extState 公共尾部(上游 L1391-1412 / L1423-1459 共形):加速度钳制 +
-   表型/输出模式选择;fastReset=true 时以 LZ4_prepareTable 替代全量 init
-   (L1433/1441/1447/1455),byU16 且复用后 currentOffset != 0 → dictSmall
-   (L1435-1439/1443-1447;byU32 分支恒 noDictIssue)。
-   指针 acquire→压缩→release(单一 unsafe,无内部分配)。 */
-private func lz4CompressExtStateBody(state: LZ4_stream_t, src: Array<UInt8>, srcSize: Int32,
-        dst: Array<UInt8>, dstCapacity: Int32, acceleration: Int32, fastReset: Bool): Int32 {
+    表型/输出模式选择;fastReset=true 时以 LZ4_prepareTable 替代全量 init
+    (L1433/1441/1447/1455),byU16 且复用后 currentOffset != 0 → dictSmall
+    (L1435-1439/1443-1447;byU32 分支恒 noDictIssue)。
+    指针 acquire→压缩→release(单一 unsafe,无内部分配)。
+    M5 Task 3:srcIdx/dstIdx 块位置形参化(C 的 src/dst 指针本可前移,
+    仓颉数组以 (缓冲, 偏移) 对表达, lz4ContinueRun 同款);noDict 占位
+    指针随 srcQ 平移(核内不解引用)。 */
+private func lz4CompressExtStateBody(state: LZ4_stream_t, src: Array<UInt8>, srcIdx: Int64,
+        srcSize: Int32, dst: Array<UInt8>, dstIdx: Int64,
+        dstCapacity: Int32, acceleration: Int32, fastReset: Bool): Int32 {
     var accel: Int32 = acceleration
     if (accel < 1) {
         accel = LZ4_ACCELERATION_DEFAULT                        /* L1395/L1428 */
@@ -797,10 +801,12 @@ private func lz4CompressExtStateBody(state: LZ4_stream_t, src: Array<UInt8>, src
     unsafe {
         let sh = acquireArrayRawData<UInt8>(src)
         let dh = acquireArrayRawData<UInt8>(dst)
-        let (r, _) = lz4CompressDispatch(state, sh.pointer, Int64(srcSize), dh.pointer,
+        let srcQ = sh.pointer + srcIdx
+        let dstQ = dh.pointer + dstIdx
+        let (r, _) = lz4CompressDispatch(state, srcQ, Int64(srcSize), dstQ,
             Int64(dstCapacity), byU16, outputDirective, Int64(accel), dictSmall,
-            LZ4_DICT_NODICT, sh.pointer, state.dictSize,
-            sh.pointer, 0, state.hashTable, 0u32)
+            LZ4_DICT_NODICT, srcQ, state.dictSize,
+            srcQ, 0, state.hashTable, 0u32)
         releaseArrayRawData<UInt8>(sh)
         releaseArrayRawData<UInt8>(dh)
         return Int32(r)
@@ -813,7 +819,7 @@ private func lz4CompressExtStateBody(state: LZ4_stream_t, src: Array<UInt8>, src
 public func LZ4_compress_fast_extState(state: LZ4_stream_t, src: Array<UInt8>, srcSize: Int32,
         dst: Array<UInt8>, dstCapacity: Int32, acceleration: Int32): Int32 {
     LZ4_initStream(state)                                       /* L1393 */
-    return lz4CompressExtStateBody(state, src, srcSize, dst, dstCapacity, acceleration, false)
+    return lz4CompressExtStateBody(state, src, 0, srcSize, dst, 0, dstCapacity, acceleration, false)
 }
 
 /* 上游 L1423-1459:与 extState 的差异即"快复位"——不做全量 initStream,
@@ -823,10 +829,17 @@ public func LZ4_compress_fast_extState(state: LZ4_stream_t, src: Array<UInt8>, s
    映射回本块为负位置)。输出与全新状态压缩逐字节一致(空槽 0 候选在
    全新模式下同样不可能通过 read32 比较),差异在状态演化:复用累积
    currentOffset、保留脏表(golden fastreset 行的 off=/tt= 所锚定)。
-   M2 时期曾委托全量 init(等价性注释),本函数为该登记义务的履行。 */
+    M2 时期曾委托全量 init(等价性注释),本函数为该登记义务的履行。 */
+internal func lz4CompressExtStateFastResetAt(state: LZ4_stream_t, src: Array<UInt8>, srcIdx: Int64,
+        srcSize: Int32, dst: Array<UInt8>, dstIdx: Int64,
+        dstCapacity: Int32, acceleration: Int32): Int32 {
+    return lz4CompressExtStateBody(state, src, srcIdx, srcSize, dst, dstIdx,
+        dstCapacity, acceleration, true)
+}
+
 public func LZ4_compress_fast_extState_fastReset(state: LZ4_stream_t, src: Array<UInt8>,
         srcSize: Int32, dst: Array<UInt8>, dstCapacity: Int32, acceleration: Int32): Int32 {
-    return lz4CompressExtStateBody(state, src, srcSize, dst, dstCapacity, acceleration, true)
+    return lz4CompressExtStateFastResetAt(state, src, 0, srcSize, dst, 0, dstCapacity, acceleration)
 }
 
 public func LZ4_compress_fast(src: Array<UInt8>, srcSize: Int32, dst: Array<UInt8>,
@@ -850,7 +863,7 @@ private func lz4CompressDestSizeInternal(state: LZ4_stream_t, src: Array<UInt8>,
         dst: Array<UInt8>, targetDstSize: Int32, acceleration: Int32): (Int32, Int32) {
     LZ4_initStream(state)                                       /* L1492 */
     if (targetDstSize >= LZ4_compressBound(srcSize)) {          /* L1495 */
-        let c = lz4CompressExtStateBody(state, src, srcSize, dst, targetDstSize, acceleration, false)
+        let c = lz4CompressExtStateBody(state, src, 0, srcSize, dst, 0, targetDstSize, acceleration, false)
         if (c == 0) {
             return (0, srcSize)                                 /* srcSizePtr 未触碰 */
         }
@@ -1045,10 +1058,12 @@ public func LZ4_attach_dictionary(workingStream: LZ4_stream_t, dictionaryStream:
 /* fast_continue 的单一 unsafe 域(指针三律:acquire → 分派 → release,域内
     不分配):按分支 acquire 源/目的/辅助字典(EXTDICT = 自家字典缓冲,
     DICTCTX = dictCtx 字典缓冲,前缀/无字典 = 无辅助句柄),dictQ/ctxDictQ
-    同传 auxQ(字典尾锚 = 缓冲基 + auxEndIdx),核内按指令取用。 */
+    同传 auxQ(字典尾锚 = 缓冲基 + auxEndIdx),核内按指令取用。
+    M5 Task 3:dstIdx 形参化(makeBlock 的块数据写在块头之后,即 dst
+    内部偏移;公开 continue 以 idx=0 委托,行为不变)。 */
 private func lz4ContinueRun(state: LZ4_stream_t,
         srcBuf: Array<UInt8>, srcIdx: Int64, n: Int64,
-        dst: Array<UInt8>, dstCapacity: Int64, accel: Int64,
+        dst: Array<UInt8>, dstIdx: Int64, dstCapacity: Int64, accel: Int64,
         dictDirective: Int32, dictSmall: Bool,
         auxArr: Option<Array<UInt8>>, auxEndIdx: Int64, dictEntrySize: Int64,
         ctxDictSize: Int64, ctxTable: Array<UInt32>, ctxCurrentOffset: UInt32): Int32 {
@@ -1056,18 +1071,19 @@ private func lz4ContinueRun(state: LZ4_stream_t,
         let sh = acquireArrayRawData<UInt8>(srcBuf)
         let dh = acquireArrayRawData<UInt8>(dst)
         let srcQ = sh.pointer + srcIdx
+        let dstQ = dh.pointer + dstIdx
         var r: Int64 = 0
         match (auxArr) {
             case Some(a) =>
                 let ah = acquireArrayRawData<UInt8>(a)
                 let auxQ = ah.pointer + auxEndIdx
-                let (v, _) = lz4CompressDispatch(state, srcQ, n, dh.pointer, dstCapacity,
+                let (v, _) = lz4CompressDispatch(state, srcQ, n, dstQ, dstCapacity,
                     false, LZ4_OUTPUT_LIMITED, accel, dictSmall, dictDirective,
                     auxQ, dictEntrySize, auxQ, ctxDictSize, ctxTable, ctxCurrentOffset)
                 r = v
                 releaseArrayRawData<UInt8>(ah)
             case None =>
-                let (v, _) = lz4CompressDispatch(state, srcQ, n, dh.pointer, dstCapacity,
+                let (v, _) = lz4CompressDispatch(state, srcQ, n, dstQ, dstCapacity,
                     false, LZ4_OUTPUT_LIMITED, accel, dictSmall, dictDirective,
                     srcQ, dictEntrySize, srcQ, ctxDictSize, ctxTable, ctxCurrentOffset)
                 r = v
@@ -1105,9 +1121,12 @@ private func lz4ContinueRun(state: LZ4_stream_t,
     同一分配前缀连续时,前缀读(本块负位)与 extDict 读(字典尾锚)字节
     相同 → 两种实现的候选/计数/offset 完全一致;本实现按 C 原分支执行
     (prefix 走单段读,不依赖该等价性),等价性仅作为 twin 缓冲等极端
-    场景的失败安全网。 */
-public func LZ4_compress_fast_continue(state: LZ4_stream_t, srcBuf: Array<UInt8>, srcIdx: Int64,
-        srcSize: Int32, dst: Array<UInt8>, dstCapacity: Int32, acceleration: Int32): Int32 {
+    场景的失败安全网。
+    M5 Task 3:内部 At 变体带 dstIdx(makeBlock 块数据写在块头后),公开
+    LZ4_compress_fast_continue 以 dstIdx=0 委托,行为不变。 */
+internal func lz4CompressFastContinueAt(state: LZ4_stream_t, srcBuf: Array<UInt8>, srcIdx: Int64,
+        srcSize: Int32, dst: Array<UInt8>, dstIdx: Int64,
+        dstCapacity: Int32, acceleration: Int32): Int32 {
     /* 校验:C 侧 srcSize 经 generic 的 (U32) 比较(>MAX_INPUT_SIZE → 0);
     srcIdx/缓冲关系为仓颉块位置参数的防御检查(C 为调用方指针契约) */
     if (srcSize < 0 || Int64(srcSize) > Int64(LZ4_MAX_INPUT_SIZE)) {
@@ -1170,7 +1189,7 @@ public func LZ4_compress_fast_continue(state: LZ4_stream_t, srcBuf: Array<UInt8>
     if (prefixCont) {
         /* L1755-1759: prefix 模式 —— source 数据接续字典(同一分配连续) */
         let dSmall: Bool = (state.dictSize < 65536) && (state.dictSize < Int64(state.currentOffset))
-        return lz4ContinueRun(state, srcBuf, srcIdx, n, dst, Int64(dstCapacity), Int64(accel),
+        return lz4ContinueRun(state, srcBuf, srcIdx, n, dst, dstIdx, Int64(dstCapacity), Int64(accel),
             LZ4_DICT_PREFIX64K, dSmall, None<Array<UInt8>>, 0, state.dictSize,
             0, state.hashTable, 0u32)
     }
@@ -1195,7 +1214,7 @@ public func LZ4_compress_fast_continue(state: LZ4_stream_t, srcBuf: Array<UInt8>
                 state.dictSize = dc.dictSize
                 state.dictCtx = dc.dictCtx
                 let endIdx: Int64 = state.dictStartIdx + state.dictSize
-                result = lz4ContinueRun(state, srcBuf, srcIdx, n, dst, Int64(dstCapacity),
+                result = lz4ContinueRun(state, srcBuf, srcIdx, n, dst, dstIdx, Int64(dstCapacity),
                     Int64(accel), LZ4_DICT_EXTDICT, false,
                     state.dictBuf, endIdx, state.dictSize, 0, state.hashTable, 0u32)
             } else {
@@ -1206,7 +1225,7 @@ public func LZ4_compress_fast_continue(state: LZ4_stream_t, srcBuf: Array<UInt8>
                     case Some(cd) => ctxEndIdx = dc.dictStartIdx + dc.dictSize
                     case None => ()
                 }
-                result = lz4ContinueRun(state, srcBuf, srcIdx, n, dst, Int64(dstCapacity),
+                result = lz4ContinueRun(state, srcBuf, srcIdx, n, dst, dstIdx, Int64(dstCapacity),
                     Int64(accel), LZ4_DICT_DICTCTX, false,
                     dc.dictBuf, ctxEndIdx, state.dictSize,
                     dc.dictSize, dc.hashTable, dc.currentOffset)
@@ -1215,7 +1234,7 @@ public func LZ4_compress_fast_continue(state: LZ4_stream_t, srcBuf: Array<UInt8>
             /* L1781-1786: 小数据/无 dictCtx 的外字典 */
             let dSmall: Bool = (state.dictSize < 65536) && (state.dictSize < Int64(state.currentOffset))
             let endIdx: Int64 = state.dictStartIdx + state.dictSize
-            result = lz4ContinueRun(state, srcBuf, srcIdx, n, dst, Int64(dstCapacity),
+            result = lz4ContinueRun(state, srcBuf, srcIdx, n, dst, dstIdx, Int64(dstCapacity),
                 Int64(accel), LZ4_DICT_EXTDICT, dSmall,
                 state.dictBuf, endIdx, state.dictSize, 0, state.hashTable, 0u32)
     }
@@ -1223,6 +1242,11 @@ public func LZ4_compress_fast_continue(state: LZ4_stream_t, srcBuf: Array<UInt8>
     state.dictStartIdx = srcIdx
     state.dictSize = n                                           /* L1789 */
     return result
+}
+
+public func LZ4_compress_fast_continue(state: LZ4_stream_t, srcBuf: Array<UInt8>, srcIdx: Int64,
+        srcSize: Int32, dst: Array<UInt8>, dstCapacity: Int32, acceleration: Int32): Int32 {
+    return lz4CompressFastContinueAt(state, srcBuf, srcIdx, srcSize, dst, 0, dstCapacity, acceleration)
 }
 
 /* LZ4_saveDict(lz4.c L1823-1843):把字典末尾 min(dictSize, 64KB, 可用)

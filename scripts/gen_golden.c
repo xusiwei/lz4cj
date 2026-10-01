@@ -1917,6 +1917,165 @@ int main(void) {
         }
         free(buf);
     }
+    /* frame rows (M5 Task 3): full streaming frame compression via the public
+       LZ4F API (Begin + Update[/uncompressedUpdate/flush]* + End) on a fresh
+       cctx per row. One dst buffer sized LZ4F_compressFrameBound(n,&prefs),
+       pointer advanced per call, capacity = remaining (the compressFrame_
+       usingCDict pattern; NO compressFrame parameter overrides - the raw row
+       prefs drive Begin, so af=0 rows buffer across calls and bm/ccs/bcs/csz/
+       did/lv/fav/bs land in the frame header as configured).
+       Inputs: A=RDG(65536,0.50,0) rows 1-7 + 27, C=RDG(131072,0.90,0) rows
+       8-23, D=RDG(255,0.50,0) / G=RDG(1,0.00,0) / F=RDG(0,0.00,0) rows 24-26.
+       Scenarios (sc=): 1shot = Update(whole); flushmid = Update(50000) +
+       flush + Update(81072); umix (bm=1) = Update(65536) +
+       uncompressedUpdate(32768) + Update(32768) - the mode switch flushes;
+       chunks5 = 3x Update(26214) + 2x Update(26215) (cross-call buffering).
+       ss=1 rows pass {stableSrc=1} to the Updates. Per-call returns are
+       probed on stderr (rets lines) for the Cangjie state tests. */
+    {
+        static const struct {
+            size_t n; double mp; unsigned seed;
+            int bs, bm, ccs, bcs, lv, af, ss, fav, scen;
+            unsigned long long csz;
+            unsigned did;
+        } kFR[27] = {
+            /* 1-7: A=(65536,0.50,0) variants, 1shot */
+            {.n=65536, .mp=0.50, .seed=0, .bs=4},
+            {.n=65536, .mp=0.50, .seed=0, .bs=4, .af=1},
+            {.n=65536, .mp=0.50, .seed=0, .bs=4, .ccs=1},
+            {.n=65536, .mp=0.50, .seed=0, .bs=4, .bcs=1},
+            {.n=65536, .mp=0.50, .seed=0, .bs=4, .ccs=1, .bcs=1},
+            {.n=65536, .mp=0.50, .seed=0, .bs=4, .bm=1},
+            {.n=65536, .mp=0.50, .seed=0, .bs=4, .bm=1, .ccs=1, .bcs=1},
+            /* 8-20: C=(131072,0.90,0) variants, 1shot */
+            {.n=131072, .mp=0.90, .seed=0, .bs=4},
+            {.n=131072, .mp=0.90, .seed=0, .bs=4, .ss=1},
+            {.n=131072, .mp=0.90, .seed=0, .bs=4, .af=1},
+            {.n=131072, .mp=0.90, .seed=0, .bs=4, .bm=1},
+            {.n=131072, .mp=0.90, .seed=0, .bs=4, .lv=3},
+            {.n=131072, .mp=0.90, .seed=0, .bs=4, .lv=9},
+            {.n=131072, .mp=0.90, .seed=0, .bs=4, .lv=12},
+            {.n=131072, .mp=0.90, .seed=0, .bs=4, .lv=12, .fav=1},
+            {.n=131072, .mp=0.90, .seed=0, .bs=4, .lv=-3},
+            {.n=131072, .mp=0.90, .seed=0, .bs=5},
+            {.n=131072, .mp=0.90, .seed=0, .bs=6},
+            {.n=131072, .mp=0.90, .seed=0, .bs=7},
+            {.n=131072, .mp=0.90, .seed=0, .bs=4, .csz=131072ULL},
+            /* 21-23: C scenarios (scen: 1=flushmid 2=umix 3=chunks5) */
+            {.n=131072, .mp=0.90, .seed=0, .bs=4, .scen=1},
+            {.n=131072, .mp=0.90, .seed=0, .bs=4, .bm=1, .scen=2},
+            {.n=131072, .mp=0.90, .seed=0, .bs=4, .scen=3},
+            /* 24-27: edge inputs + dictID */
+            {.n=255, .mp=0.50, .seed=0, .bs=4},
+            {.n=1, .mp=0.00, .seed=0, .bs=4},
+            {.n=0, .mp=0.00, .seed=0, .bs=4, .ccs=1},
+            {.n=65536, .mp=0.50, .seed=0, .bs=4, .did=42U},
+        };
+        static const char* kScen[4] = { "1shot", "flushmid", "umix", "chunks5" };
+        printf("# frame=LZ4F streaming (Begin+Update[/uncompressedUpdate/flush]*+End) fresh cctx/row, "
+               "dst=LZ4F_compressFrameBound(n,&prefs) advanced per call; A=RDG(65536,0.50,0) C=RDG(131072,0.90,0) "
+               "D=RDG(255,0.50,0) G=RDG(1,0.00,0) F=RDG(0,0.00,0); sc= scenarios: 1shot / flushmid "
+               "(50000+flush+81072) / umix (bm=1: 65536+uncompressedUpdate 32768+32768) / chunks5 "
+               "(26214x3+26215x2); ss=1 rows pass stableSrc to Updates; rets probed on stderr\n");
+        for (unsigned ri = 0; ri < sizeof(kFR) / sizeof(kFR[0]); ri++) {
+            size_t n = kFR[ri].n;
+            unsigned char* buf = (unsigned char*)malloc(n ? n : 1);
+            if (!buf) { fprintf(stderr, "oom\n"); return 1; }
+            RDG_genBuffer(buf, n, kFR[ri].mp, 0.0, kFR[ri].seed);
+            LZ4F_preferences_t prefs;
+            memset(&prefs, 0, sizeof(prefs));
+            prefs.frameInfo.blockSizeID = (LZ4F_blockSizeID_t)kFR[ri].bs;
+            prefs.frameInfo.blockMode = (LZ4F_blockMode_t)kFR[ri].bm;
+            prefs.frameInfo.contentChecksumFlag = (LZ4F_contentChecksum_t)kFR[ri].ccs;
+            prefs.frameInfo.blockChecksumFlag = (LZ4F_blockChecksum_t)kFR[ri].bcs;
+            prefs.frameInfo.contentSize = kFR[ri].csz;
+            prefs.frameInfo.dictID = kFR[ri].did;
+            prefs.compressionLevel = kFR[ri].lv;
+            prefs.autoFlush = (unsigned)kFR[ri].af;
+            prefs.favorDecSpeed = (unsigned)kFR[ri].fav;
+            LZ4F_compressOptions_t copt;
+            memset(&copt, 0, sizeof(copt));
+            copt.stableSrc = (unsigned)kFR[ri].ss;
+            const LZ4F_compressOptions_t* cpo = kFR[ri].ss ? &copt : NULL;
+            size_t dstCap = LZ4F_compressFrameBound(n, &prefs);
+            unsigned char* dst = (unsigned char*)malloc(dstCap);
+            if (!dst) { fprintf(stderr, "oom\n"); return 1; }
+            LZ4F_cctx* cctx = NULL;
+            if (LZ4F_isError(LZ4F_createCompressionContext(&cctx, LZ4F_VERSION))) {
+                fprintf(stderr, "frame: createCompressionContext failed\n");
+                return 1;
+            }
+            size_t pos = 0;
+            size_t r = LZ4F_compressBegin(cctx, dst + pos, dstCap - pos, &prefs);
+            if (LZ4F_isError(r)) { fprintf(stderr, "frame: begin failed ri=%u\n", ri); return 1; }
+            fprintf(stderr, "frame rets row=%u: begin=%zu", ri + 1, r);
+            pos += r;
+            /* scenario Updates */
+            if (kFR[ri].scen == 0) {
+                r = LZ4F_compressUpdate(cctx, dst + pos, dstCap - pos, buf, n, cpo);
+                if (LZ4F_isError(r)) { fprintf(stderr, "frame: update failed ri=%u\n", ri); return 1; }
+                fprintf(stderr, " upd=%zu", r);
+                pos += r;
+            } else if (kFR[ri].scen == 1) {
+                r = LZ4F_compressUpdate(cctx, dst + pos, dstCap - pos, buf, 50000, cpo);
+                if (LZ4F_isError(r)) { fprintf(stderr, "frame: upd1 failed ri=%u\n", ri); return 1; }
+                fprintf(stderr, " upd1=%zu", r);
+                pos += r;
+                r = LZ4F_flush(cctx, dst + pos, dstCap - pos, NULL);
+                if (LZ4F_isError(r)) { fprintf(stderr, "frame: flush failed ri=%u\n", ri); return 1; }
+                fprintf(stderr, " flush=%zu", r);
+                pos += r;
+                r = LZ4F_compressUpdate(cctx, dst + pos, dstCap - pos, buf + 50000, n - 50000, cpo);
+                if (LZ4F_isError(r)) { fprintf(stderr, "frame: upd2 failed ri=%u\n", ri); return 1; }
+                fprintf(stderr, " upd2=%zu", r);
+                pos += r;
+            } else if (kFR[ri].scen == 2) {
+                r = LZ4F_compressUpdate(cctx, dst + pos, dstCap - pos, buf, 65536, cpo);
+                if (LZ4F_isError(r)) { fprintf(stderr, "frame: upd1 failed ri=%u\n", ri); return 1; }
+                fprintf(stderr, " upd1=%zu", r);
+                pos += r;
+                r = LZ4F_uncompressedUpdate(cctx, dst + pos, dstCap - pos, buf + 65536, 32768, cpo);
+                if (LZ4F_isError(r)) { fprintf(stderr, "frame: uupd failed ri=%u\n", ri); return 1; }
+                fprintf(stderr, " uupd=%zu", r);
+                pos += r;
+                r = LZ4F_compressUpdate(cctx, dst + pos, dstCap - pos, buf + 98304, 32768, cpo);
+                if (LZ4F_isError(r)) { fprintf(stderr, "frame: upd2 failed ri=%u\n", ri); return 1; }
+                fprintf(stderr, " upd2=%zu", r);
+                pos += r;
+            } else {
+                static const size_t kCh[5] = { 26214, 26214, 26214, 26215, 26215 };
+                size_t off = 0;
+                for (unsigned k = 0; k < 5; k++) {
+                    r = LZ4F_compressUpdate(cctx, dst + pos, dstCap - pos, buf + off, kCh[k], cpo);
+                    if (LZ4F_isError(r)) { fprintf(stderr, "frame: chunk failed ri=%u k=%u\n", ri, k); return 1; }
+                    fprintf(stderr, " upd%d=%zu", k + 1, r);
+                    pos += r;
+                    off += kCh[k];
+                }
+            }
+            r = LZ4F_compressEnd(cctx, dst + pos, dstCap - pos, NULL);
+            if (LZ4F_isError(r)) { fprintf(stderr, "frame: end failed ri=%u\n", ri); return 1; }
+            fprintf(stderr, " end=%zu\n", r);
+            pos += r;
+            if (pos > dstCap) {
+                fprintf(stderr, "frame: overflow ri=%u pos=%zu cap=%zu\n", ri, pos, dstCap);
+                return 1;
+            }
+            printf("n=%zu mp=%.2f seed=%u mode=frame bs=%d bm=%d ccs=%d bcs=%d csz=%llu did=%u lv=%d%s "
+                   "af=%d ss=%d sc=%s size=%zu xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+                   n, kFR[ri].mp, kFR[ri].seed, kFR[ri].bs, kFR[ri].bm, kFR[ri].ccs, kFR[ri].bcs,
+                   kFR[ri].csz, kFR[ri].did, kFR[ri].lv, kFR[ri].fav ? " fav=1" : "",
+                   kFR[ri].af, kFR[ri].ss, kScen[kFR[ri].scen], pos,
+                   XXH32(dst, pos, 0), (unsigned long long)XXH64(dst, pos, 0),
+                   XXH32(buf, n, 0), (unsigned long long)XXH64(buf, n, 0));
+            writeArtifact(dst, (int)pos, idx);
+            printf("\n");
+            idx++;
+            LZ4F_freeCompressionContext(cctx);
+            free(buf);
+            free(dst);
+        }
+    }
     fprintf(stderr, "cases=%d\n", idx);
     return 0;
 }
