@@ -43,15 +43,25 @@ private func XXH32_avalanche(h32: UInt32): UInt32 {
 /*-************************************
 *  XXH32 one-shot
 **************************************/
+/* 3 参版:offset=0 委托 4 参重载(既有调用方行为不变)。 */
 internal func XXH32(input: Array<UInt8>, len: Int64, seed: UInt32): UInt32 {
-    var p: Int64 = 0
+    return XXH32(input, len, seed, offset: 0)
+}
+
+/* 4 参 offset 重载:M6 帧解压块校验和 one-shot 需要"源缓冲 + 位置"对
+   (XXH32(selectedIn, tmpInTarget, 0),selectedIn 可指向 src 中部或 tmpIn),
+   避免切片拷贝;body 与 3 参版逐行同构,起点 p=offset、终点 bEnd=
+   offset+len(上游 bEnd 指针模型;3 参版 offset=0 时 bEnd==len 等价)。 */
+internal func XXH32(input: Array<UInt8>, len: Int64, seed: UInt32, offset!: Int64): UInt32 {
+    var p: Int64 = offset
+    let bEnd: Int64 = offset + len
     var h: UInt32
     if (len >= 16) {
         var v1: UInt32 = seed + PRIME32_1 + PRIME32_2
         var v2: UInt32 = seed + PRIME32_2
         var v3: UInt32 = seed
         var v4: UInt32 = seed - PRIME32_1
-        let limit: Int64 = len - 15
+        let limit: Int64 = bEnd - 15
         do {
             v1 = XXH32_round(v1, XXH_readLE32(input, p)); p += 4
             v2 = XXH32_round(v2, XXH_readLE32(input, p)); p += 4
@@ -63,12 +73,12 @@ internal func XXH32(input: Array<UInt8>, len: Int64, seed: UInt32): UInt32 {
         h = seed + PRIME32_5
     }
     h += UInt32(len)
-    while (p + 4 <= len) {
+    while (p + 4 <= bEnd) {
         h += XXH_readLE32(input, p) * PRIME32_3
         h = XXH_rotl32(h, 17u32) * PRIME32_4
         p += 4
     }
-    while (p < len) {
+    while (p < bEnd) {
         h += UInt32(input[p]) * PRIME32_5
         h = XXH_rotl32(h, 11u32) * PRIME32_1
         p += 1

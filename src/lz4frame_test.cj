@@ -1537,3 +1537,579 @@ func lz4fDecompressOptionsTest(): Unit {
     @Assert(a.skipChecksums == 1u32)
     println("lz4f decompressOptions defaults/copy pins verified")
 }
+
+/*-************************************
+*  M6 Task 2: 解压状态机 + getFrameInfo + decompress 公开族 (L2/L3)
+**************************************/
+// 对应上游 lz4frame.c L1373-1464(decodeHeader)、L1512-1551(getFrameInfo)、
+// L1558-1623(updateDict)、L1644-2147(decompress 状态机 + 尾部历史保存)、
+// L2154-2167(decompress_usingDict)。期望值钉 C 语义常量(错误契约三元组、
+// hint 序列、fdt/frhdr/frame golden 行)。
+
+// 小工具:按 prefs 一次性成帧(compressFrame 变换按上游,单块强制
+// independent/af=1 与本测试无关紧要,解压侧只读帧字节)
+private func lz4fMkFrame(prefs: LZ4F_preferences_t, input: Array<UInt8>, n: Int64): (Array<UInt8>, Int64) {
+    let dstCap = LZ4F_compressFrameBound(n, Some(prefs))
+    let dst = Array<UInt8>(dstCap, {_ => 0u8})
+    let r = LZ4F_compressFrame(dst, 0, dstCap, input, n, Some(prefs))
+    return (dst, r)
+}
+
+@Test
+func lz4fRoundTripMatrixTest(): Unit {
+    // L2:A 输入 × {bs 4/5/6/7 × bm 0/1 × ccs 0/1 × bcs 0/1 × csz{0,n} × af 0/1}
+    // = 128 组;单次 LZ4F_decompress(dst 容量 n)→ (0, size, n) + 输出==输入
+    // (compressFrame 的 prefs 变换会折叠 bs/bm/af,矩阵维度按 brief 保留迭代)
+    let n: Int64 = 65536
+    let input = Array<UInt8>(n, {_ => 0u8})
+    RDG_genBuffer(input, n, 0.50, 0.0, 0u32)
+    @Assert(XXH32(input, n, 0u32) == 0xc20f7bccu32)      // A=RDG(65536,0.50,0) C manifest 钉值
+    // XXH32 offset 重载等价性:offset=1 的 n-1 字节 == 尾 n-1 字节切片
+    let shifted = Array<UInt8>(n - 1, {i => input[i + 1]})
+    @Assert(XXH32(input, n - 1, 0u32, offset: 1) == XXH32(shifted, n - 1, 0u32))
+    var combos = 0
+    let bsIDs: Array<Int32> = [4, 5, 6, 7]
+    let bmodes: Array<Int32> = [0, 1]
+    let ccss: Array<Int32> = [0, 1]
+    let bcss: Array<Int32> = [0, 1]
+    let cszs: Array<Int64> = [0, 65536]
+    let afs: Array<Int32> = [0, 1]
+    for (bs in bsIDs) {
+        for (bm in bmodes) {
+            for (ccs in ccss) {
+                for (bcs in bcss) {
+                    for (csz in cszs) {
+                        for (af in afs) {
+                            var prefs = LZ4F_preferences_t()
+                            prefs.frameInfo.blockSizeID = bs
+                            prefs.frameInfo.blockMode = bm
+                            prefs.frameInfo.contentChecksumFlag = ccs
+                            prefs.frameInfo.blockChecksumFlag = bcs
+                            prefs.frameInfo.contentSize = UInt64(csz)
+                            prefs.autoFlush = UInt32(af)
+                            let (frame, size) = lz4fMkFrame(prefs, input, n)
+                            @Assert(!LZ4F_isError(size))
+                            let dctx = LZ4F_createDecompressionContext(LZ4F_VERSION)
+                            let out = Array<UInt8>(n, {_ => 0u8})
+                            let (ret, consumed, written) = LZ4F_decompress(dctx, out, 0, n,
+                                frame, 0, size, Option<LZ4F_decompressOptions_t>.None)
+                            if (ret != 0 || consumed != size || written != n) {
+                                println("RT bs=${bs} bm=${bm} ccs=${ccs} bcs=${bcs} csz=${csz} af=${af}: (${ret},${consumed},${written}) size=${size}")
+                            }
+                            @Assert(ret == 0)
+                            @Assert(consumed == size)
+                            @Assert(written == n)
+                            var eq = true
+                            for (k in 0..n) {
+                                if (out[k] != input[k]) {
+                                    eq = false
+                                }
+                            }
+                            if (!eq) {
+                                println("RT bs=${bs} bm=${bm} ccs=${ccs} bcs=${bcs} csz=${csz} af=${af}: output mismatch")
+                            }
+                            @Assert(eq)
+                            @Assert(XXH32(out, n, 0u32) == 0xc20f7bccu32)
+                            if (csz == n) {
+                                // csz 组:解码侧 frameInfo.contentSize == n(getFrameInfo 三岔之 header 解码岔)
+                                let dctx2 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+                                let (code, fi, used) = LZ4F_getFrameInfo(dctx2, frame, 0, size)
+                                @Assert(code == 4)      // BHSize hint
+                                @Assert(used == 15)     // 7 + 8(csz 头)
+                                @Assert(fi.contentSize == UInt64(n))
+                            }
+                            combos += 1
+                        }
+                    }
+                }
+            }
+        }
+    }
+    @Assert(combos == 128)
+    println("lz4f roundtrip matrix: ${combos}/128 combos decoded byte-exact")
+}
+
+@Test
+func lz4fDecodeGoldenTest(): Unit {
+    // L3 双向:27 行 golden 帧仓颉重建 → 整段解压 → 输出 XXH32 == 行内钉值
+    // inxxh;artifact 存在时解 C 产物字节 == 仓颉输入(双向闭合)。
+    var checked = 0
+    var fileDecoded = 0
+    for (row in FRAME_GOLD_REF) {
+        let (n, mp, seed, bs, bm, ccs, bcs, csz, did, lv, fav, af, ss, scen, wantSize, want32, want64, fileRow) = row
+        let input = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(input, n, mp, 0.0, seed)
+        var prefs = LZ4F_preferences_t()
+        prefs.frameInfo.blockSizeID = bs
+        prefs.frameInfo.blockMode = bm
+        prefs.frameInfo.contentChecksumFlag = ccs
+        prefs.frameInfo.blockChecksumFlag = bcs
+        prefs.frameInfo.contentSize = csz
+        prefs.frameInfo.dictID = did
+        prefs.compressionLevel = lv
+        prefs.favorDecSpeed = UInt32(fav)
+        prefs.autoFlush = UInt32(af)
+        let cctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+        let dstCap = LZ4F_compressFrameBound(n, Some(prefs))
+        let frame = Array<UInt8>(dstCap, {_ => 0u8})
+        var pos: Int64 = 0
+        var r = LZ4F_compressBegin(cctx, frame, pos, dstCap - pos, Some(prefs))
+        @Assert(!LZ4F_isError(r))
+        pos += r
+        var cOpt = Option<LZ4F_compressOptions_t>.None
+        if (ss != 0) {
+            var o = LZ4F_compressOptions_t()
+            o.stableSrc = 1u32
+            cOpt = Some(o)
+        }
+        if (scen == 0) {
+            r = LZ4F_compressUpdate(cctx, frame, pos, dstCap - pos, input, 0, n, cOpt)
+            @Assert(!LZ4F_isError(r))
+            pos += r
+        } else if (scen == 1) {
+            r = LZ4F_compressUpdate(cctx, frame, pos, dstCap - pos, input, 0, 50000, cOpt)
+            @Assert(!LZ4F_isError(r))
+            pos += r
+            r = LZ4F_flush(cctx, frame, pos, dstCap - pos, Option<LZ4F_compressOptions_t>.None)
+            @Assert(!LZ4F_isError(r))
+            pos += r
+            r = LZ4F_compressUpdate(cctx, frame, pos, dstCap - pos, input, 50000, n - 50000, cOpt)
+            @Assert(!LZ4F_isError(r))
+            pos += r
+        } else if (scen == 2) {
+            r = LZ4F_compressUpdate(cctx, frame, pos, dstCap - pos, input, 0, 65536, cOpt)
+            @Assert(!LZ4F_isError(r))
+            pos += r
+            r = LZ4F_uncompressedUpdate(cctx, frame, pos, dstCap - pos, input, 65536, 32768, cOpt)
+            @Assert(!LZ4F_isError(r))
+            pos += r
+            r = LZ4F_compressUpdate(cctx, frame, pos, dstCap - pos, input, 98304, 32768, cOpt)
+            @Assert(!LZ4F_isError(r))
+            pos += r
+        } else {
+            let chunkSizes: Array<Int64> = [26214, 26214, 26214, 26215, 26215]
+            var off: Int64 = 0
+            for (k in 0..5) {
+                r = LZ4F_compressUpdate(cctx, frame, pos, dstCap - pos, input, off, chunkSizes[k], cOpt)
+                @Assert(!LZ4F_isError(r))
+                pos += r
+                off += chunkSizes[k]
+            }
+        }
+        r = LZ4F_compressEnd(cctx, frame, pos, dstCap - pos, Option<LZ4F_compressOptions_t>.None)
+        @Assert(!LZ4F_isError(r))
+        pos += r
+        @Assert(pos == wantSize)
+        // 输入出处钉值(同 lz4fFrameGoldenTest)
+        let wantIn32 = XXH32(input, n, 0u32)
+        if (n == 131072) {
+            @Assert(wantIn32 == 0xbf1377f2u32)      // C=RDG(131072,0.90,0)
+        } else if (n == 65536) {
+            @Assert(wantIn32 == 0xc20f7bccu32)      // A=RDG(65536,0.50,0)
+        } else if (n == 255) {
+            @Assert(wantIn32 == 0xf125f7b1u32)      // D=RDG(255,0.50,0)
+        } else if (n == 1) {
+            @Assert(wantIn32 == 0x9608f5fbu32)      // G=RDG(1,0.00,0)
+        } else {
+            @Assert(wantIn32 == 0x02cc5d05u32)      // F=RDG(0,0.00,0)
+        }
+        // 仓颉重建帧整段解压:末次 ret==0、Σconsumed==size、Σwritten==n
+        let dctx = LZ4F_createDecompressionContext(LZ4F_VERSION)
+        let out = Array<UInt8>(n, {_ => 0u8})
+        let (ret, consumed, written) = LZ4F_decompress(dctx, out, 0, n, frame, 0, pos,
+            Option<LZ4F_decompressOptions_t>.None)
+        if (ret != 0 || consumed != pos || written != n) {
+            println("DECODE row ${fileRow}: (${ret},${consumed},${written}) size=${pos}")
+        }
+        @Assert(ret == 0)
+        @Assert(consumed == pos)
+        @Assert(written == n)
+        if (XXH32(out, n, 0u32) != wantIn32) {
+            println("OUTXXH row ${fileRow}: ${XXH32(out, n, 0u32)} want ${wantIn32}")
+        }
+        @Assert(XXH32(out, n, 0u32) == wantIn32)
+        var eq = true
+        for (k in 0..n) {
+            if (out[k] != input[k]) {
+                eq = false
+            }
+        }
+        if (!eq) {
+            println("BYTES row ${fileRow}: decoded != input")
+        }
+        @Assert(eq)
+        // 双向闭合:解 C 产物 artifact 字节 → 输出 == 仓颉输入
+        match (lz4fReadArtifact(fileRow)) {
+            case Some(art) =>
+                @Assert(Int64(art.size) == pos)
+                let dctx2 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+                let out2 = Array<UInt8>(n, {_ => 0u8})
+                let (ret2, consumed2, written2) = LZ4F_decompress(dctx2, out2, 0, n,
+                    art, 0, Int64(art.size), Option<LZ4F_decompressOptions_t>.None)
+                if (ret2 != 0 || consumed2 != Int64(art.size) || written2 != n) {
+                    println("ART row ${fileRow}: (${ret2},${consumed2},${written2})")
+                }
+                @Assert(ret2 == 0)
+                @Assert(consumed2 == Int64(art.size))
+                @Assert(written2 == n)
+                @Assert(XXH32(out2, n, 0u32) == wantIn32)
+                var eq2 = true
+                for (k in 0..n) {
+                    if (out2[k] != input[k]) {
+                        eq2 = false
+                    }
+                }
+                if (!eq2) {
+                    println("ARTBYTES row ${fileRow}: C-artifact decode != cangjie input")
+                }
+                @Assert(eq2)
+                fileDecoded += 1
+            case None => println("frame row ${fileRow}: artifact missing, C-bytes decode skipped")
+        }
+        checked += 1
+    }
+    @Assert(checked == 27)
+    @Assert(fileDecoded == 27 || fileDecoded == 0)   // corpus policy: all-or-nothing
+    println("frame decode golden: ${checked}/27 rows, ${fileDecoded} C-artifact double-direction decodes")
+}
+
+@Test
+func lz4fGetFrameInfoTest(): Unit {
+    // 岔一:fresh dctx + 完整默认头(7B)→ (4=BHSize, fi 全钉, consumed=7)
+    let cctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+    let hbuf = Array<UInt8>(19, {_ => 0u8})
+    let hb = LZ4F_compressBegin(cctx, hbuf, 0, 19, Option<LZ4F_preferences_t>.None)
+    @Assert(hb == 7)     // frhdr row 426 几何:FLG=0x40 BD=0x40
+    let dctx = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (code, fi, used) = LZ4F_getFrameInfo(dctx, hbuf, 0, hb)
+    @Assert(code == 4)
+    @Assert(used == 7)
+    @Assert(fi.blockSizeID == 4)
+    @Assert(fi.blockMode == 0)
+    @Assert(fi.contentChecksumFlag == 0)
+    @Assert(fi.blockChecksumFlag == 0)
+    @Assert(fi.contentSize == 0u64)
+    @Assert(fi.dictID == 0u32)
+    @Assert(fi.frameType == LZ4F_frame)
+    @Assert(dctx.dStage == dstage_init)   // decodeHeader 副作用
+    // csz+did 头(19B,frhdr row 429 几何)→ (4, …csz/did…, 19)
+    let cctx2 = LZ4F_createCompressionContext(LZ4F_VERSION)
+    var p2 = LZ4F_preferences_t()
+    p2.frameInfo.contentSize = 65536u64
+    p2.frameInfo.dictID = 305419896u32
+    let hbuf2 = Array<UInt8>(19, {_ => 0u8})
+    @Assert(LZ4F_compressBegin(cctx2, hbuf2, 0, 19, Some(p2)) == 19)
+    let dctx2b = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (code2, fi2, used2) = LZ4F_getFrameInfo(dctx2b, hbuf2, 0, 19)
+    @Assert(code2 == 4)
+    @Assert(used2 == 19)
+    @Assert(fi2.contentSize == 65536u64)
+    @Assert(fi2.dictID == 305419896u32)
+    @Assert(fi2.blockSizeID == 4)
+    // 岔二:解压半帧(dStage>storeFrameHeader)后 → consumed=0、fi 相同、hint=4
+    let dctx3 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let dst = Array<UInt8>(256, {_ => 0u8})
+    let (r3, c3, w3) = LZ4F_decompress(dctx3, dst, 0, 256, hbuf, 0, 7,
+        Option<LZ4F_decompressOptions_t>.None)
+    @Assert(r3 == 4 && c3 == 7 && w3 == 0)   // 头吃尽 → storeBlockHeader hint=4
+    @Assert(dctx3.dStage > dstage_storeFrameHeader)
+    let empty = Array<UInt8>(0, {_ => 0u8})
+    let (code3, fi3, used3) = LZ4F_getFrameInfo(dctx3, empty, 0, 0)
+    @Assert(code3 == 4)
+    @Assert(used3 == 0)
+    @Assert(fi3.blockSizeID == fi.blockSizeID)
+    @Assert(fi3.blockMode == fi.blockMode)
+    @Assert(fi3.contentChecksumFlag == fi.contentChecksumFlag)
+    @Assert(fi3.blockChecksumFlag == fi.blockChecksumFlag)
+    @Assert(fi3.contentSize == fi.contentSize)
+    @Assert(fi3.dictID == fi.dictID)
+    @Assert(fi3.frameType == fi.frameType)
+    // 岔三:首调 decompress 仅 6B(storeFrameHeader 中途)→ -19
+    let dctx4 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (r4, _, _) = LZ4F_decompress(dctx4, dst, 0, 256, hbuf, 0, 6,
+        Option<LZ4F_decompressOptions_t>.None)
+    @Assert(r4 == 5)      // (7-6)+4:剩余头 1 + 下一块头 4
+    @Assert(dctx4.dStage == dstage_storeFrameHeader)
+    let (code4, _, used4) = LZ4F_getFrameInfo(dctx4, empty, 0, 0)
+    @Assert(code4 == -LZ4F_ERROR_frameDecoding_alreadyStarted)
+    @Assert(used4 == 0)
+    // srcSize=6 < hSize=7 → -12(headerSize 成功后长度不足岔)
+    let dctx5 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (code5, _, used5) = LZ4F_getFrameInfo(dctx5, hbuf, 0, 6)
+    @Assert(code5 == -LZ4F_ERROR_frameHeader_incomplete)
+    @Assert(used5 == 0)
+    // skippable 头:consumed=4、frameType==skippableFrame
+    let skipHdr = Array<UInt8>(8, {_ => 0u8})
+    skipHdr[0] = 0x50u8
+    skipHdr[1] = 0x2Au8
+    skipHdr[2] = 0x4Du8
+    skipHdr[3] = 0x18u8
+    let dctx6 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (code6, fi6, used6) = LZ4F_getFrameInfo(dctx6, skipHdr, 0, 8)
+    @Assert(code6 == 4)
+    @Assert(used6 == 4)
+    @Assert(fi6.frameType == LZ4F_skippableFrame)
+    @Assert(fi6.contentSize == 0u64 && fi6.blockSizeID == 0 && fi6.dictID == 0u32)
+    @Assert(dctx6.dStage == dstage_getSFrameSize)
+    println("lz4f getFrameInfo three-branch pins verified")
+}
+
+@Test
+func lz4fDecodeErrorContractTest(): Unit {
+    // 错误契约:C 入口即置 *srcSizePtr=0;*dstSizePtr=0,RETURN_ERROR 直返
+    // → 每例断言三元组 (code, 0, 0)(含已部分消费/写出的调用)。
+    // 错误后 dctx 上游不担保复用(C 契约同),不测续用。
+    let n: Int64 = 65536
+    let input = Array<UInt8>(n, {_ => 0u8})
+    RDG_genBuffer(input, n, 0.50, 0.0, 0u32)
+    let dst = Array<UInt8>(n, {_ => 0u8})
+    // 手工 19B 坏头(≥ maxFHSize 走 decodeHeader 捷径路径)
+    let badHdr = Array<UInt8>(19, {_ => 0u8})
+    badHdr[0] = 0x04u8; badHdr[1] = 0x22u8; badHdr[2] = 0x4Du8; badHdr[3] = 0x18u8
+    // 坏魔数 → -13
+    let h1 = Array<UInt8>(19, {i => badHdr[i]})
+    h1[3] = 0x05u8
+    h1[4] = 0x60u8; h1[5] = 0x40u8
+    let d1 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (e1, ec1, ew1) = LZ4F_decompress(d1, dst, 0, n, h1, 0, 19, Option<LZ4F_decompressOptions_t>.None)
+    @Assert(e1 == -LZ4F_ERROR_frameType_unknown)
+    @Assert(ec1 == 0 && ew1 == 0)
+    // FLG version=2(0x80)→ -6
+    let h2 = Array<UInt8>(19, {i => badHdr[i]})
+    h2[4] = 0x80u8; h2[5] = 0x40u8
+    let d2 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (e2, ec2, ew2) = LZ4F_decompress(d2, dst, 0, n, h2, 0, 19, Option<LZ4F_decompressOptions_t>.None)
+    @Assert(e2 == -LZ4F_ERROR_headerVersion_wrong)
+    @Assert(ec2 == 0 && ew2 == 0)
+    // FLG 保留位(0x62 bit1)→ -8
+    let h3 = Array<UInt8>(19, {i => badHdr[i]})
+    h3[4] = 0x62u8; h3[5] = 0x40u8
+    let d3 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (e3, ec3, ew3) = LZ4F_decompress(d3, dst, 0, n, h3, 0, 19, Option<LZ4F_decompressOptions_t>.None)
+    @Assert(e3 == -LZ4F_ERROR_reservedFlag_set)
+    @Assert(ec3 == 0 && ew3 == 0)
+    // BD bsID=3(0x30)→ -2
+    let h4 = Array<UInt8>(19, {i => badHdr[i]})
+    h4[4] = 0x60u8; h4[5] = 0x30u8
+    let d4 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (e4, ec4, ew4) = LZ4F_decompress(d4, dst, 0, n, h4, 0, 19, Option<LZ4F_decompressOptions_t>.None)
+    @Assert(e4 == -LZ4F_ERROR_maxBlockSize_invalid)
+    @Assert(ec4 == 0 && ew4 == 0)
+    // 坏 HC 字节 → -17(合法头翻转 HC)
+    let h5 = Array<UInt8>(19, {i => badHdr[i]})
+    h5[4] = 0x60u8; h5[5] = 0x40u8
+    let flgbd = Array<UInt8>(2, {_ => 0u8})
+    flgbd[0] = 0x60u8
+    flgbd[1] = 0x40u8
+    h5[6] = lz4fHeaderChecksum(flgbd, 2) ^ 0xFFu8
+    let d5 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (e5, ec5, ew5) = LZ4F_decompress(d5, dst, 0, n, h5, 0, 19, Option<LZ4F_decompressOptions_t>.None)
+    @Assert(e5 == -LZ4F_ERROR_headerChecksum_invalid)
+    @Assert(ec5 == 0 && ew5 == 0)
+    // 压缩块内篡改 1 字节(保长度)→ -16。篡改点选块首 token 字节
+    // (探针钉值:该帧中部/尾部字面量字节翻转仍可解析,token 必 -16)
+    var p0 = LZ4F_preferences_t()
+    let (f6, s6) = lz4fMkFrame(p0, input, n)
+    @Assert(!LZ4F_isError(s6))
+    let f6b = Array<UInt8>(s6, {i => f6[i]})
+    f6b[11] = f6b[11] ^ 0xFFu8    // 7 头 + 4 块头 = 压缩块首字节
+    let d6 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (e6, ec6, ew6) = LZ4F_decompress(d6, dst, 0, n, f6b, 0, s6, Option<LZ4F_decompressOptions_t>.None)
+    @Assert(e6 == -LZ4F_ERROR_decompressionFailed)
+    @Assert(ec6 == 0 && ew6 == 0)
+    // 篡改块校验和尾 4B → -7
+    var p7 = LZ4F_preferences_t()
+    p7.frameInfo.blockChecksumFlag = 1
+    let (f7, s7) = lz4fMkFrame(p7, input, n)
+    @Assert(!LZ4F_isError(s7))
+    let csize7 = Int64(lz4fReadLE32(f7, 7) & 0x7FFFFFFFu32)
+    let f7b = Array<UInt8>(s7, {i => f7[i]})
+    f7b[11 + csize7] = f7b[11 + csize7] ^ 0xFFu8    // 块校验和首字节
+    let d7 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (e7, ec7, ew7) = LZ4F_decompress(d7, dst, 0, n, f7b, 0, s7, Option<LZ4F_decompressOptions_t>.None)
+    @Assert(e7 == -LZ4F_ERROR_blockChecksum_invalid)
+    @Assert(ec7 == 0 && ew7 == 0)
+    // 篡改内容校验和尾 4B → -18
+    var p8 = LZ4F_preferences_t()
+    p8.frameInfo.contentChecksumFlag = 1
+    let (f8, s8) = lz4fMkFrame(p8, input, n)
+    @Assert(!LZ4F_isError(s8))
+    let f8b = Array<UInt8>(s8, {i => f8[i]})
+    f8b[s8 - 1] = f8b[s8 - 1] ^ 0xFFu8
+    let d8 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (e8, ec8, ew8) = LZ4F_decompress(d8, dst, 0, n, f8b, 0, s8, Option<LZ4F_decompressOptions_t>.None)
+    @Assert(e8 == -LZ4F_ERROR_contentChecksum_invalid)
+    @Assert(ec8 == 0 && ew8 == 0)
+    // csz 帧实际内容不符 → -14(csz=n+1 头 + 无 csz 帧主体)
+    let cctx9 = LZ4F_createCompressionContext(LZ4F_VERSION)
+    var p9 = LZ4F_preferences_t()
+    p9.frameInfo.contentSize = UInt64(n + 1)
+    let hdr9 = Array<UInt8>(19, {_ => 0u8})
+    @Assert(LZ4F_compressBegin(cctx9, hdr9, 0, 19, Some(p9)) == 15)   // Begin 不校验 csz
+    var p9b = LZ4F_preferences_t()
+    let (f9, s9) = lz4fMkFrame(p9b, input, n)   // csz=0 主体(块结构与 csz 无关)
+    @Assert(!LZ4F_isError(s9))
+    let f9b = Array<UInt8>(15 + s9 - 7, {_ => 0u8})
+    for (i in 0..15) {
+        f9b[i] = hdr9[i]
+    }
+    for (i in 7..s9) {
+        f9b[8 + i] = f9[i]    // 15 - 7 = 8 偏移
+    }
+    let d9 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (e9, ec9, ew9) = LZ4F_decompress(d9, dst, 0, n, f9b, 0, Int64(f9b.size), Option<LZ4F_decompressOptions_t>.None)
+    @Assert(e9 == -LZ4F_ERROR_frameSize_wrong)
+    @Assert(ec9 == 0 && ew9 == 0)
+    println("lz4f decode error contract: 9 triples pinned (code, 0, 0)")
+}
+
+@Test
+func lz4fDecompressStateTest(): Unit {
+    // ① 0 字节首调用 → (7,0,0) 且 dStage 不变(保真点②:L1686-1687 先于 storeFrameHeader)
+    let dctx = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let empty = Array<UInt8>(0, {_ => 0u8})
+    let dst = Array<UInt8>(256, {_ => 0u8})
+    let (r0, c0, w0) = LZ4F_decompress(dctx, dst, 0, 256, empty, 0, 0,
+        Option<LZ4F_decompressOptions_t>.None)
+    @Assert(r0 == 7)
+    @Assert(c0 == 0 && w0 == 0)
+    @Assert(dctx.dStage == dstage_getFrameHeader)
+    // ② 7B 头调用 → consumed=7、hint≥4、dStage≥3
+    let cctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+    let hbuf = Array<UInt8>(19, {_ => 0u8})
+    let hb = LZ4F_compressBegin(cctx, hbuf, 0, 19, Option<LZ4F_preferences_t>.None)
+    @Assert(hb == 7)
+    let (r1, c1, w1) = LZ4F_decompress(dctx, dst, 0, 256, hbuf, 0, 7,
+        Option<LZ4F_decompressOptions_t>.None)
+    @Assert(r1 >= 4)
+    @Assert(c1 == 7)
+    @Assert(w1 == 0)
+    @Assert(dctx.dStage >= dstage_getBlockHeader)
+    // ③ ccs 帧解码后 xxh digest 状态 == 输入 XXH32(reset 不清 xxh)
+    let n: Int64 = 65536
+    let input = Array<UInt8>(n, {_ => 0u8})
+    RDG_genBuffer(input, n, 0.50, 0.0, 0u32)
+    var pc = LZ4F_preferences_t()
+    pc.frameInfo.contentChecksumFlag = 1
+    let (fc, sc) = lz4fMkFrame(pc, input, n)
+    @Assert(!LZ4F_isError(sc))
+    let dctx2 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let out = Array<UInt8>(n, {_ => 0u8})
+    let (rc, cc2, wc) = LZ4F_decompress(dctx2, out, 0, n, fc, 0, sc,
+        Option<LZ4F_decompressOptions_t>.None)
+    @Assert(rc == 0 && cc2 == sc && wc == n)
+    @Assert(XXH32_digest(dctx2.xxh) == 0xc20f7bccu32)
+    // ④ 完整帧后 dStage==0(自动 reset)→ 同 dctx 续解第二帧(保真点⑰)
+    let nd: Int64 = 255
+    let dIn = Array<UInt8>(nd, {_ => 0u8})
+    RDG_genBuffer(dIn, nd, 0.50, 0.0, 0u32)
+    var pd = LZ4F_preferences_t()
+    let (fd1, sd1) = lz4fMkFrame(pd, dIn, nd)
+    let (fd2, sd2) = lz4fMkFrame(pd, dIn, nd)
+    @Assert(!LZ4F_isError(sd1) && !LZ4F_isError(sd2))
+    let cat = Array<UInt8>(sd1 + sd2, {_ => 0u8})
+    for (i in 0..sd1) {
+        cat[i] = fd1[i]
+    }
+    for (i in 0..sd2) {
+        cat[sd1 + i] = fd2[i]
+    }
+    let dctx3 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let out3 = Array<UInt8>(nd, {_ => 0u8})
+    let (ra, ca, wa) = LZ4F_decompress(dctx3, out3, 0, nd, cat, 0, sd1,
+        Option<LZ4F_decompressOptions_t>.None)
+    @Assert(ra == 0 && ca == sd1 && wa == nd)
+    @Assert(dctx3.dStage == dstage_getFrameHeader)   // 自动 reset
+    var eqa = true
+    for (k in 0..nd) {
+        if (out3[k] != dIn[k]) {
+            eqa = false
+        }
+    }
+    @Assert(eqa)
+    let (rb2, cb2, wb2) = LZ4F_decompress(dctx3, out3, 0, nd, cat, sd1, sd2,
+        Option<LZ4F_decompressOptions_t>.None)
+    @Assert(rb2 == 0 && cb2 == sd2 && wb2 == nd)
+    var eqb = true
+    for (k in 0..nd) {
+        if (out3[k] != dIn[k]) {
+            eqb = false
+        }
+    }
+    @Assert(eqb)
+    // ⑤ 空输入帧(F)解压 → (0, 11, 0)(7 头 + 4 endmark)
+    let emptyIn = Array<UInt8>(0, {_ => 0u8})
+    let (fe, se) = lz4fMkFrame(LZ4F_preferences_t(), emptyIn, 0)
+    @Assert(!LZ4F_isError(se))
+    @Assert(se == 11)
+    let dctx4 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let out4 = Array<UInt8>(16, {_ => 0u8})
+    let (re4, ce4, we4) = LZ4F_decompress(dctx4, out4, 0, 16, fe, 0, se,
+        Option<LZ4F_decompressOptions_t>.None)
+    @Assert(re4 == 0 && ce4 == 11 && we4 == 0)
+    println("lz4f decompress state machine pins verified")
+}
+
+@Test
+func lz4fUsingDictDecodeTest(): Unit {
+    // fdt 行 1 几何:A dd=65536 dseed=99 lv=0 bm=0(linked)——仓颉
+    // compressBegin_usingDict 成帧(38651 golden 已钉)→ usingDict 解压
+    let n: Int64 = 65536
+    let input = Array<UInt8>(n, {_ => 0u8})
+    RDG_genBuffer(input, n, 0.50, 0.0, 0u32)
+    @Assert(XXH32(input, n, 0u32) == 0xc20f7bccu32)
+    let dict = Array<UInt8>(n, {_ => 0u8})
+    RDG_genBuffer(dict, n, 0.50, 0.0, 99u32)
+    @Assert(XXH32(dict, n, 0u32) == 0x059edec2u32)      // fdt golden 字典钉值
+    var prefs = LZ4F_preferences_t()
+    prefs.compressionLevel = 0
+    prefs.frameInfo.blockMode = LZ4F_blockLinked
+    let dstCap = LZ4F_compressFrameBound(n, Some(prefs))
+    let frame = Array<UInt8>(dstCap, {_ => 0u8})
+    let cctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+    var pos: Int64 = 0
+    pos += LZ4F_compressBegin_usingDict(cctx, frame, pos, dstCap - pos, dict, n, Some(prefs))
+    pos += LZ4F_compressUpdate(cctx, frame, pos, dstCap - pos, input, 0, n,
+        Option<LZ4F_compressOptions_t>.None)
+    pos += LZ4F_compressEnd(cctx, frame, pos, dstCap - pos, Option<LZ4F_compressOptions_t>.None)
+    @Assert(pos == 38651)      // fdt row 473 golden
+    // with-dict 解压:输出 == 输入
+    let dctx = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let out = Array<UInt8>(n, {_ => 0u8})
+    let (ret, consumed, written) = LZ4F_decompress_usingDict(dctx, out, 0, n, frame, 0, pos,
+        dict, n, Option<LZ4F_decompressOptions_t>.None)
+    @Assert(ret == 0)
+    @Assert(consumed == pos)
+    @Assert(written == n)
+    var eq = true
+    for (k in 0..n) {
+        if (out[k] != input[k]) {
+            eq = false
+        }
+    }
+    if (!eq) {
+        println("DICT decode: output mismatch")
+    }
+    @Assert(eq)
+    // no-dict 结果由 T3 fdmp 行钉值
+    let dctx2 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let out2 = Array<UInt8>(n, {_ => 0u8})
+    let (ret2, consumed2, written2) = LZ4F_decompress(dctx2, out2, 0, n, frame, 0, pos,
+        Option<LZ4F_decompressOptions_t>.None)
+    println("lz4f usingDict no-dict probe (T3 pins): ret=${ret2} consumed=${consumed2} written=${written2}")
+    // dict 注入仅 dStage<=dstage_init:半帧后 usingDict 不改 dict(状态断言)
+    let dctx3 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let dst3 = Array<UInt8>(256, {_ => 0u8})
+    let (r3, _, _) = LZ4F_decompress(dctx3, dst3, 0, 256, frame, 0, 7,
+        Option<LZ4F_decompressOptions_t>.None)
+    @Assert(r3 >= 4)
+    @Assert(dctx3.dStage > dstage_init)
+    let smallDict = Array<UInt8>(8, {_ => 0x77u8})
+    let (_, _, _) = LZ4F_decompress_usingDict(dctx3, dst3, 0, 256, frame, 7, 0,
+        smallDict, 8, Option<LZ4F_decompressOptions_t>.None)
+    @Assert(dctx3.dictBuf.size == 0)
+    @Assert(dctx3.dictIdx == 0)
+    @Assert(dctx3.dictSize == 0)
+    @Assert(!dctx3.dictInTmp)
+    println("lz4f usingDict decode pins verified")
+}

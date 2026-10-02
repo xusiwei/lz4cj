@@ -112,15 +112,15 @@ public class LZ4F_dctx {
 - Consumes: T1 全部;`LZ4_decompress_generic`(lz4.cj:1753);`XXH32_reset/update/digest` + 新 offset 重载;`LZ4F_getBlockSize`(lz4frame.cj);`lz4fHeaderChecksum`(lz4frame.cj)
 - 实现注意:状态机翻译保持 `var doAnotherStage = true; var nextSrcSizeHint: Int64 = 1` + `while` 循环 + 按 dStage 的分派结构;每个 stage 块内 `break`(C break switch → 继续 while)/`doAnotherStage=0`/错误直返 `return (code, 0, 0)` 三种出口与 C 逐一对应;fall-through 按约束⑲直译;srcPtr/dstPtr 以 `srcPos/dstPos: Int64` 游标表达
 
-- [ ] **Step 1: 失败测试**(lz4frame_test.cj):
+- [x] **Step 1: 失败测试**(lz4frame_test.cj):
   - `lz4fRoundTripMatrixTest`(L2):A 输入(RDG(65536,0.50,0),inxxh32=0xc20f7bcc 钉值)× {bs 4/5/6/7 × bm 0/1 × ccs 0/1 × bcs 0/1 × csz {0,n} × af 0/1}(128 组):LZ4F_compressFrame 成帧 → 单次 LZ4F_decompress(dst 容量 n)→ (0, size, n) + 输出逐字节 == 输入;csz 组另断 frameInfo 解码侧 contentSize == n
   - `lz4fDecodeGoldenTest`(L3 双向):遍历既有 FRAME_GOLD_REF 27 行(仓颉重建帧,M5 已证逐字节 == C)→ 整段解压 → 输出 XXH32 == 行内钉值 inxxh(0xc20f7bcc/0xbf1377f2/0xf125f7b1/0x9608f5fb/0x02cc5d05 按输入分布);artifact 存在时(lz4fReadArtifact)解 **C 产物字节** == 仓颉输入(双向闭合;缺失优雅降级打印 notice);断言末次 ret==0、Σconsumed==size、Σwritten==n
   - `lz4fGetFrameInfoTest`:fresh dctx + 默认头 7B → (4, fi{bs=4,bm=0,ccs=0,bcs=0,csz=0,did=0,type=0}, 7);csz+did 头(嵌入 M5 frhdr 常量几何自行构造 Begin 产物)→ (4, …csz/did…, 19);解压半帧后(dStage>storeFrameHeader)再调 → consumed=0、frameInfo 相同、hint=4;首调 decompress 仅 6B(storeFrameHeader)再调 getFrameInfo → -19;srcSize=6 → -12;skippable 头 → frameType==LZ4F_skippableFrame、consumed=4
   - `lz4fDecodeErrorContractTest`:坏魔数 → (-13, 0, 0);FLG version=2 → (-6,0,0);FLG 保留位 → (-8,0,0);BD bsID=3 → (-2,0,0);坏 HC 字节 → (-17,0,0);压缩块内篡改 1 字节(保长度)→ -16;篡改块校验和尾 4B → -7;篡改内容校验和尾 4B → -18;csz 帧实际内容不符 → -14;每例断言三元组零消费零写出(错误契约);错误后 dctx 上游不担保复用(不测续用,契约注释)
   - `lz4fDecompressStateTest`:0 字节首调用 → (7, 0, 0) 且 dStage 仍 0;7B 头调用 → consumed=7、hint≥4、dStage ≥ 3;ccs 帧解码后 xxh digest 状态;完整帧后 dStage==0(自动 reset)→ 同 dctx 续解第二帧(拼接最小例);空输入帧(F)解压 → (0, 11, 0)(7 头 + 4 endmark)
   - `lz4fUsingDictDecodeTest`:fdt 行 1 几何(A dd=65536 dseed=99 lv=0 bm=0)——仓颉 compressBegin_usingDict 成帧 → LZ4F_decompress_usingDict(同字典)→ 输出 == 输入;同帧无字典解码 → 结果钉住(成功与否按实测,断言与 C golden T3 fdmp 行一致前先记录);dict 注入仅 dStage≤init:半帧后调 usingDict 不改 dict(状态断言)
-- [ ] **Step 2: RED → 实现**(xxhash.cj 重载先行;对照 L1365-1551、L1558-1623、L1644-2167 逐行;保真点 ①-⑲ 逐条自查后勾)
-- [ ] **Step 3: GREEN(双工具链,既有不回归)+ Commit** `M6: decompression state machine, getFrameInfo and public decompress family`
+- [x] **Step 2: RED → 实现**(xxhash.cj 重载先行;对照 L1365-1551、L1558-1623、L1644-2167 逐行;保真点 ①-⑲ 逐条自查后勾)
+- [x] **Step 3: GREEN(双工具链,既有不回归)+ Commit** `M6: decompression state machine, getFrameInfo and public decompress family`
 
 ---
 
