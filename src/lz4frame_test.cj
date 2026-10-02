@@ -3770,3 +3770,282 @@ func lz4fTightCapacityErrorTest(): Unit {
     @Assert(XXH64(dstD, rd2, 0u64) == 0xe004ae20c13bd03bu64)
     println("lz4f tight-capacity error pins verified (uncompressedUpdate raw guard, compressEnd ccs tail, usingCDict bound)")
 }
+
+/*-************************************
+*  M7 Task 3: 解压侧定向 —— dictInTmp 容量保全 + flushOut copySize 钳制 + join 族子钳制
+**************************************/
+/* af=1 双小块帧(bs=4):Update(10000)+flush+Update(30000)+End。调用 1 容量
+   b1+7:块 1 排空(前缀延展,字典留 out 侧)后块 2 部分冲刷 7 字节,止于
+   flushOut → 尾部历史保存 flushOut 特殊分支:preserveSize = tmpOut = 10000,
+   copySize = 65536-30000 = 35536 > 10000 → 钳制(lz4frame_decode.cj 与
+   C L2125 同构;M6 台账登记可达未测);字典迁入 tmp,dictSize = 10007。 */
+@Test
+func lz4fFlushOutCopyClampTest(): Unit {
+    let noneCOpt = Option<LZ4F_compressOptions_t>.None
+    let noneOpt = Option<LZ4F_decompressOptions_t>.None
+    let b1: Int64 = 10000
+    let b2: Int64 = 30000
+    let n: Int64 = b1 + b2
+    let input = Array<UInt8>(n, {_ => 0u8})
+    RDG_genBuffer(input, n, 0.50, 0.0, 41u32)
+    var prefs = LZ4F_preferences_t()
+    prefs.frameInfo.blockSizeID = 4
+    prefs.autoFlush = 1u32
+    let dstCap = LZ4F_compressFrameBound(n, Some(prefs))
+    let frame = Array<UInt8>(dstCap, {_ => 0u8})
+    let cctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+    var pos: Int64 = 0
+    pos += LZ4F_compressBegin(cctx, frame, pos, dstCap - pos, Some(prefs))
+    pos += LZ4F_compressUpdate(cctx, frame, pos, dstCap - pos, input, 0, b1, noneCOpt)
+    pos += LZ4F_flush(cctx, frame, pos, dstCap - pos, noneCOpt)
+    pos += LZ4F_compressUpdate(cctx, frame, pos, dstCap - pos, input, b1, b2, noneCOpt)
+    pos += LZ4F_compressEnd(cctx, frame, pos, dstCap - pos, noneCOpt)
+    @Assert(pos > 0)
+    let d = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let out = Array<UInt8>(n + 16, {_ => 0u8})
+    /* 调用 1:容量 b1+7 → 排空块 1 后块 2 部分冲刷 7 字节,止于 flushOut */
+    let (r1, c1v, w1) = LZ4F_decompress(d, out, 0, b1 + 7, frame, 0, pos, noneOpt)
+    @Assert(!LZ4F_isError(r1))
+    @Assert(w1 == b1 + 7)
+    @Assert(d.dStage == dstage_flushOut)
+    /* 钳制已执行(尾部保存 flushOut 特殊分支):字典迁入 tmp,
+       dictSize = preserveSize(tmpOut=b1) + tmpOutStart(7) = b1 + 7 */
+    @Assert(d.dictInTmp && d.dictSize == b1 + 7)
+    /* 调用 2+:容量给足完成 */
+    let (r2, c2v, w2) = LZ4F_decompress(d, out, b1 + 7, n + 16 - b1 - 7, frame, c1v, pos - c1v, noneOpt)
+    @Assert(r2 == 0)
+    @Assert(c2v == pos - c1v && w2 == b2 - 7)
+    var eq = true
+    var firstDiff: Int64 = -1
+    for (i in 0..n) {
+        if (out[i] != input[i]) {
+            eq = false
+            if (firstDiff < 0) { firstDiff = i }
+        }
+    }
+    if (!eq) {
+        println("COPYCLAMP MISMATCH at first byte ${firstDiff}")
+    }
+    @Assert(eq)
+    @Assert(d.dStage == dstage_getFrameHeader)
+    println("lz4f flushOut copySize clamp: af-flush frame pinned (dict migrated at ${b1})")
+}
+
+/* dictInTmp 容量保全(updateDict L1598-1608 等价体,C L1601-1604):
+   bs=4 三满块累计 —— 块 1 raw 直解建 out 侧字典(stableDst=1 跳尾部保存);
+   块 2 微容入 tmp(copySize=0 迁入)后排空(withinTmp 延展 → 131072);
+   块 3 微容入 tmp(tmpOut = 131072,块体恰填满 tmpOutBuffer[131072,196608))
+   后排空(延展 → dictSize 196608 = maxBufferSize = maxBlockSize+128KB 恰满);
+   终块 4(30000)换新缓冲直解(直解例外 196608 ≠ 65536 不触发;新缓冲基址
+   使 dst-history 判定 30000 < 65536 通过)→ updateDict 非 withinTmp:
+   196608 + 30000 > 196608 → 保尾 65536-30000 后补 30000,dictSize 归 65536。 */
+@Test
+func lz4fDictInTmpPreserveTest(): Unit {
+    let noneOpt = Option<LZ4F_decompressOptions_t>.None
+    var stable = LZ4F_decompressOptions_t()
+    stable.stableDst = 1u32
+    let m: Int64 = 65536
+    let m4: Int64 = 30000
+    let raw1 = Array<UInt8>(m, {_ => 0u8})
+    RDG_genBuffer(raw1, m, 0.0, 0.0, 5u32)
+    let comp = Array<UInt8>(2 * m + m4, {_ => 0u8})
+    RDG_genBuffer(comp, 2 * m + m4, 0.50, 0.0, 6u32)
+    let input = Array<UInt8>(3 * m + m4, {_ => 0u8})
+    for (k in 0..m) {
+        input[k] = raw1[k]
+    }
+    for (k in 0..(2 * m + m4)) {
+        input[m + k] = comp[k]
+    }
+    var prefs = LZ4F_preferences_t()
+    prefs.frameInfo.blockSizeID = 4
+    let (f, sp) = lz4fFdmpFrame(prefs, input, 3 * m + m4)
+    @Assert((lz4fReadLE32(f, 7) & 0x80000000u32) != 0u32)          /* 块 1 raw */
+    let X = Array<UInt8>(3 * m + 16, {_ => 0u8})
+    let d = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    /* 块 1:raw 直解(stableDst=1 跳过尾部保存,字典留 out 侧) */
+    let p2At: Int64 = 11 + m
+    let (q1, qc1, qw1) = LZ4F_decompress(d, X, 0, m, f, 0, p2At, Some(stable))
+    @Assert(qc1 == p2At && qw1 == m)
+    @Assert(!d.dictInTmp && d.dictSize == m)
+    /* 块 2:微容 2 入 tmp(copySize=0 迁入 dictSize=65538)→ 排空(131072) */
+    let c2 = Int64(lz4fReadLE32(f, p2At) & 0x7FFFFFFFu32)
+    @Assert(c2 < m)
+    let (q2, qc2, qw2) = LZ4F_decompress(d, X, m, 2, f, p2At, 4 + c2, noneOpt)
+    @Assert(!LZ4F_isError(q2) && qc2 == 4 + c2 && qw2 == 2)
+    @Assert(d.dStage == dstage_flushOut)
+    @Assert(d.dictInTmp && d.dictSize == m + 2)
+    var off: Int64 = p2At + 4 + c2
+    var w: Int64 = m + 2
+    let (q3, qc3, qw3) = LZ4F_decompress(d, X, w, m - 2, f, off, 0, noneOpt)
+    @Assert(!LZ4F_isError(q3) && qc3 == 0 && qw3 == m - 2)
+    w += m - 2
+    @Assert(d.dictInTmp && d.dictSize == 2 * m)
+    /* 块 3:微容 2 入 tmp(tmpOut = 131072 恰填)→ 排空(196608 = maxBufferSize) */
+    let p3At: Int64 = off
+    let c3 = Int64(lz4fReadLE32(f, p3At) & 0x7FFFFFFFu32)
+    @Assert(c3 < m)
+    let (q4, qc4, qw4) = LZ4F_decompress(d, X, w, 2, f, p3At, 4 + c3, noneOpt)
+    @Assert(!LZ4F_isError(q4) && qc4 == 4 + c3 && qw4 == 2)
+    @Assert(d.dStage == dstage_flushOut)
+    @Assert(d.dictInTmp && d.dictSize == 2 * m + 2)
+    off = p3At + 4 + c3
+    w += 2
+    let (q5, qc5, qw5) = LZ4F_decompress(d, X, w, m - 2, f, off, 0, noneOpt)
+    @Assert(!LZ4F_isError(q5) && qc5 == 0 && qw5 == m - 2)
+    w += m - 2
+    @Assert(w == 3 * m)
+    @Assert(d.dictInTmp && d.dictSize == 3 * m)                    /* 196608 = maxBufferSize 恰满 */
+    /* 块 4(终块 30000,分步喂):换新缓冲直解 → 容量保全(保尾 35536 + 补
+       30000);断言落在帧自动 reset 之前 */
+    let p4At: Int64 = off
+    let c4 = Int64(lz4fReadLE32(f, p4At) & 0x7FFFFFFFu32)
+    @Assert(c4 < m4)
+    let Y = Array<UInt8>(m + 16, {_ => 0u8})
+    let (q6, qc6, qw6) = LZ4F_decompress(d, Y, 0, m + 16, f, p4At, 4 + c4, noneOpt)
+    @Assert(!LZ4F_isError(q6) && qc6 == 4 + c4 && qw6 == m4)
+    @Assert(d.dictInTmp && d.dictSize == 65536)                    /* 保全:65536-30000 + 30000 */
+    /* 尾:endmark 完成帧(自动 reset) */
+    let (q7, qc7, qw7) = LZ4F_decompress(d, Y, m4, 16, f, p4At + 4 + c4,
+        sp - p4At - 4 - c4, noneOpt)
+    @Assert(q7 == 0 && qc7 == sp - p4At - 4 - c4 && qw7 == 0)
+    /* 输出闭合:X[0..3m) + Y[0..m4) == input */
+    var eq = true
+    var firstDiff: Int64 = -1
+    for (k in 0..(3 * m)) {
+        if (X[k] != input[k]) {
+            eq = false
+            if (firstDiff < 0) { firstDiff = k }
+        }
+    }
+    for (k in 0..m4) {
+        if (Y[k] != input[3 * m + k]) {
+            eq = false
+            if (firstDiff < 0) { firstDiff = 3 * m + k }
+        }
+    }
+    if (!eq) {
+        println("PRESERVE MISMATCH at first byte ${firstDiff}")
+    }
+    @Assert(eq)
+    @Assert(d.dStage == dstage_getFrameHeader)
+    println("lz4f dictInTmp preserve: bs=4 3-block accumulation + fresh-buffer final block pinned")
+}
+
+/* updateDict join 族子钳制(M6 终审谓词重写后的相邻可达行,顺带覆盖):
+   - join 钳制(copySize > preserveSize):字典留 out 侧(块 1 全排空前缀
+     延展,stableDst=1)后,块 2 部分冲刷入异缓冲(非邻接 → join):
+     bs=4,tmpOut=10000,copySize=35536 > 10000;
+   - join copySize=0(tmpOutSize > 65536):同几何换 bs=5 大块(262144);
+   - join 终局 preserveSize 钳到 dictSize:块 2 直解入异缓冲,
+     dictSize(10000)< 65536-30000。 */
+@Test
+func lz4fUpdateDictJoinClampTest(): Unit {
+    let noneCOpt = Option<LZ4F_compressOptions_t>.None
+    let noneOpt = Option<LZ4F_decompressOptions_t>.None
+    var stable1 = LZ4F_decompressOptions_t()
+    stable1.stableDst = 1u32
+    func afFrame(input: Array<UInt8>, n: Int64, bs: Int32, b1: Int64): (Array<UInt8>, Int64) {
+        var prefs = LZ4F_preferences_t()
+        prefs.frameInfo.blockSizeID = bs
+        prefs.autoFlush = 1u32
+        let dstCap = LZ4F_compressFrameBound(n, Some(prefs))
+        let frame = Array<UInt8>(dstCap, {_ => 0u8})
+        let cctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+        var pos: Int64 = 0
+        pos += LZ4F_compressBegin(cctx, frame, pos, dstCap - pos, Some(prefs))
+        pos += LZ4F_compressUpdate(cctx, frame, pos, dstCap - pos, input, 0, b1, noneCOpt)
+        pos += LZ4F_flush(cctx, frame, pos, dstCap - pos, noneCOpt)
+        pos += LZ4F_compressUpdate(cctx, frame, pos, dstCap - pos, input, b1, n - b1, noneCOpt)
+        pos += LZ4F_compressEnd(cctx, frame, pos, dstCap - pos, noneCOpt)
+        return (frame, pos)
+    }
+    let b1: Int64 = 10000
+    let b2: Int64 = 30000
+    let in1 = Array<UInt8>(b1 + b2, {_ => 0u8})
+    RDG_genBuffer(in1, b1 + b2, 0.50, 0.0, 43u32)
+    /* 变体 1(bs=4,块 2 部分冲刷入异缓冲 → join 钳制) */
+    let (f1, s1) = afFrame(in1, b1 + b2, 4, b1)
+    let X1 = Array<UInt8>(b1 + 16, {_ => 0u8})
+    let d1 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (r1a, c1a, w1a) = LZ4F_decompress(d1, X1, 0, b1, f1, 0, s1, Some(stable1))
+    @Assert(!LZ4F_isError(r1a) && w1a == b1)
+    @Assert(!d1.dictInTmp && d1.dictSize == b1)      /* 前缀延展:字典留 out 侧 */
+    let Y1 = Array<UInt8>(b2 + 16, {_ => 0u8})        /* 异缓冲破邻接 → join */
+    let (r1b, c1b, w1b) = LZ4F_decompress(d1, Y1, 0, 7, f1, c1a, s1 - c1a, noneOpt)
+    @Assert(!LZ4F_isError(r1b) && w1b == 7)
+    @Assert(d1.dictInTmp && d1.dictSize == b1 + 7)    /* join:preserveSize+tmpOutStart+dstSize */
+    var fed1 = c1a + c1b
+    var got1 = w1b
+    while (true) {
+        let (r1c, cc1, cw1) = LZ4F_decompress(d1, Y1, got1, b2 + 16 - got1, f1, fed1, s1 - fed1, noneOpt)
+        @Assert(!LZ4F_isError(r1c))
+        fed1 += cc1
+        got1 += cw1
+        if (r1c == 0) { break }
+    }
+    var eq1 = true
+    for (k in 0..b1) {
+        if (X1[k] != in1[k]) { eq1 = false }
+    }
+    for (k in 0..b2) {
+        if (Y1[k] != in1[b1 + k]) { eq1 = false }
+    }
+    @Assert(eq1)
+    /* 变体 2(bs=5,块 2 = 262144 大块 → join copySize=0) */
+    let big: Int64 = 262144
+    let in2 = Array<UInt8>(b1 + big, {_ => 0u8})
+    RDG_genBuffer(in2, b1 + big, 0.50, 0.0, 44u32)
+    let (f2, s2) = afFrame(in2, b1 + big, 5, b1)
+    let X2 = Array<UInt8>(b1 + 16, {_ => 0u8})
+    let d2 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (r2a, c2a, w2a) = LZ4F_decompress(d2, X2, 0, b1, f2, 0, s2, Some(stable1))
+    @Assert(!LZ4F_isError(r2a) && w2a == b1)
+    @Assert(!d2.dictInTmp && d2.dictSize == b1)
+    let Y2 = Array<UInt8>(big + 16, {_ => 0u8})
+    let (r2b, c2b, w2b) = LZ4F_decompress(d2, Y2, 0, 9, f2, c2a, s2 - c2a, noneOpt)
+    @Assert(!LZ4F_isError(r2b) && w2b == 9)
+    @Assert(d2.dictInTmp && d2.dictSize == b1 + 9)    /* tmpOutSize > 65536 → copySize=0 */
+    var fed2 = c2a + c2b
+    var got2 = w2b
+    while (true) {
+        let (r2c, cc2, cw2) = LZ4F_decompress(d2, Y2, got2, big + 16 - got2, f2, fed2, s2 - fed2, noneOpt)
+        @Assert(!LZ4F_isError(r2c))
+        fed2 += cc2
+        got2 += cw2
+        if (r2c == 0) { break }
+    }
+    @Assert(got2 == big)
+    var eq2 = true
+    for (k in 0..b1) {
+        if (X2[k] != in2[k]) { eq2 = false }
+    }
+    for (k in 0..big) {
+        if (Y2[k] != in2[b1 + k]) { eq2 = false }
+    }
+    @Assert(eq2)
+    /* 变体 3(块 2 直解入异缓冲,分步喂 → join 终局 preserveSize 钳到 dictSize) */
+    let (f3, s3) = afFrame(in1, b1 + b2, 4, b1)
+    let X3 = Array<UInt8>(b1 + 16, {_ => 0u8})
+    let d3 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (r3a, c3a, w3a) = LZ4F_decompress(d3, X3, 0, b1, f3, 0, s3, Some(stable1))
+    @Assert(!LZ4F_isError(r3a) && w3a == b1)
+    @Assert(!d3.dictInTmp && d3.dictSize == b1)
+    let Y3 = Array<UInt8>(65536 + 16, {_ => 0u8})     /* 容量 ≥ maxBlockSize → 直解 */
+    /* call1 已消费块 2 头部(dst 满后 getCBlock 早退);喂剩余压缩字节
+       (不含 endmark 4 字节)→ join 终局断言落在帧 reset 前 */
+    let (r3b, c3b, w3b) = LZ4F_decompress(d3, Y3, 0, 65536 + 16, f3, c3a, s3 - 4 - c3a, noneOpt)
+    @Assert(!LZ4F_isError(r3b) && w3b == b2)
+    @Assert(d3.dictInTmp && d3.dictSize == b1 + b2)   /* join 终局:preserveSize 钳 10000 + 30000 */
+    let (r3z, c3z, w3z) = LZ4F_decompress(d3, Y3, b2, 16, f3, c3a + c3b, s3 - c3a - c3b, noneOpt)
+    @Assert(r3z == 0 && w3z == 0)
+    var eq3 = true
+    for (k in 0..b1) {
+        if (X3[k] != in1[k]) { eq3 = false }
+    }
+    for (k in 0..b2) {
+        if (Y3[k] != in1[b1 + k]) { eq3 = false }
+    }
+    @Assert(eq3)
+    println("lz4f updateDict join clamps: multi-buffer variants pinned")
+}
