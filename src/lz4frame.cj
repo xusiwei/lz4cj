@@ -393,7 +393,7 @@ public func LZ4F_freeCompressionContext(cctx: LZ4F_cctx): Int64 {
     准备内部 LZ4(HC) 流:复位上下文并挂接字典(如有)。linked 帧头调用
     一次;blockIndependent 模式逐块调用(M5 后续任务消费)。C 传 void* ctx
     单指针,仓颉侧按 cctx 拆分字段 + cctx.cdict(调用点刚完成赋值,
-    L777 等价)。 */
+    L777 等价)。None 兜底按 design §4.7 防御抛异常(Begin 先于 cStage=1 同置标签与对象,不可达)。 */
 internal func lz4fInitStream(cctx: LZ4F_cctx, level: Int32,
         blockMode: Int32): Unit {
     if (level < LZ4HC_CLEVEL_MIN) {                                  /* L660 */
@@ -406,7 +406,7 @@ internal func lz4fInitStream(cctx: LZ4F_cctx, level: Int32,
                 if (let Some(cd) <- cctx.cdict) {
                     LZ4_attach_dictionary(st, cd.fastCtx)            /* L669 */
                 }
-            }
+            } else { throw IllegalStateException("LZ4F: lz4CtxFast None after Begin (design 4.7)") }
         }
     } else {
         if (let Some(st) <- cctx.lz4CtxHC) {
@@ -414,7 +414,7 @@ internal func lz4fInitStream(cctx: LZ4F_cctx, level: Int32,
             if (let Some(cd) <- cctx.cdict) {
                 LZ4_attach_HC_dictionary(st, cd.HCCtx)               /* L675 */
             }
-        }
+        } else { throw IllegalStateException("LZ4F: lz4CtxHC None after Begin (design 4.7)") }
     }
 }
 
@@ -680,7 +680,7 @@ internal func lz4fSelectCompressionKind(blockMode: Int32, level: Int32,
    块头之后的偏移)。cdict != None 时独立块亦走 continue(挂接预消化
    字典);dst 偏移经内部 At 变体(lz4CompressFastContinueAt /
    lz4hcCompressHCContinueAt / lz4CompressExtStateFastResetAt /
-   lz4hcExtStateHCFastResetAt)穿透到单一 unsafe 域,无临时数组。 */
+   lz4hcExtStateHCFastResetAt)穿透到单一 unsafe 域,无临时数组。None 兜底按 design §4.7 防御抛异常(Begin 于 cStage=1 前同置标签与对象,不可达)。 */
 internal func lz4fCompressBlock(kind: Int32, cctx: LZ4F_cctx,
         srcBuf: Array<UInt8>, srcIdx: Int64, srcSize: Int32,
         dst: Array<UInt8>, dstIdx: Int64, dstCapacity: Int32): Int32 {
@@ -702,7 +702,7 @@ internal func lz4fCompressBlock(kind: Int32, cctx: LZ4F_cctx,
                             srcSize, dst, dstIdx, dstCapacity, acceleration)
                     }                                          /* L939 */
             }
-            return 0
+            throw IllegalStateException("LZ4F: lz4CtxFast None after Begin (design 4.7)")
         case 1 =>
             /* compressBlock_continue(L944-948):帧头一次初始化,逐块续压 */
             let acceleration: Int32 = if (level < 0) { -level + 1 } else { 1 }   /* L945 */
@@ -710,7 +710,7 @@ internal func lz4fCompressBlock(kind: Int32, cctx: LZ4F_cctx,
                 return lz4CompressFastContinueAt(st, srcBuf, srcIdx,
                     srcSize, dst, dstIdx, dstCapacity, acceleration)
             }
-            return 0
+            throw IllegalStateException("LZ4F: lz4CtxFast None after Begin (design 4.7)")
         case 2 =>
             /* compressBlockHC(L950-958):独立 HC,逐块 initStream */
             lz4fInitStream(cctx, level, LZ4F_blockIndependent)   /* L955 */
@@ -726,14 +726,14 @@ internal func lz4fCompressBlock(kind: Int32, cctx: LZ4F_cctx,
                             srcSize, dst, dstIdx, dstCapacity, level)
                     }                                          /* L959 */
             }
-            return 0
+            throw IllegalStateException("LZ4F: lz4CtxHC None after Begin (design 4.7)")
         case 3 =>
             /* compressBlockHC_continue(L960-964):level/cdict 帧级已定 */
             if (let Some(st) <- cctx.lz4CtxHC) {
                 return lz4hcCompressHCContinueAt(st, srcBuf, srcIdx,
                     srcSize, dst, dstIdx, dstCapacity)
             }
-            return 0
+            throw IllegalStateException("LZ4F: lz4CtxHC None after Begin (design 4.7)")
         case _ =>
             /* doNotCompressBlock(L966-968):占位,返回 0 令 makeBlock
                走原样存储分支 */
@@ -781,19 +781,19 @@ internal func lz4fMakeBlock(dst: Array<UInt8>, dstIdx: Int64,
 
 /* lz4fLocalSaveDict —— LZ4F_localSaveDict(L983-989):把至多 64KB 历史
    显式保存进 tmpBuff,并令 tmpIn 越过已存字典(level<2 走 fast 流,
-   否则 HC 流;Begin 后 ctx 必在,lz4Ctx 双 None 防御返 0)。 */
+   否则 HC 流;Begin 后 ctx 必在,lz4Ctx 双 None 按 design §4.7 防御抛异常)。 */
 internal func lz4fLocalSaveDict(cctx: LZ4F_cctx): Unit {
     let dictSize: Int32 = if (cctx.prefs.compressionLevel < LZ4HC_CLEVEL_MIN) {
         if (let Some(st) <- cctx.lz4CtxFast) {
             LZ4_saveDict(st, cctx.tmpBuff, 65536)              /* L986 */
         } else {
-            0
+            throw IllegalStateException("LZ4F: lz4CtxFast None after Begin (design 4.7)")
         }
     } else {
         if (let Some(st) <- cctx.lz4CtxHC) {
             LZ4_saveDictHC(st, cctx.tmpBuff, 65536)            /* L987 */
         } else {
-            0
+            throw IllegalStateException("LZ4F: lz4CtxHC None after Begin (design 4.7)")
         }
     }
     cctx.tmpIn = Int64(dictSize)                               /* L988 */

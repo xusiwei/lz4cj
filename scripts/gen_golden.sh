@@ -104,3 +104,5 @@ scripts/gen_golden | tee corpus/block_golden_ref.txt
     || { echo "ERROR: expected 3 hcattach rows" >&2; exit 1; }
 [ "$(grep -c 'mode=hcdestcont seq=' corpus/block_golden_ref.txt)" -eq 2 ] \
     || { echo "ERROR: expected 2 hcdestcont rows" >&2; exit 1; }
+[ "$(du -sk corpus | cut -f1)" -le 8192 ] \
+    || { echo "ERROR: corpus exceeds 8MB budget" >&2; exit 1; }
