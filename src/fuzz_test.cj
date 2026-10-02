@@ -578,3 +578,366 @@ func fuzzHcTest(): Unit {
     @Assert(failures == 0)
     println("fuzz hc: 300 seeds (mid ${stats[0]} / hashchain ${stats[1]} / optimal ${stats[2]}, favor-on-opt ${stats[3]}), one-shot roundtrip + determinism + insufficient-capacity + streaming(2-4 blocks, savedict variant, rolling decode), 0 exceptions, 0 failures")
 }
+
+/*-************************************
+*  fuzzFrameTest: frame compression fuzz (M5 Task 4)
+**************************************/
+// One case: LCG-derive {n in 0..150000, mp, bs in 4..7, bm, ccs, bcs, af,
+// lv in {-3,0,3,9,12}, ss, chunks in 1..6} (all choices derived BEFORE any
+// API call, so the rerun replays the identical call sequence), then
+//   scenario A: one-shot LZ4F_compressFrame;
+//   scenario B: Begin + random-split Updates (bm=1: random
+//   uncompressedUpdate insertions incl. mode switches) + one random mid
+//   flush + End.
+// Contract: no exception escapes; every call non-error at
+// compressFrameBound capacity; total == sum of returned segments;
+// endmark 4x00 at [total-4-ccs*4, total-4); ccs=1 -> trailing 4B ==
+// XXH32(input) LE; bm=1 (or single-block linked) -> per-block
+// LZ4_decompress_safe closure == input; same-seed rerun byte-deterministic
+// (both scenarios).
+// Capacity soundness: the exact emitted block count of the derived plan is
+// simulated up front (fuzzFramePlanBlocks) and the worst-case frame
+// 7 + (4+4*bcs)*blocks + n + 4 + 4*ccs must fit compressFrameBound; plans
+// that exceed it (mode-switch flushes, af=1 per-chunk partial blocks and
+// mid flushes all add blocks over ceil(n/bs)) degrade stepwise - drop
+// flush, drop mixing, single chunk - so every call is guaranteed non-error
+// at exactly compressFrameBound capacity. Standalone closure is only
+// asserted for bm=1 frames or chains that emit exactly ONE block: af=1
+// emits a partial block per Update call, so a linked multi-chunk chain is
+// multi-block linked and not per-block decodable.
+private let FUZZ_FRAME_LEVELS: Array<Int32> = [-3, 0, 3, 9, 12]
+
+// Frame tail + independent-block closure verification. closureOk covers
+// bm=1 rows and linked frames of at most one block (the first block of a
+// linked frame has no prefix, hence is standalone-decodable).
+private func fuzzFrameVerify(dst: Array<UInt8>, total: Int64, src: Array<UInt8>,
+        n: Int64, ccs: Int32, bcs: Int32, closureOk: Bool): String {
+    let tailStart: Int64 = total - 4 - Int64(ccs) * 4
+    if (tailStart < 0) { return "tail position negative" }
+    for (k in tailStart..(total - 4)) {
+        if (dst[k] != 0u8) { return "endmark byte nonzero at ${k}" }
+    }
+    if (ccs == 1) {
+        var got: UInt32 = 0u32
+        for (k in 0..4) {
+            got += UInt32(dst[total - 4 + k]) << (8 * k)
+        }
+        let want = XXH32(src, n, 0u32)
+        if (got != want) { return "content checksum ${got} want ${want}" }
+    }
+    if (closureOk) {
+        // 7-byte header (fuzz prefs never set csz/did)
+        var p: Int64 = 7
+        var cursor: Int64 = 0
+        let out = Array<UInt8>(n, {_ => 0u8})
+        let scratch = Array<UInt8>(n + 16, {_ => 0u8})
+        while (true) {
+            if (total - p < 4) { return "truncated block header at ${p}" }
+            let sz: UInt32 = UInt32(dst[p]) | (UInt32(dst[p + 1]) << 8) |
+                (UInt32(dst[p + 2]) << 16) | (UInt32(dst[p + 3]) << 24)
+            if (sz == 0u32) {
+                p += 4                           /* consume the endmark */
+                break
+            }
+            p += 4
+            let raw = (sz & 0x80000000u32) != 0u32
+            let dataLen = Int64(sz & 0x7fffffffu32)
+            if (dataLen == 0) { return "empty block at ${p - 4}" }
+            if (raw) {
+                if (cursor + dataLen > n) { return "raw block overruns input" }
+                for (k in 0..dataLen) {
+                    out[cursor + k] = dst[p + k]
+                }
+                cursor += dataLen
+            } else {
+                let pk = p
+                let blk = Array<UInt8>(dataLen, {k => dst[pk + k]})
+                let rd = LZ4_decompress_safe(blk, Int32(dataLen), scratch, Int32(n + 16))
+                if (rd < 0) { return "block decode error ${rd} at ${p}" }
+                if (cursor + Int64(rd) > n) { return "decoded overrun at ${p}" }
+                for (k in 0..Int64(rd)) {
+                    out[cursor + k] = scratch[k]
+                }
+                cursor += Int64(rd)
+            }
+            p += dataLen
+            if (bcs == 1) {
+                p += 4
+            }
+        }
+        if (p != tailStart + 4) { return "block walk ended at ${p} want ${tailStart + 4}" }
+        if (cursor != n) { return "closure size ${cursor} != ${n}" }
+        for (k in 0..n) {
+            if (out[k] != src[k]) { return "closure bytes differ at ${k}" }
+        }
+    }
+    return ""
+}
+
+// Exact emitted-block-count simulation of the scenario-B chain (the count
+// is deterministic given the pre-derived plan; block cost varies with
+// content, worst case = 4 + 4*bcs + data per block). Covers every block
+// source: af=0 buffering with mode-switch internal flushes (a mode change
+// at Update entry flushes buffered data) and the explicit mid flush;
+// af=1 per-chunk partial blocks; the End flush of the remainder.
+private func fuzzFramePlanBlocks(af: Int32, bsz: Int64, sizes: Array<Int64>, nb: Int64,
+        mixOn: Bool, rawCoin: Array<Bool>, flushAt: Int64, bm: Int32): Int64 {
+    var blocks: Int64 = 0
+    var tmp: Int64 = 0
+    var mode: Int32 = 0    // a fresh cctx starts in COMPRESSED mode
+    for (k in 0..nb) {
+        let want: Int32 = if (mixOn && bm == 1 && rawCoin[k]) { 1 } else { 0 }
+        if (af == 0) {
+            if (want != mode && tmp > 0) {
+                blocks += 1                           // mode-switch flush
+                tmp = 0
+            }
+            mode = want
+            let total = tmp + sizes[k]
+            blocks += total / bsz
+            tmp = total % bsz
+            if (k == flushAt && tmp > 0) {
+                blocks += 1                           // explicit mid flush
+                tmp = 0
+            }
+        } else {
+            blocks += sizes[k] / bsz
+            if (sizes[k] % bsz != 0) {
+                blocks += 1                           // autoFlush tail block
+            }
+        }
+    }
+    if (tmp > 0) {
+        blocks += 1                                   // End flush
+    }
+    return blocks
+}
+
+// Executes the scenario-B chain (Begin + per-chunk Update[/uncompressedUpdate]
+// + optional mid flush + End); returns the total (= accumulated segment
+// returns by construction), or -1 when any call errors or the total
+// exceeds cap. Used both as a selection probe and for the verified runs.
+private func fuzzFrameRunChain(dst: Array<UInt8>, cap: Int64, src: Array<UInt8>,
+        prefs: LZ4F_preferences_t, cOpt: LZ4F_compressOptions_t,
+        sizes: Array<Int64>, nb: Int64, mixOn: Bool, rawCoin: Array<Bool>,
+        flushAt: Int64): Int64 {
+    let cctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+    var pos: Int64 = 0
+    let rb = LZ4F_compressBegin(cctx, dst, pos, cap - pos, Some(prefs))
+    if (LZ4F_isError(rb)) { return -1 }
+    pos += rb
+    var off: Int64 = 0
+    for (k in 0..nb) {
+        let sz = sizes[k]
+        let ru = if (mixOn && rawCoin[k]) {
+                LZ4F_uncompressedUpdate(cctx, dst, pos, cap - pos, src, off, sz, Some(cOpt))
+            } else {
+                LZ4F_compressUpdate(cctx, dst, pos, cap - pos, src, off, sz, Some(cOpt))
+            }
+        if (LZ4F_isError(ru)) { return -1 }
+        pos += ru
+        off += sz
+        if (k == flushAt) {
+            let rfl = LZ4F_flush(cctx, dst, pos, cap - pos, Some(cOpt))
+            if (LZ4F_isError(rfl)) { return -1 }
+            pos += rfl
+        }
+    }
+    let re = LZ4F_compressEnd(cctx, dst, pos, cap - pos, Some(cOpt))
+    if (LZ4F_isError(re)) { return -1 }
+    pos += re
+    if (pos > cap) { return -1 }
+    return pos
+}
+
+private func fuzzFrameCase(seed: Int64): String {
+    var r: UInt64 = 0x853C49E6748FEA9Bu64 * (UInt64(seed) + 1u64)
+    r = fuzzLcgNext(r)
+    let n: Int64 = Int64(r % 150001u64)
+    r = fuzzLcgNext(r)
+    let mp = FUZZ_MPS[Int64(r % 5u64)]
+    r = fuzzLcgNext(r)
+    let bs: Int32 = 4 + Int32(r % 4u64)
+    r = fuzzLcgNext(r)
+    let bm: Int32 = Int32(r % 2u64)
+    r = fuzzLcgNext(r)
+    let ccs: Int32 = Int32(r % 2u64)
+    r = fuzzLcgNext(r)
+    let bcs: Int32 = Int32(r % 2u64)
+    r = fuzzLcgNext(r)
+    let af: Int32 = Int32(r % 2u64)
+    r = fuzzLcgNext(r)
+    let lv = FUZZ_FRAME_LEVELS[Int64(r % 5u64)]
+    r = fuzzLcgNext(r)
+    let ss: Int32 = Int32(r % 2u64)
+    r = fuzzLcgNext(r)
+    var chunks: Int64 = 1 + Int64(r % 6u64)
+    r = fuzzLcgNext(r)
+    let dseed: UInt32 = UInt32(r % 4294967291u64)
+
+    let src = Array<UInt8>(n, {_ => 0u8})
+    RDG_genBuffer(src, n, mp, 0.0, dseed)
+
+    var prefs = LZ4F_preferences_t()
+    prefs.frameInfo.blockSizeID = bs
+    prefs.frameInfo.blockMode = bm
+    prefs.frameInfo.contentChecksumFlag = ccs
+    prefs.frameInfo.blockChecksumFlag = bcs
+    prefs.compressionLevel = lv
+    prefs.autoFlush = UInt32(af)
+    var cOpt = LZ4F_compressOptions_t()
+    cOpt.stableSrc = UInt32(ss)
+
+    let cap = LZ4F_compressFrameBound(n, Some(prefs))
+    let bsz = LZ4F_getBlockSize(bs)
+    // single-block linked frames are standalone-decodable (no prefix)
+    let closureOk = (bm == 1) || (n <= bsz)
+
+    // ---- derive the full scenario-B call plan before any API call ----
+    var nb: Int64 = chunks
+    if (nb > n) { nb = n }                    // >= 1 byte per update
+    if (n == 0) { nb = 0 }
+    let sizes = Array<Int64>(nb, {_ => 1})
+    var rem: Int64 = n - nb
+    for (k in 0..(nb - 1)) {
+        if (rem > 0) {
+            r = fuzzLcgNext(r)
+            let add: Int64 = Int64(r % UInt64(rem + 1))
+            sizes[k] += add
+            rem -= add
+        }
+    }
+    if (nb > 0) {
+        sizes[nb - 1] += rem
+    }
+    // per-chunk uncompressed-mode coins (bm=1 only; a mode switch under
+    // af=0 forces an internal flush of buffered data)
+    let rawCoin = Array<Bool>(nb, {_ => false})
+    for (k in 0..nb) {
+        r = fuzzLcgNext(r)
+        rawCoin[k] = (r % 2u64) == 1u64
+    }
+    // one mid flush at a random chunk boundary (50% of seeds)
+    var flushDrawn: Int64 = -1
+    if (nb > 0) {
+        r = fuzzLcgNext(r)
+        if ((r % 2u64) == 1u64) {
+            r = fuzzLcgNext(r)
+            flushDrawn = Int64(r % UInt64(nb))
+        }
+    }
+    // Plan selection: keep the drawn plan (mixing + mid flush + full
+    // chunking) when its worst-case frame 7 + (4+4*bcs)*blocks + n +
+    // 4 + 4*ccs fits compressFrameBound; otherwise probe it once
+    // (compressed blocks cost less than the raw worst case and library
+    // determinism is itself an asserted invariant), and finally degrade
+    // stepwise - drop flush, drop mixing, single chunk - with the same
+    // worst-case/probe acceptance; the last rung provably fits.
+    var mixOn = bm == 1
+    var flushAfter = flushDrawn
+    var useSizes = sizes
+    var useNb = nb
+    var settled = false
+    let drawnBlocks = fuzzFramePlanBlocks(af, bsz, sizes, nb, bm == 1, rawCoin, flushDrawn, bm)
+    if (7 + (4 + 4 * Int64(bcs)) * drawnBlocks + n + 4 + 4 * Int64(ccs) <= cap) {
+        settled = true
+    }
+    if (!settled) {
+        let probe = Array<UInt8>(cap, {_ => 0u8})
+        let pp = fuzzFrameRunChain(probe, cap, src, prefs, cOpt, sizes, nb,
+            bm == 1, rawCoin, flushDrawn)
+        if (pp >= 0) {
+            settled = true
+        }
+    }
+    if (!settled) {
+        let ladder: Array<(Bool, Int64, Bool)> = [
+            (bm == 1, -1, false),
+            (false, flushDrawn, false),
+            (false, -1, false),
+            (false, -1, true),
+        ]
+        for ((m, f, oc) in ladder) {
+            if (settled) {
+                break
+            }
+            let ss = if (oc && nb > 1) { Array<Int64>(1, {_ => n}) } else { sizes }
+            let snb = if (oc && nb > 1) { 1 } else { nb }
+            let blocks = fuzzFramePlanBlocks(af, bsz, ss, snb, m, rawCoin, f, bm)
+            if (7 + (4 + 4 * Int64(bcs)) * blocks + n + 4 + 4 * Int64(ccs) <= cap) {
+                mixOn = m
+                flushAfter = f
+                useSizes = ss
+                useNb = snb
+                settled = true
+            } else {
+                let probe = Array<UInt8>(cap, {_ => 0u8})
+                let pp = fuzzFrameRunChain(probe, cap, src, prefs, cOpt, ss, snb,
+                    m, rawCoin, f)
+                if (pp >= 0) {
+                    mixOn = m
+                    flushAfter = f
+                    useSizes = ss
+                    useNb = snb
+                    settled = true
+                }
+            }
+        }
+    }
+    @Assert(settled)    // single-chunk pure chain always fits the budget
+    // standalone closure precondition: bm=1, or exactly one emitted block
+    // (a lone first linked block has no prefix history)
+    let blocksB = fuzzFramePlanBlocks(af, bsz, useSizes, useNb, mixOn, rawCoin, flushAfter, bm)
+    let closureB = (bm == 1) || (n == 0) || (blocksB == 1)
+
+    // ---- scenario A: one-shot compressFrame (x2 determinism) ----
+    let dstA = Array<UInt8>(cap, {_ => 0u8})
+    let ra = LZ4F_compressFrame(dstA, 0, cap, src, n, Some(prefs))
+    if (LZ4F_isError(ra)) { return "A: compressFrame ${ra}" }
+    if (ra > cap) { return "A: size ${ra} > cap ${cap}" }
+    var va = fuzzFrameVerify(dstA, ra, src, n, ccs, bcs, closureOk)
+    if (va != "") { return "A: ${va}" }
+    let dstA2 = Array<UInt8>(cap, {_ => 0u8})
+    let ra2 = LZ4F_compressFrame(dstA2, 0, cap, src, n, Some(prefs))
+    if (ra2 != ra) { return "A determinism size ${ra2} != ${ra}" }
+    for (k in 0..ra) {
+        if (dstA[k] != dstA2[k]) { return "A determinism bytes differ at ${k}" }
+    }
+
+    // ---- scenario B: streaming chain (x2 determinism) ----
+    // every call is checked non-error inside fuzzFrameRunChain and the
+    // total equals the accumulated segment returns by construction
+    let dstB = Array<UInt8>(cap, {_ => 0u8})
+    let pos1 = fuzzFrameRunChain(dstB, cap, src, prefs, cOpt, useSizes, useNb,
+        mixOn, rawCoin, flushAfter)
+    if (pos1 < 0) { return "B: verified chain run failed" }
+    let vb = fuzzFrameVerify(dstB, pos1, src, n, ccs, bcs, closureB)
+    if (vb != "") { return "B: ${vb}" }
+    let dstB2 = Array<UInt8>(cap, {_ => 0u8})
+    let pos2 = fuzzFrameRunChain(dstB2, cap, src, prefs, cOpt, useSizes, useNb,
+        mixOn, rawCoin, flushAfter)
+    if (pos2 != pos1) { return "B determinism size ${pos2} != ${pos1}" }
+    for (k in 0..pos1) {
+        if (dstB[k] != dstB2[k]) { return "B determinism bytes differ at ${k}" }
+    }
+    return ""
+}
+
+@Test
+func fuzzFrameTest(): Unit {
+    var failures: Int64 = 0
+    for (seed in 0..120) {
+        var problem = ""
+        try {
+            problem = fuzzFrameCase(seed)
+        } catch (e: Exception) {
+            problem = "EXCEPTION ${e}"
+        }
+        if (problem != "") {
+            failures += 1
+            println("FUZZ-FRAME FAIL seed=${seed}: ${problem}")
+        }
+    }
+    @Assert(failures == 0)
+    println("fuzz frame: 120 seeds x (one-shot + streaming chain, uncompressedUpdate inserts + mid flush) x2 determinism, 0 exceptions, 0 failures")
+}

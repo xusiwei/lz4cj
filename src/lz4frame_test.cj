@@ -927,3 +927,503 @@ func lz4fUncompressedSemanticsTest(): Unit {
     }
     println("lz4f uncompressedUpdate semantics pins verified")
 }
+
+/*-************************************
+*  M5 Task 4: one-shot compressFrame golden (vs upstream C, 0774d055)
+**************************************/
+// f1s rows of corpus/block_golden_ref.txt (rows 463..470): one-shot
+// LZ4F_compressFrame over A/B/C. compressFrame applies its prefs
+// transforms before delegating to compressFrame_usingCDict(None):
+// prefs==None -> MEM_INIT-0 defaults, csz!=0 -> srcSize auto-rewrite,
+// optimalBSID, autoFlush=1, srcSize<=getBlockSize -> forced independent,
+// options.stableSrc=1. NOTE: f1s row 5 (C lv=9) lands byte-identical to
+// frame row 13 (same input, raw af=0/bm=0 prefs) in C — autoFlush is
+// output-neutral for exact block multiples — so the coinciding digests
+// are C truth, not a copy error (values independently regenerated).
+// (n, mp, seed, usePrefs, lv, ccs, csz, did, wantSize, want32, want64, fileRowIdx)
+let F1S_GOLD_REF: Array<(Int64, Float64, UInt32, Int32, Int32, Int32,
+        UInt64, UInt32, Int64, UInt32, UInt64, Int64)> = [
+    (65536, 0.50, 0u32, 0, 0, 0, 0u64, 0u32, 36474, 0xc4aa94e0u32, 0xe004ae20c13bd03bu64, 463),
+    (65536, 0.90, 7u32, 1, 3, 0, 0u64, 0u32, 5692, 0xa20f09e6u32, 0xa380622e95ab3b9cu64, 464),
+    (65536, 0.90, 7u32, 1, 9, 0, 0u64, 0u32, 5561, 0xc7e873b1u32, 0x7b63a4490b842838u64, 465),
+    (65536, 0.90, 7u32, 1, 12, 0, 0u64, 0u32, 5537, 0xf5a2b367u32, 0xcb8322be63b7bd27u64, 466),
+    (131072, 0.90, 0u32, 1, 9, 0, 0u64, 0u32, 17711, 0xc06c71feu32, 0xb418920b1f7ba3deu64, 467),
+    (65536, 0.50, 0u32, 1, 0, 0, 1u64, 0u32, 36482, 0x7f8ff7bau32, 0x47959d272b2ac65cu64, 468),
+    (65536, 0.50, 0u32, 1, 0, 1, 0u64, 305419896u32, 36482, 0x4016ace0u32, 0x51f059e1a5bf5be2u64, 469),
+    (65536, 0.50, 0u32, 1, -3, 0, 0u64, 0u32, 39278, 0xdb9c07b1u32, 0x23ac1aee62e91b35u64, 470),
+]
+
+@Test
+func lz4fFrameOneShotGoldenTest(): Unit {
+    var checked = 0
+    var fileCompared = 0
+    for ((n, mp, seed, usePrefs, lv, ccs, csz, did, wantSize, want32, want64, fileRow) in F1S_GOLD_REF) {
+        let input = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(input, n, mp, 0.0, seed)
+        var prefsOpt = Option<LZ4F_preferences_t>.None
+        if (usePrefs != 0) {
+            var p = LZ4F_preferences_t()
+            p.compressionLevel = lv
+            p.frameInfo.contentChecksumFlag = ccs
+            p.frameInfo.contentSize = csz
+            p.frameInfo.dictID = did
+            prefsOpt = Some(p)
+        }
+        let dstCap = LZ4F_compressFrameBound(n, prefsOpt)
+        let dst = Array<UInt8>(dstCap, {_ => 0u8})
+        let r = LZ4F_compressFrame(dst, 0, dstCap, input, n, prefsOpt)
+        if (r != wantSize) {
+            println("F1S row ${fileRow}: got ${r} want ${wantSize}")
+        }
+        @Assert(!LZ4F_isError(r))
+        @Assert(r == wantSize)
+        @Assert(r <= dstCap)
+        let got32 = XXH32(dst, r, 0u32)
+        let got64 = XXH64(dst, r, 0u64)
+        if (got32 != want32 || got64 != want64) {
+            println("DIGEST row ${fileRow}: got ${got32}/${got64} want ${want32}/${want64}")
+        }
+        @Assert(got32 == want32)
+        @Assert(got64 == want64)
+        // row 1(None prefs)结果必须 == 行间独立断言的 frame 行 6(bm=1)
+        // 值:单块强制独立使然(双源交叉验证,防误拷贝)
+        if (fileRow == 463) {
+            @Assert(want32 == 0xc4aa94e0u32)
+        }
+        // row 6:头内 contentSize == 自动改写后的 srcSize(LE64 @ [6,14))
+        if (fileRow == 468) {
+            var cszBack: UInt64 = 0u64
+            for (k in 0..8) {
+                cszBack += UInt64(dst[6 + k]) << (8 * k)
+            }
+            @Assert(cszBack == 65536u64)   // csz=1 请求被改写为 srcSize
+        }
+        // row 5:多块 linked 保留(FLG bit5 = 0)+ 与 frame 行 13 的 C 巧合
+        if (fileRow == 467) {
+            @Assert((UInt32(dst[4]) & 0x20u32) == 0u32)
+            @Assert(got32 == 0xc06c71feu32)
+        }
+        match (lz4fReadArtifact(fileRow)) {
+            case Some(art) =>
+                @Assert(Int64(art.size) == r)
+                var eq = true
+                for (k in 0..r) {
+                    if (UInt8(art[k]) != dst[k]) {
+                        eq = false
+                    }
+                }
+                if (!eq) {
+                    println("BYTES row ${fileRow}: artifact mismatch")
+                }
+                @Assert(eq)
+                fileCompared += 1
+            case None => println("f1s row ${fileRow}: artifact missing, byte-compare skipped")
+        }
+        checked += 1
+    }
+    @Assert(checked == 8)
+    @Assert(fileCompared == 8 || fileCompared == 0)   // corpus policy: all-or-nothing
+    println("f1s golden: ${checked}/8 rows, ${fileCompared} byte-exact artifacts")
+}
+
+/*-************************************
+*  M5 Task 4: CDict one-shot golden (vs upstream C, 0774d055)
+**************************************/
+// fcd rows (471..472): fresh cctx + LZ4F_compressFrame_usingCDict with a
+// CDict digested from dict=RDG(65536, mp=0.50, seed=99) (createCDict:
+// loadDictSlow fast ctx / CLEVEL_DEFAULT loadDictHC ctx).
+// (n, mp, seed, lv, bm, wantSize, want32, want64, fileRowIdx)
+let FCD_GOLD_REF: Array<(Int64, Float64, UInt32, Int32, Int32,
+        Int64, UInt32, UInt64, Int64)> = [
+    (65536, 0.50, 0u32, 0, 0, 38651, 0x52e2a673u32, 0xa696a177293937eeu64, 471),
+    (131072, 0.90, 0u32, 9, 1, 19109, 0x91bd0668u32, 0x0dd60c2f5c5274ffu64, 472),
+]
+
+@Test
+func lz4fCDictGoldenTest(): Unit {
+    // 字典出处钉值(与 M3 dictfast/dictslow 行同一字典)
+    let dd: Int64 = 65536
+    let dict = Array<UInt8>(dd, {_ => 0u8})
+    RDG_genBuffer(dict, dd, 0.50, 0.0, 99u32)
+    @Assert(XXH32(dict, dd, 0u32) == 0x059edec2u32)
+    @Assert(XXH64(dict, dd, 0u64) == 0xd41565bb0ecfa4e3u64)
+    let cdict = LZ4F_createCDict(dict, dd)
+    var checked = 0
+    var fileCompared = 0
+    for ((n, mp, seed, lv, bm, wantSize, want32, want64, fileRow) in FCD_GOLD_REF) {
+        let input = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(input, n, mp, 0.0, seed)
+        var prefs = LZ4F_preferences_t()
+        prefs.compressionLevel = lv
+        prefs.frameInfo.blockMode = bm
+        let dstCap = LZ4F_compressFrameBound(n, Some(prefs))
+        let dst = Array<UInt8>(dstCap, {_ => 0u8})
+        let cctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+        let r = LZ4F_compressFrame_usingCDict(cctx, dst, 0, dstCap, input, n,
+            Some(cdict), Some(prefs))
+        if (r != wantSize) {
+            println("FCD row ${fileRow}: got ${r} want ${wantSize}")
+        }
+        @Assert(!LZ4F_isError(r))
+        @Assert(r == wantSize)
+        @Assert(r <= dstCap)
+        let got32 = XXH32(dst, r, 0u32)
+        let got64 = XXH64(dst, r, 0u64)
+        if (got32 != want32 || got64 != want64) {
+            println("DIGEST row ${fileRow}: got ${got32}/${got64} want ${want32}/${want64}")
+        }
+        @Assert(got32 == want32)
+        @Assert(got64 == want64)
+        match (lz4fReadArtifact(fileRow)) {
+            case Some(art) =>
+                @Assert(Int64(art.size) == r)
+                var eq = true
+                for (k in 0..r) {
+                    if (UInt8(art[k]) != dst[k]) {
+                        eq = false
+                    }
+                }
+                if (!eq) {
+                    println("BYTES row ${fileRow}: artifact mismatch")
+                }
+                @Assert(eq)
+                fileCompared += 1
+            case None => println("fcd row ${fileRow}: artifact missing, byte-compare skipped")
+        }
+        checked += 1
+    }
+    LZ4F_freeCDict(cdict)
+    @Assert(checked == 2)
+    @Assert(fileCompared == 2 || fileCompared == 0)
+    println("fcd golden: ${checked}/2 rows, ${fileCompared} byte-exact artifacts")
+}
+
+/*-************************************
+*  M5 Task 4: Begin_usingDict frame golden (vs upstream C, 0774d055)
+**************************************/
+// fdt rows (473..474): raw prefs via LZ4F_compressBegin_usingDict +
+// Update + End (no compressFrame transforms: af=0, explicit bm).
+// Row 1 (bm=0): linked frames keep the Begin-loaded dictionary for the
+// whole frame (38651 < the 38688 no-dict frame row). Row 2 pins the
+// blockIndependent dictionary quirk: lz4frame.h L556-559 documents
+// usingDict as "only the first block uses the dictionary", but at this
+// commit the per-block LZ4F_initStream(..., blockIndependent) reset
+// detaches the dictionary ENTIRELY - the frame comes out byte-identical
+// to a no-dict frame (C probe 2026-10-02: seed-77 64B dict and even an
+// input-prefix dict both reproduce the exact no-dict frame, fast lv=0
+// and HC lv=9 alike). CDict is the per-block-attach path instead (fcd
+// row 2: 19109 < 20479 on the same input).
+// (n, mp, seed, dd, dseed, lv, bm, wantSize, want32, want64, fileRowIdx)
+let FDT_GOLD_REF: Array<(Int64, Float64, UInt32, Int64, UInt32, Int32, Int32,
+        Int64, UInt32, UInt64, Int64)> = [
+    (65536, 0.50, 0u32, 65536, 99u32, 0, 0, 38651, 0xe65dfaaeu32, 0x01941bd54d5dace4u64, 473),
+    (131072, 0.90, 0u32, 64, 77u32, 9, 1, 20479, 0xebe5524bu32, 0x011ded165e31e20au64, 474),
+]
+
+@Test
+func lz4fBeginDictGoldenTest(): Unit {
+    var checked = 0
+    var fileCompared = 0
+    for ((n, mp, seed, dd, dseed, lv, bm, wantSize, want32, want64, fileRow) in FDT_GOLD_REF) {
+        let input = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(input, n, mp, 0.0, seed)
+        let dict = Array<UInt8>(dd, {_ => 0u8})
+        RDG_genBuffer(dict, dd, 0.50, 0.0, dseed)
+        // 字典出处钉值(row1 与 fcd 同字典;row2 64B 小字典)
+        if (dd == 65536) {
+            @Assert(XXH32(dict, dd, 0u32) == 0x059edec2u32)
+        } else {
+            @Assert(XXH32(dict, dd, 0u32) == 0xabefcb46u32)
+            @Assert(XXH64(dict, dd, 0u64) == 0x50e87bc3e640f412u64)
+        }
+        var prefs = LZ4F_preferences_t()
+        prefs.compressionLevel = lv
+        prefs.frameInfo.blockMode = bm
+        let dstCap = LZ4F_compressFrameBound(n, Some(prefs))
+        let dst = Array<UInt8>(dstCap, {_ => 0u8})
+        let cctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+        var pos: Int64 = 0
+        let rb = LZ4F_compressBegin_usingDict(cctx, dst, pos, dstCap - pos, dict, dd, Some(prefs))
+        @Assert(!LZ4F_isError(rb))
+        pos += rb
+        let ru = LZ4F_compressUpdate(cctx, dst, pos, dstCap - pos, input, 0, n,
+            Option<LZ4F_compressOptions_t>.None)
+        @Assert(!LZ4F_isError(ru))
+        pos += ru
+        let re = LZ4F_compressEnd(cctx, dst, pos, dstCap - pos,
+            Option<LZ4F_compressOptions_t>.None)
+        @Assert(!LZ4F_isError(re))
+        pos += re
+        if (pos != wantSize) {
+            println("FDT row ${fileRow}: got ${pos} want ${wantSize}")
+        }
+        @Assert(pos == wantSize)
+        @Assert(pos <= dstCap)
+        let got32 = XXH32(dst, pos, 0u32)
+        let got64 = XXH64(dst, pos, 0u64)
+        if (got32 != want32 || got64 != want64) {
+            println("DIGEST row ${fileRow}: got ${got32}/${got64} want ${want32}/${want64}")
+        }
+        @Assert(got32 == want32)
+        @Assert(got64 == want64)
+        // row 2 quirk 旁证:同参数无字典帧 == usingDict 帧,逐字节
+        // (bm=1 时字典被逐块 reset 整体丢弃;C 探针 2026-10-02:
+        // noDict 帧摘要即 ebe5524b,与 fdt 行 golden 值相同)
+        if (fileRow == 474) {
+            let ndst = Array<UInt8>(dstCap, {_ => 0u8})
+            let ncctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+            var npos: Int64 = 0
+            npos += LZ4F_compressBegin(ncctx, ndst, npos, dstCap - npos, Some(prefs))
+            npos += LZ4F_compressUpdate(ncctx, ndst, npos, dstCap - npos, input, 0, n,
+                Option<LZ4F_compressOptions_t>.None)
+            npos += LZ4F_compressEnd(ncctx, ndst, npos, dstCap - npos,
+                Option<LZ4F_compressOptions_t>.None)
+            if (npos != pos) {
+                println("FDT-DROP row ${fileRow}: noDict ${npos} vs usingDict ${pos}")
+            }
+            @Assert(npos == pos)
+            var eqAll = true
+            for (k in 0..pos) {
+                if (dst[k] != ndst[k]) {
+                    eqAll = false
+                }
+            }
+            if (!eqAll) {
+                println("FDT-DROP row ${fileRow}: noDict frame differs from usingDict frame")
+            }
+            @Assert(eqAll)
+        }
+        match (lz4fReadArtifact(fileRow)) {
+            case Some(art) =>
+                @Assert(Int64(art.size) == pos)
+                var eq = true
+                for (k in 0..pos) {
+                    if (UInt8(art[k]) != dst[k]) {
+                        eq = false
+                    }
+                }
+                if (!eq) {
+                    println("BYTES row ${fileRow}: artifact mismatch")
+                }
+                @Assert(eq)
+                fileCompared += 1
+            case None => println("fdt row ${fileRow}: artifact missing, byte-compare skipped")
+        }
+        checked += 1
+    }
+    @Assert(checked == 2)
+    @Assert(fileCompared == 2 || fileCompared == 0)
+    println("fdt golden: ${checked}/2 rows, ${fileCompared} byte-exact artifacts")
+}
+
+/*-************************************
+*  M5 Task 4: CDict clamp + pre-digestion unit pins
+**************************************/
+// >64KB 字典截尾拷贝 + 预消化等价:Begin_usingCDict 流的首块输出 ==
+// 直接 loadDict/loadDictSlow/loadDictHC 新流的首块输出(C 探针
+// 2026-10-02:双 regime(独立输入/字典自身前缀)× lv{0,9} 四组合全部
+// 逐字节相等,block=16384 > 4096 走整态拷贝路径;loadDict 与
+// loadDictSlow 两填充在此几何下输出亦互等 —— 双重断言钉住)。
+@Test
+func lz4fCDictUnitTest(): Unit {
+    // ---- >64KB 截尾:131072B 字典 → dictContent 恰 65536B == 源尾段
+    let big: Int64 = 131072
+    let bigDict = Array<UInt8>(big, {_ => 0u8})
+    RDG_genBuffer(bigDict, big, 0.50, 0.0, 123u32)
+    let cdBig = LZ4F_createCDict(bigDict, big)
+    @Assert(Int64(cdBig.dictContent.size) == 65536)
+    var tailEq = true
+    for (k in 0..65536) {
+        if (cdBig.dictContent[k] != bigDict[65536 + k]) {
+            tailEq = false
+        }
+    }
+    @Assert(tailEq)
+    LZ4F_freeCDict(cdBig)
+    // ---- 预消化:64KB 字典 + 16KB 块,fast(lv=0)/ HC(lv=9)
+    let dd: Int64 = 65536
+    let dict = Array<UInt8>(dd, {_ => 0u8})
+    RDG_genBuffer(dict, dd, 0.50, 0.0, 99u32)
+    let cdict = LZ4F_createCDict(dict, dd)
+    @Assert(Int64(cdict.dictContent.size) == 65536)
+    let blocks: Array<(Int64, UInt32)> = [(16384, 5u32), (16384, 99u32)]   // 独立 / 字典前缀
+    for ((bn, bseed) in blocks) {
+        let block = Array<UInt8>(bn, {_ => 0u8})
+        RDG_genBuffer(block, bn, 0.50, 0.0, bseed)
+        let lvSet: Array<Int32> = [0, 9]
+        for (lv in lvSet) {
+            // 左:Begin_usingCDict + Update + End 单块帧,块数据 = [11, size-4)
+            var prefs = LZ4F_preferences_t()
+            prefs.compressionLevel = lv
+            let dstCap = LZ4F_compressFrameBound(bn, Some(prefs))
+            let frame = Array<UInt8>(dstCap, {_ => 0u8})
+            let cctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+            var pos: Int64 = 0
+            pos += LZ4F_compressBegin_usingCDict(cctx, frame, pos, dstCap - pos,
+                Some(cdict), Some(prefs))
+            pos += LZ4F_compressUpdate(cctx, frame, pos, dstCap - pos, block, 0, bn,
+                Option<LZ4F_compressOptions_t>.None)
+            pos += LZ4F_compressEnd(cctx, frame, pos, dstCap - pos,
+                Option<LZ4F_compressOptions_t>.None)
+            let blkLen = pos - 15   // 7B 头 + 4B 块头 + 块 + 4B endmark
+            @Assert(blkLen > 0)
+            // 右:直接构造的新流(loadDict 族)压缩同一块
+            let bound = Int64(LZ4_compressBound(Int32(bn)))
+            let raw = Array<UInt8>(bound, {_ => 0u8})
+            var cRaw: Int64 = -1
+            if (lv == 0) {
+                let st = LZ4_stream_t()
+                LZ4_initStream(st)
+                LZ4_loadDict(st, dict, Int32(dd))
+                cRaw = Int64(LZ4_compress_fast_continue(st, block, 0, Int32(bn),
+                    raw, Int32(bound), 1))
+            } else {
+                let st = LZ4_streamHC_t()
+                LZ4_initStreamHC(st)
+                LZ4_setCompressionLevel(st, LZ4HC_CLEVEL_DEFAULT)
+                LZ4_loadDictHC(st, dict, Int32(dd))
+                cRaw = Int64(LZ4_compress_HC_continue(st, block, 0, Int32(bn),
+                    raw, Int32(bound)))
+            }
+            @Assert(cRaw > 0)
+            if (cRaw != blkLen) {
+                println("PREDIGEST lv=${lv} bseed=${bseed}: frame blk ${blkLen} vs direct ${cRaw}")
+            }
+            @Assert(cRaw == blkLen)
+            var eq = true
+            for (k in 0..blkLen) {
+                if (frame[11 + k] != raw[k]) {
+                    eq = false
+                }
+            }
+            if (!eq) {
+                println("PREDIGEST lv=${lv} bseed=${bseed}: bytes differ")
+            }
+            @Assert(eq)
+            // fast 侧追加 loadDictSlow 对照(与 createCDict 同构造)
+            if (lv == 0) {
+                let st2 = LZ4_stream_t()
+                LZ4_initStream(st2)
+                LZ4_loadDictSlow(st2, dict, Int32(dd))
+                let raw2 = Array<UInt8>(bound, {_ => 0u8})
+                let c2 = Int64(LZ4_compress_fast_continue(st2, block, 0, Int32(bn),
+                    raw2, Int32(bound), 1))
+                @Assert(c2 == blkLen)
+                var eq2 = true
+                for (k in 0..blkLen) {
+                    if (frame[11 + k] != raw2[k]) {
+                        eq2 = false
+                    }
+                }
+                @Assert(eq2)
+            }
+        }
+    }
+    LZ4F_freeCDict(cdict)
+    println("lz4f CDict clamp + pre-digestion pins verified")
+}
+
+/*-************************************
+*  M5 Task 4: compressFrame 四联变换等价(仓颉内自证)
+**************************************/
+// compressFrame(A, None) 的 prefs 变换(MEM_INIT-0 → optimalBSID →
+// af=1 → 单块强制 bm=1 → options{ss=1})可反推为手工链 prefs
+// {bm=independent, af=1} + stableSrc —— 两者必须逐字节一致(5MB
+// 防-分配 hack 依赖的 af=1+ss=1 不变量由此钉住)。
+@Test
+func lz4fFrameEquivalenceTest(): Unit {
+    // (n, mp, seed, lv, wantSize, want32)
+    let cases: Array<(Int64, Float64, UInt32, Int32, Int64, UInt32)> = [
+        (65536, 0.50, 0u32, 0, 36474, 0xc4aa94e0u32),    // A, None prefs
+        (65536, 0.90, 7u32, 9, 5561, 0xc7e873b1u32),     // B, lv=9
+    ]
+    for ((n, mp, seed, lv, wantSize, want32) in cases) {
+        let input = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(input, n, mp, 0.0, seed)
+        // 左:one-shot compressFrame
+        var userPrefs = Option<LZ4F_preferences_t>.None
+        if (lv != 0) {
+            var p = LZ4F_preferences_t()
+            p.compressionLevel = lv
+            userPrefs = Some(p)
+        }
+        let dstCap = LZ4F_compressFrameBound(n, userPrefs)
+        let dstA = Array<UInt8>(dstCap, {_ => 0u8})
+        let ra = LZ4F_compressFrame(dstA, 0, dstCap, input, n, userPrefs)
+        @Assert(!LZ4F_isError(ra))
+        // 右:手工 Begin/Update/End(prefs{bm=1, af=1, lv} + options{ss=1})
+        var prefs = LZ4F_preferences_t()
+        prefs.compressionLevel = lv
+        prefs.frameInfo.blockMode = LZ4F_blockIndependent
+        prefs.autoFlush = 1u32
+        var cOpt = LZ4F_compressOptions_t()
+        cOpt.stableSrc = 1u32
+        let dstB = Array<UInt8>(dstCap, {_ => 0u8})
+        let cctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+        var pos: Int64 = 0
+        pos += LZ4F_compressBegin(cctx, dstB, pos, dstCap - pos, Some(prefs))
+        pos += LZ4F_compressUpdate(cctx, dstB, pos, dstCap - pos, input, 0, n, Some(cOpt))
+        pos += LZ4F_compressEnd(cctx, dstB, pos, dstCap - pos, Some(cOpt))
+        if (ra != pos || ra != wantSize) {
+            println("EQUIV lv=${lv}: frame ${ra} manual ${pos} want ${wantSize}")
+        }
+        @Assert(ra == pos)
+        @Assert(ra == wantSize)
+        var eq = true
+        for (k in 0..ra) {
+            if (dstA[k] != dstB[k]) {
+                eq = false
+            }
+        }
+        @Assert(eq)
+        @Assert(XXH32(dstA, ra, 0u32) == want32)
+    }
+    println("lz4f compressFrame/manual-chain equivalence pins verified")
+}
+
+/*-************************************
+*  M5 Task 4: compressFrameBound guarantee over golden rows
+**************************************/
+// 对 f1s + frame 全部行参数,产物 size ≤ LZ4F_compressFrameBound
+// (用户级 prefs;None 行代入最坏情形求界)。
+@Test
+func lz4fFrameBoundGuaranteeTest(): Unit {
+    for ((n, mp, seed, usePrefs, lv, ccs, csz, did, wantSize, _, _, _) in F1S_GOLD_REF) {
+        let input = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(input, n, mp, 0.0, seed)
+        var prefsOpt = Option<LZ4F_preferences_t>.None
+        if (usePrefs != 0) {
+            var p = LZ4F_preferences_t()
+            p.compressionLevel = lv
+            p.frameInfo.contentChecksumFlag = ccs
+            p.frameInfo.contentSize = csz
+            p.frameInfo.dictID = did
+            prefsOpt = Some(p)
+        }
+        let bound = LZ4F_compressFrameBound(n, prefsOpt)
+        if (wantSize > bound) {
+            println("F1S BOUND row n=${n} lv=${lv}: ${wantSize} > ${bound}")
+        }
+        @Assert(wantSize <= bound)
+    }
+    for ((n, mp, seed, bs, bm, ccs, bcs, csz, did, lv, fav, af, _, _, wantSize, _, _, _) in FRAME_GOLD_REF) {
+        let input = Array<UInt8>(n, {_ => 0u8})
+        RDG_genBuffer(input, n, mp, 0.0, seed)
+        var prefs = LZ4F_preferences_t()
+        prefs.frameInfo.blockSizeID = bs
+        prefs.frameInfo.blockMode = bm
+        prefs.frameInfo.contentChecksumFlag = ccs
+        prefs.frameInfo.blockChecksumFlag = bcs
+        prefs.frameInfo.contentSize = csz
+        prefs.frameInfo.dictID = did
+        prefs.compressionLevel = lv
+        prefs.favorDecSpeed = UInt32(fav)
+        prefs.autoFlush = UInt32(af)
+        let bound = LZ4F_compressFrameBound(n, Some(prefs))
+        if (wantSize > bound) {
+            println("FRAME BOUND row n=${n} bs=${bs} lv=${lv}: ${wantSize} > ${bound}")
+        }
+        @Assert(wantSize <= bound)
+    }
+    println("lz4f frameBound guarantee verified over 8 f1s + 27 frame rows")
+}

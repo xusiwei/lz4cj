@@ -10,6 +10,8 @@
 // M5 Task 3: 块压缩机制(makeBlock + 5 路压缩分派 + localSaveDict)+
 // 流式家族 compressUpdate/uncompressedUpdate/flush/compressEnd
 // (lz4frame.c L899-1259)。
+// M5 Task 4: LZ4F_CDict 预消化字典 + 一次性成帧家族
+// compressFrame/compressFrame_usingCDict(lz4frame.c L430-597)。
 
 package lz4
 
@@ -297,14 +299,47 @@ public struct LZ4F_compressOptions_t {
 }
 
 /*-************************************
-*  LZ4F_CDict 占位(Task 4 完整化:fastCtx/HCCtx 预消化字典内容)
+*  LZ4F_CDict(lz4frame.c L533-538)+ 工厂/回收(L540-597;Task 4 落地)
 **************************************/
+/* 上游为堆分配三段结构;仓颉类承载(GC 模型,设计 §4.4 同 ruling)。
+    dictContent 为字典内容副本(调用方可即时释放源缓冲);
+    fastCtx/HCCtx 为预消化字典流(createCDict 初始化)。 */
 public class LZ4F_CDict {
     internal var dictContent: Array<UInt8> = Array<UInt8>(0, {_ => 0u8})
-    /* 预消化字典流(Task 4 的 createCDict 初始化;本任务仅作为
-       lz4fInitStream 挂接目标存在,默认构造即可)。 */
     internal var fastCtx: LZ4_stream_t = LZ4_stream_t()
     internal var HCCtx: LZ4_streamHC_t = LZ4_streamHC_t()
+}
+
+/* LZ4F_createCDict —— LZ4F_createCDict_advanced 的公开包装
+    (lz4frame.c L540-576 + L580-583):>64KB 字典取尾 64KB 截尾拷贝;
+    fastCtx = initStream + loadDictSlow(全位置二遍填充,与上游一致);
+    HCCtx = initStreamHC + setCompressionLevel(LZ4HC_CLEVEL_DEFAULT)
+    + loadDictHC(此时尚不知将用的级别,按最常见 HC 模式建)。
+    C 的 NULL 入参提前返回与三段分配失败释放路径在仓颉 GC 模型下
+    不可达(无空引用、分配不失败),注释登记不复刻。 */
+public func LZ4F_createCDict(dictBuffer: Array<UInt8>, dictSize: Int64): LZ4F_CDict {
+    var dictStart: Int64 = 0
+    var size = dictSize
+    if (dictSize > 65536) {                                        /* L555-558 */
+        dictStart = dictSize - 65536
+        size = 65536
+    }
+    let copyStart = dictStart
+    let copySize = size
+    let cdict = LZ4F_CDict()
+    cdict.dictContent = Array<UInt8>(copySize, {i => dictBuffer[copyStart + i]})   /* L569 */
+    LZ4_initStream(cdict.fastCtx)                                  /* L570 */
+    LZ4_loadDictSlow(cdict.fastCtx, cdict.dictContent, Int32(size))  /* L571 */
+    LZ4_initStreamHC(cdict.HCCtx)                                  /* L572 */
+    LZ4_setCompressionLevel(cdict.HCCtx, LZ4HC_CLEVEL_DEFAULT)     /* L575 */
+    LZ4_loadDictHC(cdict.HCCtx, cdict.dictContent, Int32(size))    /* L576 */
+    return cdict
+}
+
+/* LZ4F_freeCDict(lz4frame.c L590-597):C 释放四段堆内存并支持
+    free(NULL);仓颉由 GC 管理,无动作。 */
+public func LZ4F_freeCDict(cdict: LZ4F_CDict): Unit {
+    return
 }
 
 /*-************************************
@@ -1001,4 +1036,101 @@ public func LZ4F_compressEnd(cctx: LZ4F_cctx, dstBuf: Array<UInt8>,
         }
     }
     return dstPtr - dstIdx
+}
+
+/*-************************************
+*  One-shot compression (lz4frame.c L430-526;Task 4)
+**************************************/
+/* LZ4F_compressFrame_usingCDict(lz4frame.c L430-476):一次性成帧主体,
+    Begin_usingCDict → Update → End 链。prefs 变换严格按上游顺序:
+    None → MEM_INIT 零值(注意 blockSizeID=0,非 INIT 默认 4!);
+    csz≠0 → 改写为 srcSize;optimalBSID;autoFlush=1;
+    srcSize ≤ getBlockSize → 强制 blockIndependent(单块无需块间链接);
+    options{stableSrc=1}(源缓冲一次成帧期间稳定);
+    dstCapacity < compressFrameBound(srcSize, 变换后 prefs) → -11。 */
+public func LZ4F_compressFrame_usingCDict(cctx: LZ4F_cctx,
+        dstBuf: Array<UInt8>, dstIdx: Int64, dstCapacity: Int64,
+        srcBuf: Array<UInt8>, srcSize: Int64,
+        cdict: Option<LZ4F_CDict>,
+        preferencesPtr: Option<LZ4F_preferences_t>): Int64 {
+    var prefs = LZ4F_preferences_t()
+    match (preferencesPtr) {
+        case Some(p) => prefs = p                                  /* L446-448 */
+        case None =>
+            /* MEM_INIT 零值:仅 blockSizeID 与 INIT 默认(4)不同,置 0 */
+            prefs.frameInfo.blockSizeID = 0                        /* L448 */
+    }
+    if (prefs.frameInfo.contentSize != 0u64) {
+        prefs.frameInfo.contentSize = UInt64(srcSize)              /* L451 */
+    }
+    prefs.frameInfo.blockSizeID = lz4fOptimalBSID(
+        prefs.frameInfo.blockSizeID, srcSize)                      /* L453 */
+    prefs.autoFlush = 1u32                                         /* L454 */
+    if (srcSize <= LZ4F_getBlockSize(prefs.frameInfo.blockSizeID)) {
+        prefs.frameInfo.blockMode = LZ4F_blockIndependent          /* L456-457 */
+    }
+    var options = LZ4F_compressOptions_t()
+    options.stableSrc = 1u32                                       /* L459-460 */
+
+    if (dstCapacity < LZ4F_compressFrameBound(srcSize, Some(prefs))) {
+        return -LZ4F_ERROR_dstMaxSize_tooSmall                     /* L462 */
+    }
+
+    let headerSize = LZ4F_compressBegin_usingCDict(cctx, dstBuf, dstIdx,
+        dstCapacity, cdict, Some(prefs))                           /* L465 */
+    if (LZ4F_isError(headerSize)) {
+        return headerSize                                          /* FORWARD_IF_ERROR */
+    }
+    var dstPtr: Int64 = dstIdx + headerSize
+
+    let cSize = LZ4F_compressUpdate(cctx, dstBuf, dstPtr,
+        dstCapacity - (dstPtr - dstIdx), srcBuf, 0, srcSize, Some(options))  /* L469 */
+    if (LZ4F_isError(cSize)) {
+        return cSize
+    }
+    dstPtr += cSize
+
+    let tailSize = LZ4F_compressEnd(cctx, dstBuf, dstPtr,
+        dstCapacity - (dstPtr - dstIdx), Some(options))            /* L473 */
+    if (LZ4F_isError(tailSize)) {
+        return tailSize
+    }
+    dstPtr += tailSize
+    return dstPtr - dstIdx                                         /* L477 */
+}
+
+/* LZ4F_compressFrame(lz4frame.c L486-526):HEAPMODE=0 路径等价 ——
+    局部 cctx(GC 栈/堆承载,语义等同 C 栈上 cctx)+ version=
+    LZ4F_VERSION + maxBufferSize=5MB 防-分配 hack(C 注释语义照搬:
+    "mess with real buffer size to prevent dynamic allocation; works
+    only because autoflush==1 & stableSrc==1" —— usingCDict 的变换保证
+    af=1+ss=1,requiredBuffSize 恒 ≤ 65536,tmpBuff 恒不分配/不触碰,
+    仓颉侧等价物 = maxBufferSize=5MB 而 tmpBuff 保持空数组);
+    prefs==None 或 level<LZ4HC_CLEVEL_MIN → 预置已 initStream 的
+    fast 流 + lz4CtxAlloc=1/lz4CtxType=ctxFast(省却 Begin 里的重分配);
+    随后委托 usingCDict(None)。
+    C 侧 HEAPMODE=1 的 create/freeCompressionContext 对与 HC 分支的
+    LZ4F_free(lz4CtxPtr) 在仓颉 GC 下无对应动作,注释登记。 */
+public func LZ4F_compressFrame(dstBuf: Array<UInt8>, dstIdx: Int64,
+        dstCapacity: Int64, srcBuf: Array<UInt8>, srcSize: Int64,
+        preferencesPtr: Option<LZ4F_preferences_t>): Int64 {
+    let cctx = LZ4F_cctx()                    /* MEM_INIT(&cctx,0) 等价 */
+    cctx.version = LZ4F_VERSION                                   /* L498 */
+    cctx.maxBufferSize = 5 * 1024 * 1024                          /* L502 */
+    var level: Int32 = 0
+    match (preferencesPtr) {
+        case Some(p) => level = p.compressionLevel
+        case None => ()
+    }
+    if (preferencesPtr.isNone() || level < LZ4HC_CLEVEL_MIN) {     /* L503-505 */
+        let st = LZ4_stream_t()
+        LZ4_initStream(st)
+        cctx.lz4CtxFast = Some(st)
+        cctx.lz4CtxAlloc = 1
+        cctx.lz4CtxType = 1            /* ctxFast */
+    }
+    let result = LZ4F_compressFrame_usingCDict(cctx, dstBuf, dstIdx,
+        dstCapacity, srcBuf, srcSize, Option<LZ4F_CDict>.None, preferencesPtr)
+    /* C 非 HEAPMODE 尾部的 LZ4F_free(HC ctx)由 GC 承接,无动作 */
+    return result                                                  /* L522 */
 }

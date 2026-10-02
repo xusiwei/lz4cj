@@ -11,6 +11,13 @@
 // LZ4_decompress_safe_continue over K=8 consecutive blocks in one buffer),
 // mode=ring (decoder-ring-buffer decode with wraparound), mode=setdict
 // (LZ4_setStreamDecode external-dictionary scenarios) => rows 280..299.
+// + M5 Task 4 one-shot rows: mode=f1s (LZ4F_compressFrame, 8 rows over
+//         A/B/C at lv 0/3/9/12/-3 + csz/did/ccs variants) => 444 rows,
+//         plus mode=fcd (LZ4F_compressFrame_usingCDict, 2 rows: A lv=0
+//         single-block fast path / C bm=1 lv=9 per-block HC attach,
+//         dict RDG(65536,0.50,99)) plus mode=fdt
+//         (LZ4F_compressBegin_usingDict frames, 2 rows: A linked loadDict /
+//         C bm=1 dd=64 first-block-only dict quirk) => 475 rows.
 //
 // Matrix: sizes {0,1,255,4096,65535,65536,65537,131072} x mp {0.0,0.5,0.9,1.0}
 //         x lp {0.0} x seeds {0,7}; modes default / fast1 / fast8 / dest
@@ -2074,6 +2081,214 @@ int main(void) {
             LZ4F_freeCompressionContext(cctx);
             free(buf);
             free(dst);
+        }
+    }
+    /* f1s rows (M5 Task 4): one-shot LZ4F_compressFrame (HEAPMODE=0 path:
+       local cctx + maxBufferSize=5MB anti-allocation hack + pre-created
+       fast stream when prefs==NULL or lv<LZ4HC_CLEVEL_MIN, then
+       compressFrame_usingCDict with NULL cdict). compressFrame applies
+       its own prefs transforms before delegating: prefs==NULL ->
+       MEM_INIT-0 defaults (blockSizeID=0), csz!=0 -> auto-rewrite to
+       srcSize, optimalBSID, autoFlush=1, srcSize<=getBlockSize -> forced
+       blockIndependent, options.stableSrc=1. Row set: (1) A prefs=NULL,
+       (2)-(4) B lv=3/9/12, (5) C lv=9 (131072 > one 64KB block:
+       multi-block linked preserved through the transforms), (6) A csz=1
+       (header carries the auto-corrected 65536, End's csz check passes),
+       (7) A did=0x12345678 ccs=1, (8) A lv=-3 (negative level ->
+       acceleration 4). dst = LZ4F_compressFrameBound(n, pp). */
+    {
+        static const struct {
+            size_t n; double mp; unsigned seed;
+            int usePrefs, lv, ccs;
+            unsigned long long csz;
+            unsigned did;
+        } kF1S[8] = {
+            {65536, 0.50, 0, 0, 0, 0, 0ULL, 0U},           /* 1: NULL prefs */
+            {65536, 0.90, 7, 1, 3, 0, 0ULL, 0U},           /* 2: B lv=3 */
+            {65536, 0.90, 7, 1, 9, 0, 0ULL, 0U},           /* 3: B lv=9 */
+            {65536, 0.90, 7, 1, 12, 0, 0ULL, 0U},          /* 4: B lv=12 */
+            {131072, 0.90, 0, 1, 9, 0, 0ULL, 0U},          /* 5: C lv=9 multi-block linked */
+            {65536, 0.50, 0, 1, 0, 0, 1ULL, 0U},           /* 6: A csz=1 -> 65536 */
+            {65536, 0.50, 0, 1, 0, 1, 0ULL, 305419896U},   /* 7: A did ccs=1 */
+            {65536, 0.50, 0, 1, -3, 0, 0ULL, 0U},          /* 8: A lv=-3 */
+        };
+        printf("# f1s=LZ4F_compressFrame one-shot (stack cctx + pre-created fast stream when "
+               "prefs==NULL or lv<LZ4HC_CLEVEL_MIN); prefs transforms: MEM_INIT-0 defaults for NULL, "
+               "csz!=0 -> srcSize rewrite, optimalBSID, autoFlush=1, single-block -> blockIndependent, "
+               "stableSrc=1; A=RDG(n=65536 mp=0.50 lp=0.00 seed=0) B=RDG(n=65536 mp=0.90 lp=0.00 seed=7) "
+               "C=RDG(n=131072 mp=0.90 lp=0.00 seed=0); dst=LZ4F_compressFrameBound\n");
+        for (unsigned ri = 0; ri < sizeof(kF1S) / sizeof(kF1S[0]); ri++) {
+            size_t n = kF1S[ri].n;
+            unsigned char* buf = (unsigned char*)malloc(n ? n : 1);
+            if (!buf) { fprintf(stderr, "oom\n"); return 1; }
+            RDG_genBuffer(buf, n, kF1S[ri].mp, 0.0, kF1S[ri].seed);
+            LZ4F_preferences_t prefs;
+            const LZ4F_preferences_t* pp = NULL;
+            memset(&prefs, 0, sizeof(prefs));
+            if (kF1S[ri].usePrefs) {
+                prefs.compressionLevel = kF1S[ri].lv;
+                prefs.frameInfo.contentChecksumFlag = (LZ4F_contentChecksum_t)kF1S[ri].ccs;
+                prefs.frameInfo.contentSize = kF1S[ri].csz;
+                prefs.frameInfo.dictID = kF1S[ri].did;
+                pp = &prefs;
+            }
+            size_t dstCap = LZ4F_compressFrameBound(n, pp);
+            unsigned char* dst = (unsigned char*)malloc(dstCap);
+            if (!dst) { fprintf(stderr, "oom\n"); return 1; }
+            size_t c = LZ4F_compressFrame(dst, dstCap, buf, n, pp);
+            if (LZ4F_isError(c) || c > dstCap) {
+                fprintf(stderr, "f1s: compressFrame failed ri=%u\n", ri);
+                return 1;
+            }
+            printf("n=%zu mp=%.2f seed=%u mode=f1s lv=%d%s%s%s size=%zu "
+                   "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+                   n, kF1S[ri].mp, kF1S[ri].seed, kF1S[ri].lv,
+                   kF1S[ri].csz ? " csz=1" : "",
+                   kF1S[ri].did ? " did=305419896" : "",
+                   kF1S[ri].ccs ? " ccs=1" : "",
+                   c,
+                   XXH32(dst, c, 0), (unsigned long long)XXH64(dst, c, 0),
+                   XXH32(buf, n, 0), (unsigned long long)XXH64(buf, n, 0));
+            writeArtifact(dst, (int)c, idx);
+            printf("\n");
+            idx++;
+            free(buf); free(dst);
+        }
+    }
+    /* fcd rows (M5 Task 4): LZ4F_compressFrame_usingCDict on a fresh cctx
+       per row + a CDict digested from dict=RDG(65536, mp=0.50, seed=99)
+       (createCDict: initStream + loadDictSlow fast ctx; initStreamHC +
+       setCompressionLevel(LZ4HC_CLEVEL_DEFAULT) + loadDictHC HC ctx).
+       Same prefs transforms as compressFrame (minus the pre-created fast
+       stream). Row 1: A lv=0 - 65536 <= one 64KB block -> forced
+       blockIndependent, single-block CDict fast path; row 2: C bm=1 lv=9 -
+       independent multi-block, every block re-attaches the HC CDict. */
+    {
+        const size_t dictSize = 64 * 1024;
+        unsigned char* dictBuf = (unsigned char*)malloc(dictSize);
+        if (!dictBuf) { fprintf(stderr, "oom\n"); return 1; }
+        RDG_genBuffer(dictBuf, dictSize, 0.5, 0.0, 99);
+        printf("# fcd=dict=RDG(n=65536 mp=0.50 lp=0.00 seed=99) xxh32=%08x xxh64=%016llx via "
+               "LZ4F_createCDict (loadDictSlow fast ctx / CLEVEL_DEFAULT loadDictHC ctx); per-row "
+               "fresh cctx + LZ4F_compressFrame_usingCDict, dst=LZ4F_compressFrameBound; "
+               "row1 A lv=0 (single block, forced independent), row2 C bm=1 lv=9 "
+               "(independent multi-block, every block attaches)\n",
+               XXH32(dictBuf, dictSize, 0), (unsigned long long)XXH64(dictBuf, dictSize, 0));
+        static const struct {
+            size_t n; double mp; unsigned seed;
+            int lv, bm;
+        } kFC[2] = {
+            {65536, 0.50, 0, 0, 0},
+            {131072, 0.90, 0, 9, 1},
+        };
+        for (unsigned ri = 0; ri < 2; ri++) {
+            size_t n = kFC[ri].n;
+            unsigned char* buf = (unsigned char*)malloc(n ? n : 1);
+            if (!buf) { fprintf(stderr, "oom\n"); return 1; }
+            RDG_genBuffer(buf, n, kFC[ri].mp, 0.0, kFC[ri].seed);
+            LZ4F_preferences_t prefs;
+            memset(&prefs, 0, sizeof(prefs));
+            prefs.compressionLevel = kFC[ri].lv;
+            prefs.frameInfo.blockMode = (LZ4F_blockMode_t)kFC[ri].bm;
+            size_t dstCap = LZ4F_compressFrameBound(n, &prefs);
+            unsigned char* dst = (unsigned char*)malloc(dstCap);
+            if (!dst) { fprintf(stderr, "oom\n"); return 1; }
+            LZ4F_cctx* cctx = NULL;
+            if (LZ4F_isError(LZ4F_createCompressionContext(&cctx, LZ4F_VERSION))) {
+                fprintf(stderr, "fcd: createCompressionContext failed\n");
+                return 1;
+            }
+            LZ4F_CDict* cdict = LZ4F_createCDict(dictBuf, dictSize);
+            if (!cdict) { fprintf(stderr, "fcd: createCDict failed\n"); return 1; }
+            size_t c = LZ4F_compressFrame_usingCDict(cctx, dst, dstCap, buf, n, cdict, &prefs);
+            LZ4F_freeCDict(cdict);
+            LZ4F_freeCompressionContext(cctx);
+            if (LZ4F_isError(c) || c > dstCap) {
+                fprintf(stderr, "fcd: compressFrame_usingCDict failed ri=%u\n", ri);
+                return 1;
+            }
+            printf("n=%zu mp=%.2f seed=%u mode=fcd dd=%zu dmp=0.50 dseed=99 lv=%d%s size=%zu "
+                   "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+                   n, kFC[ri].mp, kFC[ri].seed, dictSize, kFC[ri].lv,
+                   kFC[ri].bm ? " bm=1" : "",
+                   c,
+                   XXH32(dst, c, 0), (unsigned long long)XXH64(dst, c, 0),
+                   XXH32(buf, n, 0), (unsigned long long)XXH64(buf, n, 0));
+            writeArtifact(dst, (int)c, idx);
+            printf("\n");
+            idx++;
+            free(buf); free(dst);
+        }
+        free(dictBuf);
+    }
+    /* fdt rows (M5 Task 4): dictionary frames via
+       LZ4F_compressBegin_usingDict + Update + End (raw row prefs, no
+       compressFrame transforms: af=0 buffering, explicit bm). Row 1: A
+       dd=65536 dseed=99 lv=0 bm=0 (linked: loadDict at Begin, every
+       block continues against it - 38651 < the 38688 no-dict frame).
+       Row 2: C dd=64 dseed=77 lv=9 bm=1 - pins the blockIndependent
+       dictionary quirk: lz4frame.h L556-559 documents usingDict as
+       "only the first block uses the dictionary", but at this commit the
+       per-block LZ4F_initStream(..., blockIndependent) reset detaches
+       the dictionary entirely - the frame is byte-identical to a no-dict
+       frame (C probe 2026-10-02: seed-77 64B dict and even an
+       input-prefix dict reproduce the exact no-dict frame, lv=0 and
+       lv=9 alike). CDict is the per-block-attach path (fcd row 2). */
+    {
+        static const struct {
+            size_t n; double mp; unsigned seed, dseed;
+            size_t dd;
+            int lv, bm;
+        } kFD[2] = {
+            {65536, 0.50, 0, 99, 64 * 1024, 0, 0},
+            {131072, 0.90, 0, 77, 64, 9, 1},
+        };
+        printf("# fdt=LZ4F_compressBegin_usingDict + Update + End raw prefs (af=0, explicit bm); "
+               "row1 A dd=65536 dseed=99 lv=0 bm=0 linked loadDict at Begin; row2 C dd=64 dseed=77 "
+               "lv=9 bm=1 pins the blockIndependent dict-discard quirk: header documents first-block-only, "
+               "implementation detaches the dict at every per-block reset -> frame identical to no-dict "
+               "(C probe 2026-10-02; CDict is the per-block-attach path)\n");
+        for (unsigned ri = 0; ri < 2; ri++) {
+            size_t n = kFD[ri].n;
+            unsigned char* buf = (unsigned char*)malloc(n ? n : 1);
+            unsigned char* dictBuf = (unsigned char*)malloc(kFD[ri].dd);
+            if (!buf || !dictBuf) { fprintf(stderr, "oom\n"); return 1; }
+            RDG_genBuffer(buf, n, kFD[ri].mp, 0.0, kFD[ri].seed);
+            RDG_genBuffer(dictBuf, kFD[ri].dd, 0.5, 0.0, kFD[ri].dseed);
+            LZ4F_preferences_t prefs;
+            memset(&prefs, 0, sizeof(prefs));
+            prefs.compressionLevel = kFD[ri].lv;
+            prefs.frameInfo.blockMode = (LZ4F_blockMode_t)kFD[ri].bm;
+            size_t dstCap = LZ4F_compressFrameBound(n, &prefs);
+            unsigned char* dst = (unsigned char*)malloc(dstCap);
+            if (!dst) { fprintf(stderr, "oom\n"); return 1; }
+            LZ4F_cctx* cctx = NULL;
+            if (LZ4F_isError(LZ4F_createCompressionContext(&cctx, LZ4F_VERSION))) {
+                fprintf(stderr, "fdt: createCompressionContext failed\n");
+                return 1;
+            }
+            size_t pos = 0;
+            size_t r = LZ4F_compressBegin_usingDict(cctx, dst + pos, dstCap - pos,
+                                                    dictBuf, kFD[ri].dd, &prefs);
+            if (LZ4F_isError(r)) { fprintf(stderr, "fdt: begin failed ri=%u\n", ri); return 1; }
+            pos += r;
+            r = LZ4F_compressUpdate(cctx, dst + pos, dstCap - pos, buf, n, NULL);
+            if (LZ4F_isError(r)) { fprintf(stderr, "fdt: update failed ri=%u\n", ri); return 1; }
+            pos += r;
+            r = LZ4F_compressEnd(cctx, dst + pos, dstCap - pos, NULL);
+            if (LZ4F_isError(r)) { fprintf(stderr, "fdt: end failed ri=%u\n", ri); return 1; }
+            pos += r;
+            printf("n=%zu mp=%.2f seed=%u mode=fdt dd=%zu dmp=0.50 dseed=%u lv=%d bm=%d size=%zu "
+                   "xxh32=%08x xxh64=%016llx inxxh32=%08x inxxh64=%016llx",
+                   n, kFD[ri].mp, kFD[ri].seed, kFD[ri].dd, kFD[ri].dseed, kFD[ri].lv,
+                   kFD[ri].bm, pos,
+                   XXH32(dst, pos, 0), (unsigned long long)XXH64(dst, pos, 0),
+                   XXH32(buf, n, 0), (unsigned long long)XXH64(buf, n, 0));
+            writeArtifact(dst, (int)pos, idx);
+            printf("\n");
+            idx++;
+            LZ4F_freeCompressionContext(cctx);
+            free(buf); free(dictBuf); free(dst);
         }
     }
     fprintf(stderr, "cases=%d\n", idx);

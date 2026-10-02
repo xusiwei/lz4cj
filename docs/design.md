@@ -51,8 +51,8 @@ lz4cj/
 │   ├── build_and_test.sh    # lt | st | both:source 对应 envsetup 后执行 cjpm build + test
 │   ├── gen_golden.c         # C 侧 golden 生成 harness(直连 ~/lz4/lib 源码编译)
 │   └── gen_golden.sh        # 编译并运行 harness,产出 golden 语料
-├── corpus/                  # golden 数据(入库,二进制,总量控制在 ~8MB 内)
-│   └── manifest.toml        # 用例清单:输入指纹 × 参数 × 期望输出文件
+├── corpus/                  # golden 数据(不入 git,本地经 scripts/gen_golden.sh 再生;
+│   └── ...                  #   block_golden_ref.txt 清单 + block/<idx>.lz4 artifacts,~5.4MB)
 └── src/
     ├── common.cj            # MEM_* 等价工具:非对齐读写、wildCopy、批量拷贝
     ├── lz4.cj               # block 压缩/解压(对应 lz4.c)

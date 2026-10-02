@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0 (M5)
+
+- Frame 压缩全量 API(lz4frame.c 压缩侧 21 函数 + 常量族):版本/错误族 `LZ4F_isError` / `getErrorName` / `getErrorCode` / `getVersion` / `compressionLevel_max`、界限 `LZ4F_getBlockSize` / `compressFrameBound` / `compressBound`、cctx 生命周期 `create/freeCompressionContext`、`compressBegin`(+`_usingDict`/+`_usingCDict`)、流式 `compressUpdate` / `uncompressedUpdate` / `flush` / `compressEnd`、一次性 `compressFrame` / `compressFrame_usingCDict`(HEAPMODE=0 等价:局部 cctx + maxBufferSize=5MB 防-分配 hack + level<2 预置 fast 流;usingCDict 五联 prefs 变换:None→零值、csz 改写、optimalBSID、af=1、单块强制独立)、`LZ4F_CDict` 预消化字典 `createCDict`(>64KB 截尾 + loadDictSlow/LEVEL_DEFAULT loadDictHC 双流预消化)/ `freeCDict`;五枚举以 Int32 常量族承载(仓颉无 C 值枚举)、错误码 24 常量族 Int64 承载、`reserved` 保留字段省略
+- 块压缩机制:makeBlock(压缩失败/膨胀回退原样存储)+ 5 路压缩分派(fast/HC × 独立/连续 + doNotCompress)+ linked 帧的 localSaveDict 滚动字典迁移;头编码(魔数/FLG/BD/可选 contentSize/dictID/头校验)与 XXH32 流式内容校验(offset 具名参防漏哈希)
+- golden 验证(清单扩至 497 行,数据行 +49 → 475):frhdr 10(头编码字节级,artifact=头区)+ frame 27(全参数交叉流式帧:A 变体 7 + did=42 + C 变体 13 + flushmid/umix/chunks5 场景 + D/G/F 边界)+ f1s 8(一次性 compressFrame:NULL prefs/lv3/9/12/多块 linked/csz 改写/did+ccs/lv=-3)+ fcd 2(CDict 一次性:单块 fast/多块 HC 逐块 attach)+ fdt 2(Begin_usingDict 帧:linked 全帧字典;bm=1 钉住 **usingDict+blockIndependent 字典整体丢弃怪癖** —— 头文件文档为"仅首块用字典",实测(上游 C 探针 2026-10-02)逐块 fastReset 使字典对全部块失效,帧逐字节 == 无字典帧;CDict 才是逐块挂接路径);f1s 行 5 与 frame 行 13 输入相同、变换不同的防误拷贝交叉断言;全部 digest 钉值 + artifact 逐字节比对(缺失时优雅降级,corpus 政策)
+- 补充用例:CDict >64KB 截尾 + 预消化等价(Begin_usingCDict 首块 == 直接 loadDict/loadDictHC 新流首块,双 regime × lv{0,9} 逐字节)、compressFrame 四联变换等价(一次性 == 手工链 prefs{bm=1,af=1}+opts{ss=1},钉住 5MB hack 依赖的 af=1+ss=1 不变量)、frameBound 保证(全 f1s+frame 行 size ≤ bound)、Begin 状态/错误语义(uninitialized/-11/-14/-20)
+- **corpus 政策**(2026-10-01 裁定):golden 二进制不入 git(`.gitignore` 登记 corpus/),本地经 `scripts/gen_golden.sh` 再生(依赖 cc 与 ~/lz4@0774d055,~5.4MB ≤ 8MB 预算);测试嵌常量摘要断言自足(尺寸+XXH32/64),artifact 存在时才逐字节比对,全有或全无防半套语料
+- 模糊测试(T4,`fuzzFrameTest`):120 种子,每种子随机 {n∈[0,150000]、mp、bs∈{4..7}、bm、ccs、bcs、af、lv∈{-3,0,3,9,12}、ss、chunks∈[1,6]};场景 A 一次性成帧 + 场景 B Begin + 随机切分 Update(bm=1 随机 uncompressedUpdate 插入含模式切换 + 随机中途 flush)+ End,各 ×2 逐字节确定性重放;断言:无异常逃逸、各调用非错误(容量恒 = compressFrameBound,规划器先验块数模拟 + 探针降级链保证预算成立)、endmark 4×0x00 落位、ccs=1 尾 4B == XXH32(输入)、bm=1 逐块 `LZ4_decompress_safe` 闭环 == 输入切片
+- 覆盖率(cangjie-1.0.5,`cjpm test --coverage` + `cjcov --html-details`):总体行覆盖 96.28%(8232/8550);库源码 96.43%(3210/3329),其中 common/datagen/xxhash 100%、lz4.cj 95.52%(959/1004)、lz4hc.cj 96.39%(1362/1413)、lz4frame.cj 95.35%(472/495);lz4frame.cj 23 个未覆盖行归类:可达未测 14(换型分支 Some 臂 9 —— 需同一 cctx 三次 Begin 级别往复;紧容量错误 3;localSaveDict 滞留迁移 2 —— 需 >192KB af=0 linked 流)、不可达/防御 9(块压缩器 None 兜底、flush 未初始化守卫、usingCDict 错误透传、dictSize>INT_MAX)→ 台账登记 M7
+- 双工具链全绿:LTS-1.0.5 与 STS-1.2.0 各 117/117 测试通过
+
 ## 0.5.0 (M4)
 
 - HC 高压缩全量 API(lz4hc.c 非弃用 17 函数 + 常量族):one-shot `LZ4_compress_HC` / `LZ4_compress_HC_extStateHC`(+`_fastReset`)/ `LZ4_compress_HC_destSize`(元组返回)、状态族 `LZ4_createStreamHC` / `LZ4_freeStreamHC` / `LZ4_initStreamHC` / `LZ4_resetStreamHC`(+`_fast`)/ `LZ4_setCompressionLevel` / `LZ4_favorDecompressionSpeed` / `LZ4_sizeofStateHC`、流式 `LZ4_loadDictHC` / `LZ4_attach_HC_dictionary` / `LZ4_compress_HC_continue` / `LZ4_compress_HC_continue_destSize` / `LZ4_saveDictHC`,`LZ4HC_CLEVEL_{MIN,DEFAULT,OPT_MIN,MAX}` 常量族;弃用块(lz4hc.c L2196-2255)按范围裁定不移植
