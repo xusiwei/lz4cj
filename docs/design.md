@@ -167,7 +167,7 @@ C 中"用户提供裸缓冲当状态"的 API(`LZ4_compress_fast_extState(void* s
 - 一次性:`LZ4F_compressFrame`、`LZ4F_compressFrameBound`、`LZ4F_compressFrame_usingCDict`
 - 流式压缩:`LZ4F_createCompressionContext`、`LZ4F_freeCompressionContext`、`LZ4F_compressBegin`、`LZ4F_compressBegin_usingDict`(lz4frame.h L561,v1.10 稳定;原清单漏记,M5-T1 订正)、`LZ4F_compressBegin_usingCDict`、`LZ4F_compressUpdate`、`LZ4F_uncompressedUpdate`、`LZ4F_flush`、`LZ4F_compressEnd`、`LZ4F_compressBound`
 - 字典:`LZ4F_createCDict`、`LZ4F_freeCDict`
-- 解压:`LZ4F_createDecompressionContext`、`LZ4F_freeDecompressionContext`、`LZ4F_resetDecompressionContext`、`LZ4F_headerSize`、`LZ4F_getFrameInfo`、`LZ4F_decompress`、`LZ4F_decompress_usingDict`、`LZ4F_decompress_usingCDict`、`LZ4F_isSkippedFrame`、`LZ4F_getBlockSize`
+- 解压:`LZ4F_createDecompressionContext`、`LZ4F_freeDecompressionContext`、`LZ4F_resetDecompressionContext`、`LZ4F_headerSize`、`LZ4F_getFrameInfo`、`LZ4F_decompress`、`LZ4F_decompress_usingDict`、`LZ4F_getBlockSize`。注记(M6-T1 订正):上游 0774d055 lz4frame.h 无 `LZ4F_isSkippedFrame` 与 `LZ4F_decompress_usingCDict`,原清单误记,订正移除;skippable 判定经 frameInfo.frameType==`LZ4F_skippableFrame` 表达;`LZ4F_getBlockSize` 已随 M5 落地
 
 **xxhash(`xxhash.h` 子集,`internal` 可见性)**:`XXH32`、`XXH32_createState`、`XXH32_freeState`、`XXH32_reset`、`XXH32_update`、`XXH32_digest`(frame 所需);`XXH64` 同族接口一并实现(结构与上游逐函数对应,见 5.6),暂不对外发布,未来如需暴露为独立改动。XXH3/XXH128 不在范围。
 

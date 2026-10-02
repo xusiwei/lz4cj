@@ -1427,3 +1427,113 @@ func lz4fFrameBoundGuaranteeTest(): Unit {
     }
     println("lz4f frameBound guarantee verified over 8 f1s + 27 frame rows")
 }
+
+/*-************************************
+*  M6 Task 1: dctx lifecycle + headerSize + decompressOptions
+**************************************/
+// 对应上游 lz4frame.c L1266-1276(dStage 枚举)、L1278-1299(dctx
+// 结构)、L1317-1341(create/free)、L1354-1362(reset)与 L1471-1495
+// (LZ4F_headerSize);期望值按 C 语义手算钉常量。
+
+@Test
+func lz4fDctxLifecycleTest(): Unit {
+    // create: calloc 等价 —— 全字段默认值,dStage=dstage_getFrameHeader
+    let dctx = LZ4F_createDecompressionContext(100u32)
+    @Assert(dctx.dStage == dstage_getFrameHeader)
+    @Assert(dctx.version == 100u32)
+    let def = LZ4F_frameInfo_t()
+    @Assert(dctx.frameInfo.blockSizeID == def.blockSizeID)
+    @Assert(dctx.frameInfo.blockMode == def.blockMode)
+    @Assert(dctx.frameInfo.contentChecksumFlag == def.contentChecksumFlag)
+    @Assert(dctx.frameInfo.frameType == def.frameType)
+    @Assert(dctx.frameInfo.contentSize == def.contentSize)
+    @Assert(dctx.frameInfo.dictID == def.dictID)
+    @Assert(dctx.frameInfo.blockChecksumFlag == def.blockChecksumFlag)
+    @Assert(dctx.tmpIn.size == 0)
+    @Assert(dctx.tmpOutBuffer.size == 0)
+    @Assert(dctx.dictBuf.size == 0)
+    @Assert(!dctx.dictInTmp)
+    @Assert(dctx.skipChecksum == 0)
+    @Assert(dctx.header.size == LZ4F_HEADER_SIZE_MAX)
+    // free: 返回释放时的 dStage(新鲜上下文 = 0,L1336-1341)
+    @Assert(LZ4F_freeDecompressionContext(dctx) == 0)
+    // free 于非零 dStage 释放 → 返回该状态(C 语义钉住)
+    let d3 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    d3.dStage = dstage_storeSuffix
+    @Assert(LZ4F_freeDecompressionContext(d3) == 11)
+    // reset: 手工置乱复位域字段后复位(L1354-1362 五字段 + dictInTmp)
+    let d2 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    d2.dStage = dstage_getCBlock
+    d2.dictBuf = Array<UInt8>(8, {_ => 0x5Au8})
+    d2.dictInTmp = true
+    d2.dictSize = 8
+    d2.skipChecksum = 1
+    d2.frameRemainingSize = 12345u64
+    LZ4F_resetDecompressionContext(d2)
+    @Assert(d2.dStage == dstage_getFrameHeader)
+    @Assert(d2.dictBuf.size == 0)
+    @Assert(!d2.dictInTmp)
+    @Assert(d2.dictSize == 0)
+    @Assert(d2.skipChecksum == 0)
+    @Assert(d2.frameRemainingSize == 0u64)
+    println("lz4f dctx lifecycle pins verified")
+}
+
+// 构造帧起 8 字节:4B 魔数(LE)+ FLG + 填充(headerSize 只读前 5 字节)
+private func lz4fMkHeader(magicLE: Array<UInt8>, flg: UInt8): Array<UInt8> {
+    let h = Array<UInt8>(8, {_ => 0u8})
+    h[0] = magicLE[0]
+    h[1] = magicLE[1]
+    h[2] = magicLE[2]
+    h[3] = magicLE[3]
+    h[4] = flg
+    return h
+}
+
+@Test
+func lz4fHeaderSizeTest(): Unit {
+    let magic = [0x04u8, 0x22u8, 0x4Du8, 0x18u8]      // LZ4F_MAGICNUMBER LE
+    // FLG 位:bit3=contentSize(+8)、bit0=dictID(+4),基址 minFHSize=7
+    @Assert(LZ4F_headerSize(lz4fMkHeader(magic, 0x60u8), 0, 8) == 7)
+    @Assert(LZ4F_headerSize(lz4fMkHeader(magic, 0x68u8), 0, 8) == 15)   // csz
+    @Assert(LZ4F_headerSize(lz4fMkHeader(magic, 0x61u8), 0, 8) == 11)   // did
+    @Assert(LZ4F_headerSize(lz4fMkHeader(magic, 0x69u8), 0, 8) == 19)   // csz+did
+    // skippable 魔数 0x184D2A50-5F:头长恒 8,后 4 字节任意
+    let skip50 = [0x50u8, 0x2Au8, 0x4Du8, 0x18u8]
+    let skip5F = [0x5Fu8, 0x2Au8, 0x4Du8, 0x18u8]
+    @Assert(LZ4F_headerSize(lz4fMkHeader(skip50, 0xFFu8), 0, 8) == 8)
+    @Assert(LZ4F_headerSize(lz4fMkHeader(skip5F, 0x00u8), 0, 8) == 8)
+    // 坏魔数 0x184D2205 → -13(frameType_unknown)且 isError
+    let bad = LZ4F_headerSize(lz4fMkHeader([0x05u8, 0x22u8, 0x4Du8, 0x18u8], 0x60u8), 0, 8)
+    @Assert(bad == -13)
+    @Assert(LZ4F_isError(bad))
+    // srcSize < 5 → -12(frameHeader_incomplete)
+    @Assert(LZ4F_headerSize(lz4fMkHeader(magic, 0x60u8), 0, 4) == -12)
+    // srcIdx 偏移读:帧起于缓冲中部(FLG=0x68 → 15)
+    let buf = Array<UInt8>(12, {_ => 0xEEu8})
+    buf[3] = 0x04u8
+    buf[4] = 0x22u8
+    buf[5] = 0x4Du8
+    buf[6] = 0x18u8
+    buf[7] = 0x68u8
+    @Assert(LZ4F_headerSize(buf, 3, 9) == 15)
+    println("lz4f headerSize pins verified")
+}
+
+@Test
+func lz4fDecompressOptionsTest(): Unit {
+    // 默认构造全 0(lz4frame.h L370-377)
+    let o = LZ4F_decompressOptions_t()
+    @Assert(o.stableDst == 0u32)
+    @Assert(o.skipChecksums == 0u32)
+    // 值语义:struct 拷贝后互不影响
+    var a = LZ4F_decompressOptions_t()
+    a.stableDst = 1u32
+    a.skipChecksums = 1u32
+    var c = a
+    c.stableDst = 0u32
+    c.skipChecksums = 0u32
+    @Assert(a.stableDst == 1u32)
+    @Assert(a.skipChecksums == 1u32)
+    println("lz4f decompressOptions defaults/copy pins verified")
+}
