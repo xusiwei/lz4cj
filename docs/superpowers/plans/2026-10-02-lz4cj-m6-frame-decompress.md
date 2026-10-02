@@ -178,6 +178,8 @@ public class LZ4F_dctx {
 
 ---
 
+- 修订记录:2026-10-02 终审评审修复(单提交):`lz4fDictPrefixAt` 内容窗口谓词不健全(反例:字典前缀输出几何 —— 输出区紧前是等值字典副本,数字邻接 + 内容等值但不同分配 → updateDict 外来数组延展 → 越界异常;C 指针邻接跨分配恒假),换代为分配同一性谓词(新增 `lz4fSameAllocAt` 双哨兵探针,lz4SameBuffer 一般化)+ updateDict 首两分支 C L1563-1569 同构(dictSize==0 构造性前缀延展);回归探针 `scripts/frame_decode_probe.c`(三几何对上游 0774d055 钉值)+ 三回归测试(RED→GREEN);随附 minors:兜底 break 出环、C L1881 行锚、CHANGELOG 终态断言措辞、README ×2 限定(场景 A)+ 偏差表两行、台账两 M7 行 + copySize 钳制改判可达未测;141/141 双绿,golden 门检数字不变。
+
 ## Self-Review 记录
 
 - 规格覆盖:设计 §4.5 解压清单(订正后 8 项)全承接——create/free/reset(T1)、headerSize(T1)、getFrameInfo/decompress/decompress_usingDict(T2)、getBlockSize(M5 复用)、isError 族(M5 复用);类型 LZ4F_decompressOptions_t(T1,reserved 省略登记);§4.3 规则 1 的两组元组签名(T2,逐字);§5.5 解压状态机/续传/stableDst/skipChecksums/skippable/拼接(T2-T3);§8.3 分片续传 + 损坏输入(T3-T4);§10 M6 验收(L2 往返 T2、L3 双向 T2/T3、L4 T4、双绿每任务);§4.5 订正落 T1 Step 3。isSkippedFrame/decompress_usingCDict 不存在于上游 → 订正移除(设计清单错误,非裁剪)。

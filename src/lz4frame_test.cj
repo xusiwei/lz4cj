@@ -3372,3 +3372,186 @@ func lz4fMultiBufferDecodeTest(): Unit {
     @Assert(d4.dStage == dstage_getFrameHeader)
     println("lz4f multi-buffer decode: updateDict/flushOut tail-save branches pinned")
 }
+
+/*-************************************
+*  M6 终审修复:前缀谓词分配同一性回归(探针 scripts/frame_decode_probe.c)
+**************************************/
+// 终审 Critical 的反例几何:旧内容窗口谓词(数字邻接 + 尾 64KB 逐字节
+// 等值)在"不同分配而内容等值"时假阳性 → updateDict 在外来字典数组上
+// 延展 dictSize → 后续谓词咨询/联合/尾部保存越界或并入陈旧字节。C 的
+// `dict + dictSize == dstPtr` 是跨分配恒假的指针邻接;修复后谓词为
+// 数字邻接 ∧ 分配同一(lz4fSameAllocAt 双哨兵探针)。三几何钉值均出自
+// 上游 0774d055 C 探针 fd(a/b/c),RED 证据:回退内容谓词 → (a) 块 2
+// 咨询 dict[65536] 越界异常、(b) 调用 2 外来延展断言失配。
+
+@Test
+func lz4fDictPrefixedOutputTest(): Unit {
+    // (a) 字典前缀输出:B[0..65536) = 字典副本,输出区 B+65536 —— 经典
+    // dict-prefixed-output 惯用法兼 stableDst 典礼几何(lz4frame.h:374)。
+    // C:块 1 extDict 读 D(跨分配指针不等)→ updateDict ≥64KB-in-dst
+    // 再基 dict=B+65536 → 块 2 同分配前缀;r=0 字节精确
+    let n: Int64 = 131072
+    let dd: Int64 = 65536
+    let input = Array<UInt8>(n, {_ => 0u8})
+    RDG_genBuffer(input, n, 0.50, 0.0, 1u32)
+    @Assert(XXH32(input, n, 0u32) == 0x52cddcf0u32)     // fd(a):A=RDG(131072,.50,1)
+    let dict = Array<UInt8>(dd, {_ => 0u8})
+    RDG_genBuffer(dict, dd, 0.50, 0.0, 0u32)
+    @Assert(XXH32(dict, dd, 0u32) == 0xc20f7bccu32)     // 与 fdt 行 1 输入同参,互证 RDG 奇偶
+    var prefs = LZ4F_preferences_t()
+    prefs.compressionLevel = 0
+    prefs.frameInfo.blockMode = LZ4F_blockLinked
+    let cap = LZ4F_compressFrameBound(n, Some(prefs))
+    let frame = Array<UInt8>(cap, {_ => 0u8})
+    let cctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+    var pos: Int64 = 0
+    pos += LZ4F_compressBegin_usingDict(cctx, frame, pos, cap - pos, dict, dd, Some(prefs))
+    pos += LZ4F_compressUpdate(cctx, frame, pos, cap - pos, input, 0, n,
+        Option<LZ4F_compressOptions_t>.None)
+    pos += LZ4F_compressEnd(cctx, frame, pos, cap - pos, Option<LZ4F_compressOptions_t>.None)
+    @Assert(pos == 77040)      // fd(a):C 帧尺寸钉值
+    let B = Array<UInt8>(dd + n, {_ => 0u8})
+    for (k in 0..dd) {
+        B[k] = dict[k]
+    }
+    let dctx = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (ret, consumed, written) = LZ4F_decompress_usingDict(dctx, B, dd, n, frame, 0, pos,
+        dict, dd, Option<LZ4F_decompressOptions_t>.None)
+    @Assert(ret == 0)          // fd(a):(0, 77040, 131072) —— 旧谓词此处越界异常
+    @Assert(consumed == 77040)
+    @Assert(written == 131072)
+    var eq = true
+    for (k in 0..n) {
+        if (B[dd + k] != input[k]) {
+            eq = false
+        }
+    }
+    if (!eq) {
+        println("DICT-PREFIX decode: bytes differ")
+    }
+    @Assert(eq)
+    @Assert(XXH32(B, n, 0u32, offset: dd) == 0x52cddcf0u32)
+    println("lz4f dict-prefixed output decode pins verified")
+}
+
+@Test
+func lz4fContentEqualSwitchTest(): Unit {
+    // (b) 内容等值换缓冲(stableDst 承诺几何):调用 1 解块 1 入 buf1
+    // (stableDst=1 跳尾部保存,字典留 out 侧);调用 2 换 buf2 并前置
+    // buf1 副本于 [0,65536) —— 数字邻接 + 内容等值 + 不同分配 → 谓词须
+    // 判否 → 块 2 extDict 实例化读旧 buf1(与 C 指针语义一致)、
+    // updateDict 走 ≥64KB-in-dst 再基;调用 3 完帧。旧谓词在调用 2
+    // 假阳性延展外来 buf1(dictSize=131072 > buf1 物理尾)
+    let n1: Int64 = 65536
+    let total: Int64 = 196608
+    let input = Array<UInt8>(total, {_ => 0u8})
+    RDG_genBuffer(input, total, 0.50, 0.0, 2u32)
+    @Assert(XXH32(input, total, 0u32) == 0xa0e50defu32)  // fd(b):A2=RDG(196608,.50,2)
+    var prefs = LZ4F_preferences_t()
+    prefs.compressionLevel = 0
+    prefs.frameInfo.blockMode = LZ4F_blockLinked
+    let (f, s) = lz4fFdmpFrame(prefs, input, total)
+    @Assert(s == 109295)       // fd(b):C 帧尺寸钉值
+    let cb1 = Int64(lz4fReadLE32(f, 7) & 0x7FFFFFFFu32)
+    @Assert(cb1 == 34669)      // fd(b):块 1 压缩尺寸
+    var stable = LZ4F_decompressOptions_t()
+    stable.stableDst = 1u32
+    // 调用 1:块 1 → buf1(4, 34680, 65536;buf1xxh=8b917649)
+    let buf1 = Array<UInt8>(n1, {_ => 0u8})
+    let dctx = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (r1, c1, w1) = LZ4F_decompress(dctx, buf1, 0, n1, f, 0, 11 + cb1, Some(stable))
+    @Assert(r1 == 4 && c1 == 11 + cb1 && w1 == n1)
+    @Assert(XXH32(buf1, n1, 0u32) == 0x8b917649u32)
+    @Assert(!dctx.dictInTmp && dctx.dictSize == n1)     // 构造性前缀延展,字典留 out 侧
+    // 调用 2:换 buf2,历史副本前置(内容等值不同分配)
+    let cb2 = Int64(lz4fReadLE32(f, 11 + cb1) & 0x7FFFFFFFu32)
+    let buf2 = Array<UInt8>(total, {_ => 0u8})
+    for (k in 0..n1) {
+        buf2[k] = buf1[k]
+    }
+    let (r2, c2, w2) = LZ4F_decompress(dctx, buf2, n1, n1, f, 11 + cb1, 4 + cb2, Some(stable))
+    @Assert(r2 == 4 && c2 == 4 + cb2 && w2 == n1)       // fd(b):(4, 36649, 65536)
+    @Assert(!dctx.dictInTmp && dctx.dictIdx == n1 && dctx.dictSize == n1)
+    // ↑ ≥64KB-in-dst 再基至 buf2@65536(旧谓词:外来延展 dictIdx=0/dictSize=131072)
+    // 调用 3:块 3 同分配前缀直解 + 完帧(0, 37966, 65536;outxxh=d89227d1)
+    let (r3, c3, w3) = LZ4F_decompress(dctx, buf2, 131072, n1, f, 11 + cb1 + 4 + cb2,
+        s - 11 - cb1 - 4 - cb2, Some(stable))
+    @Assert(r3 == 0 && c3 == s - 11 - cb1 - 4 - cb2 && w3 == n1)
+    var eq = true
+    for (k in 0..n1) {
+        if (buf1[k] != input[k]) {
+            eq = false
+        }
+    }
+    for (k in 0..(total - n1)) {
+        if (buf2[n1 + k] != input[n1 + k]) {
+            eq = false
+        }
+    }
+    if (!eq) {
+        println("CONTENT-EQUAL switch decode: bytes differ")
+    }
+    @Assert(eq)
+    @Assert(XXH32(buf2, total - n1, 0u32, offset: n1) == 0xd89227d1u32)
+    println("lz4f content-equal buffer switch pins verified")
+}
+
+@Test
+func lz4fDifferingSwitchControlTest(): Unit {
+    // (c) 异值换缓冲对照组:buf3[0,65536) 哨兵 0xA5 —— 数字邻接既非
+    // 同分配亦非同内容 → 谓词新旧两版皆否(路由与 C 一致,控制组)→
+    // 块 2 extDict 读旧 buf1c、updateDict 走 join 终局分支(dict 尾
+    // 35536B + dst 30000B 并置 tmpOut,dictSize=65536);C:帧 51156/
+    // cb1=33220/cb2=17917,全部成功
+    let n1: Int64 = 65536
+    let n2: Int64 = 30000
+    let total: Int64 = 95536
+    let input = Array<UInt8>(total, {_ => 0u8})
+    RDG_genBuffer(input, total, 0.50, 0.0, 3u32)
+    @Assert(XXH32(input, total, 0u32) == 0xdd172c4au32)  // fd(c):A3=RDG(95536,.50,3)
+    var prefs = LZ4F_preferences_t()
+    prefs.compressionLevel = 0
+    prefs.frameInfo.blockMode = LZ4F_blockLinked
+    let (f, s) = lz4fFdmpFrame(prefs, input, total)
+    @Assert(s == 51156)        // fd(c):C 帧尺寸钉值
+    let cb1 = Int64(lz4fReadLE32(f, 7) & 0x7FFFFFFFu32)
+    let cb2 = Int64(lz4fReadLE32(f, 11 + cb1) & 0x7FFFFFFFu32)
+    @Assert(cb1 == 33220 && cb2 == 17917)
+    var stable = LZ4F_decompressOptions_t()
+    stable.stableDst = 1u32
+    let noneOpt = Option<LZ4F_decompressOptions_t>.None
+    // 调用 1:块 1 → buf1c(4, 33231, 65536)
+    let buf1c = Array<UInt8>(n1, {_ => 0u8})
+    let dctx = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let (r1, c1, w1) = LZ4F_decompress(dctx, buf1c, 0, n1, f, 0, 11 + cb1, Some(stable))
+    @Assert(r1 == 4 && c1 == 11 + cb1 && w1 == n1)
+    @Assert(!dctx.dictInTmp && dctx.dictSize == n1)
+    // 调用 2:换 buf3(哨兵异值),块 2 直解(4, 17921, 30000)→ join 入 tmp
+    let buf3 = Array<UInt8>(131072, {_ => 0xA5u8})
+    let (r2, c2, w2) = LZ4F_decompress(dctx, buf3, n1, n1, f, 11 + cb1, 4 + cb2, Some(stable))
+    @Assert(r2 == 4 && c2 == 4 + cb2 && w2 == n2)       // fd(c):(4, 17921, 30000)
+    @Assert(dctx.dictInTmp && dctx.dictSize == 65536)   // join:preserveSize 35536 + 30000
+    // 调用 3:endmark(0, 4, 0;outxxh=cad77ab9);哨兵区未被触碰
+    let (r3, c3, w3) = LZ4F_decompress(dctx, buf3, n1 + n2, 131072 - n1 - n2, f,
+        11 + cb1 + 4 + cb2, 4, noneOpt)
+    @Assert(r3 == 0 && c3 == 4 && w3 == 0)
+    var eq = true
+    for (k in 0..n2) {
+        if (buf3[n1 + k] != input[n1 + k]) {
+            eq = false
+        }
+    }
+    if (!eq) {
+        println("DIFFERING switch decode: bytes differ")
+    }
+    @Assert(eq)
+    @Assert(XXH32(buf3, n2, 0u32, offset: n1) == 0xcad77ab9u32)
+    var pre = true
+    for (k in 0..n1) {
+        if (buf3[k] != 0xA5u8) {
+            pre = false
+        }
+    }
+    @Assert(pre)
+    println("lz4f differing-content switch control pins verified")
+}

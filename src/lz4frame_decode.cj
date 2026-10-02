@@ -325,11 +325,43 @@ public func LZ4F_getFrameInfo(dctx: LZ4F_dctx, srcBuf: Array<UInt8>, srcIdx: Int
 /*-************************************
 *  updateDict + 前缀谓词 (lz4frame.c L1558-1623)
 **************************************/
-/* lz4fDictPrefixAt:C `dict + dictSize == dstPtr` 前缀连续判定的内容窗口
-   等价(翻译表 ruling 7):dictIdx+dictSize == dstPos 且尾部
-   min(dictSize, 64KB) 字节逐字节相等。健全性(输出不变式):假阳性 ⇒
-   历史字节相同 ⇒ 解码输出相同;假阴性 ⇒ 走 join-into-tmp 拷贝路径 ⇒
-   输出相同仅性能差异。纯性能选择。dstPos-k ≥ 0 由 dictIdx ≥ 0 蕴含。 */
+/* lz4fSameAllocAt:任意偏移的分配同一性探针(lz4SameBuffer 的一般化,
+   src/lz4.cj:933 先例):仓颉无引用同一性比较,而 C 的
+   `dict + dictSize == dstPtr` 是跨分配恒假的指针邻接,须以"同一储存
+   单元"判定承载。探针(双哨兵,先例同式):经 buf1[idx1] 依次写入两个
+   恒相异的瞬态哨兵(save^0xFF、save^0xAA)、各自经 buf2[idx2] 读回、
+   即刻复原——双读均见到各自哨兵 ⟺ 同一分配。不可能论证:两哨兵恒相
+   异(0xFF != 0xAA),探针期间 buf2 从未被写,不同分配的 buf2[idx2]
+   是单值读位,不可能先后等于两个相异常数;同一分配则 buf2[idx2] 即
+   buf1[idx1],写入即见。与 lz4SameBuffer 的差异:不要求两缓冲尺寸
+   相等(判定的是 idx1/idx2 是否同一储存单元,数字邻接成立时两者为同
+   一数值偏移)。前置:idx1 ∈ [0, buf1.size)、idx2 ∈ [0, buf2.size)
+   (调用方数字邻接 + 字典窗界内不变量保证);探针内仅整数异或与数组
+   访问,不分配、不可抛出(下标界内),单线程契约(同先例)。 */
+internal func lz4fSameAllocAt(buf1: Array<UInt8>, idx1: Int64, buf2: Array<UInt8>, idx2: Int64): Bool {
+    let save: UInt8 = buf1[idx1]
+    let sent1: UInt8 = save ^ 0xFFu8    /* 哨兵一(必不同于原值) */
+    buf1[idx1] = sent1
+    let vis1: Bool = (buf2[idx2] == sent1)
+    let sent2: UInt8 = save ^ 0xAAu8    /* 哨兵二(与哨兵一恒相异) */
+    buf1[idx1] = sent2
+    let vis2: Bool = (buf2[idx2] == sent2)
+    buf1[idx1] = save                   /* 即刻复原原值 */
+    return vis1 && vis2                 /* 双读皆中 ⟺ 同一分配 */
+}
+
+/* lz4fDictPrefixAt:C `dict + dictSize == dstPtr` 前缀连续判定
+   (updateDict L1568 延展与解码实例化 L1932/L1977 择取共用):
+   dictIdx+dictSize == dstPos(数字邻接)且 dictBuf 与 dstArr 同一分配
+   (lz4fSameAllocAt)。分配同一 + 数字邻接 ⇒ 字典窗 [dictIdx,
+   dictIdx+dictSize) 与 dstArr[dstPos-dictSize, dstPos) 是同一内存,
+   内容比较冗余(且省 O(64K) 扫描);反之 C 指针邻接对不同分配恒假 ——
+   内容相等的不同分配是内容谓词的反例(终审 Critical:字典前缀输出
+   几何,输出区紧前是等值字典副本 —— 假阳性令 updateDict 在外来数组上
+   延展 dictSize,后续谓词咨询/联合/尾部保存越界或并入陈旧字节,
+   PoC:decompress_usingDict 解码至 B+65536 抛 IndexOutOfBoundsException,
+   C 同几何字节精确;见 lz4fDictPrefixedOutputTest)。前缀 vs extDict
+   实例化输出不变式,纯性能选择;dictSize ≤ 0 早退保留(通用谓词)。 */
 internal func lz4fDictPrefixAt(dctx: LZ4F_dctx, dstArr: Array<UInt8>, dstPos: Int64): Bool {
     if (dctx.dictBuf.size == 0 || dctx.dictSize <= 0) {
         return false
@@ -337,15 +369,7 @@ internal func lz4fDictPrefixAt(dctx: LZ4F_dctx, dstArr: Array<UInt8>, dstPos: In
     if (dctx.dictIdx + dctx.dictSize != dstPos) {
         return false
     }
-    let k: Int64 = if (dctx.dictSize < 65536) { dctx.dictSize } else { 65536 }
-    var i: Int64 = 0
-    while (i < k) {
-        if (dctx.dictBuf[dctx.dictIdx + dctx.dictSize - k + i] != dstArr[dstPos - k + i]) {
-            return false
-        }
-        i += 1
-    }
-    return true
+    return lz4fSameAllocAt(dctx.dictBuf, dctx.dictIdx + dctx.dictSize - 1, dstArr, dstPos - 1)
 }
 
 /* lz4fUpdateDict(LZ4F_updateDict,lz4frame.c L1558-1623,仅 linked 模式):
@@ -364,10 +388,13 @@ internal func lz4fUpdateDict(dctx: LZ4F_dctx, dstBuf: Array<UInt8>, dstPos: Int6
         dctx.dictInTmp = false
     }
 
-    /* L1568:dict + dictSize == dstPtr 前缀延展(指针比较 → 谓词;
-       dictInTmp 时 C 指针比较对不同分配恒假,前置 !dictInTmp 对齐) */
-    if (!dctx.dictInTmp && dctx.dictBuf.size != 0 &&
-            lz4fDictPrefixAt(dctx, dstBuf, dstPos)) {
+    /* L1568:dict + dictSize == dstPtr 前缀延展(指针比较 → 谓词)。
+       dictSize==0 时 L1565 刚赋值 dictBuf=dstBuf/dictIdx=dstPos,
+       dict+0==dstPtr 构造性成立(与 C 逐行同构,不探针);dictSize>0
+       进入时以 lz4fDictPrefixAt(数字邻接 ∧ 分配同一)判定;dictInTmp
+       前置对齐 C 指针比较对不同分配(tmpOutBuffer vs dst)恒假 */
+    if (dctx.dictSize == 0 ||
+            (!dctx.dictInTmp && lz4fDictPrefixAt(dctx, dstBuf, dstPos))) {
         dctx.dictSize += dstSize
         return
     }
@@ -756,7 +783,7 @@ internal func lz4fDecompressBody(dctx: LZ4F_dctx, dstBuf: Array<UInt8>, dstIdx: 
                         selBuf = srcBuf                               /* 整块直读 */
                         selIdx = srcPos
                         srcPos += dctx.tmpInTarget
-                        /* C L1885 `if (0)`:恒跳过 storeCBlock */
+                        /* C L1881 `if (0)`:恒跳过 storeCBlock */
                     }
                 }
                 if (dctx.dStage == dstage_storeCBlock) {              /* `if (0)`/暂存可跳过式 */
@@ -981,6 +1008,7 @@ internal func lz4fDecompressBody(dctx: LZ4F_dctx, dstBuf: Array<UInt8>, dstIdx: 
                 LZ4F_resetDecompressionContext(dctx)
                 break
             }
+            doAnotherStage = false    /* 终审修复:防御退出须同时出外层环 */
             break    /* 不可达:dStage ∈ [0,14] 全覆盖,防御退出 */
         }
     }
@@ -1002,10 +1030,11 @@ internal func lz4fDecompressBody(dctx: LZ4F_dctx, dstBuf: Array<UInt8>, dstIdx: 
             }
             if (copySize > preserveSize) {
                 copySize = preserveSize
-                /* 仓颉侧结构不可达(M6 收尾 cjcov 归类):out 侧字典经
-                   span/≥64K prefix 建立 ⇒ tmpOut=65536 ≥ copySize 恒立;
-                   C 可经 dictSize==0 指针邻接延展到达,内容窗口谓词将其
-                   路由至输出等价的 join 路径(设计 §4.3 规则 4) */
+                /* 钳制与 C L2125 同构;终审修复后可达:构造性前缀延展使
+                   小段字典可留 out 侧(dictSize<64KB),后续块解码入
+                   tmpOut 后止于 flushOut ⇒ preserveSize=tmpOut=dictSize
+                   < copySize=65536-tmpOutSize 可成立(单调用紧容量或
+                   stableDst 跨调用几何;M6 套件未覆盖,台账登记 M7) */
             }
             var i: Int64 = 0
             while (i < copySize) {
