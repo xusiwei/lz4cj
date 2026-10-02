@@ -79,8 +79,8 @@ public class LZ4F_cctx {
   - `public class LZ4F_cctx`(字段见 Global Constraints);`public func LZ4F_createCompressionContext(version: UInt32): LZ4F_cctx`(version 仅存字段);`public func LZ4F_freeCompressionContext(cctx: LZ4F_cctx): Int64`(恒 0)
 - Consumes: xxhash.cj 的 XXH32(internal);lz4hc.cj 的 LZ4HC_CLEVEL_MAX
 
-- [ ] **Step 1: corpus 政策落地(独立提交)**:`.gitignore` 追加 `corpus/`;`git rm -r --cached corpus/`(工作区保留);提交 `M5: untrack corpus binaries - regenerate via scripts/gen_golden.sh`(政策依据见 Global Constraints;scripts/ 内生成脚本保持跟踪)
-- [ ] **Step 2: 失败测试(src/lz4frame_test.cj)**:
+- [x] **Step 1: corpus 政策落地(独立提交)**:`.gitignore` 追加 `corpus/`;`git rm -r --cached corpus/`(工作区保留);提交 `M5: untrack corpus binaries - regenerate via scripts/gen_golden.sh`(政策依据见 Global Constraints;scripts/ 内生成脚本保持跟踪)
+- [x] **Step 2: 失败测试(src/lz4frame_test.cj)**:
   - `lz4fErrorTest`:isError(-1)..isError(-23) 全真;isError(-24) 假(上游边沿);isError(0)/isError(1)/isError(10957) 假;getErrorName(-1)=="ERROR_GENERIC"、(-11)=="ERROR_dstMaxSize_tooSmall"、(-14)=="ERROR_frameSize_wrong"、(-20)=="ERROR_compressionState_uninitialized";getErrorName(0)/getErrorName(5)=="Unspecified error code";getErrorCode(0)==0、getErrorCode(7)==7、getErrorCode(-3)==3
   - `lz4fVersionTest`:getVersion()==100;compressionLevel_max()==12
   - `lz4fGetBlockSizeTest`:0→65536、4→65536、5→262144、6→1048576、7→4194304;3/8/-1→-2
@@ -89,10 +89,10 @@ public class LZ4F_cctx {
   - `lz4fHeaderChecksumTest`:两组构造头(默认 7B / csz+did 19B)→ (XXH32(头,len,0)>>8)&0xFF 钉值(经本仓 XXH32 计算,交叉自证)
   - `lz4fCctxLifecycleTest`:create(100) → cStage==0、version==100、tmpBuff.size==0、lz4CtxAlloc==0、lz4CtxType==0、maxBufferSize==0;free==0
   - `lz4fPrefsDefaultsTest`:LZ4F_preferences_t() 全字段 == C INIT 逐字段;LZ4F_compressOptions_t().stableSrc==0;struct 拷贝独立性
-- [ ] **Step 3: RED → 实现**(对照 L189-476、L884-890、lz4frame.h 枚举/结构;错误名表 25 项;isError 按约束公式)
-- [ ] **Step 4: GREEN(双工具链,93+新增,既有不回归)**
-- [ ] **Step 5: design.md 订正批次**:①§4.5 frame 清单补 `LZ4F_compressBegin_usingDict`(lz4frame.h L561,v1.10 稳定,原清单漏记);②§4.6 显式不移植表补:LZ4F_customMem 族 + `LZ4F_createCompressionContext_advanced`/`LZ4F_createCDict_advanced`(GC 分配模型)、`LZ4F_cctx_size`/`LZ4F_dctx_size`(C 布局信息性 API)、`LZ4F_ENABLE_OBSOLETE_ENUMS` 旧别名(上游默认关闭);③§4.5 类型条目注记:五枚举以 Int32 常量族承载 + reserved 字段省略(实测依据);④§8.2 注记:corpus 不入库(2026-10-01 裁定),由 scripts/gen_golden.sh 本地再生
-- [ ] **Step 6: Commit** `M5: frame skeleton - types, error family, bounds and cctx lifecycle`
+- [x] **Step 3: RED → 实现**(对照 L189-476、L884-890、lz4frame.h 枚举/结构;错误名表 25 项;isError 按约束公式)
+- [x] **Step 4: GREEN(双工具链,93+新增,既有不回归)**
+- [x] **Step 5: design.md 订正批次**:①§4.5 frame 清单补 `LZ4F_compressBegin_usingDict`(lz4frame.h L561,v1.10 稳定,原清单漏记);②§4.6 显式不移植表补:LZ4F_customMem 族 + `LZ4F_createCompressionContext_advanced`/`LZ4F_createCDict_advanced`(GC 分配模型)、`LZ4F_cctx_size`/`LZ4F_dctx_size`(C 布局信息性 API)、`LZ4F_ENABLE_OBSOLETE_ENUMS` 旧别名(上游默认关闭);③§4.5 类型条目注记:五枚举以 Int32 常量族承载 + reserved 字段省略(实测依据);④§8.2 注记:corpus 不入库(2026-10-01 裁定),由 scripts/gen_golden.sh 本地再生
+- [x] **Step 6: Commit** `M5: frame skeleton - types, error family, bounds and cctx lifecycle`
 
 ---
 
@@ -111,17 +111,17 @@ public class LZ4F_cctx {
 - Consumes: T1 全部;LZ4_resetStream_fast/LZ4_attach_dictionary/LZ4_loadDict(lz4.cj);LZ4_resetStreamHC_fast/LZ4_attach_HC_dictionary/LZ4_loadDictHC/LZ4_favorDecompressionSpeed(lz4hc.cj);XXH32_reset/one-shot(xxhash.cj)
 - 注:LZ4F_CDict 类 T4 落地,本任务 cdict 仅作 Option 透传(frhdr golden 无 cdict 行)
 
-- [ ] **Step 1: C golden 扩展**(gen_golden.sh 编译行加 `"$HOME/lz4/lib/lz4frame.c"`;gen_golden.c 加 `#define LZ4F_STATIC_LINKING_ONLY` + `#include "lz4frame.h"` + frhdr 节):
+- [x] **Step 1: C golden 扩展**(gen_golden.sh 编译行加 `"$HOME/lz4/lib/lz4frame.c"`;gen_golden.c 加 `#define LZ4F_STATIC_LINKING_ONLY` + `#include "lz4frame.h"` + frhdr 节):
   - `mode=frhdr` 10 行,行格式:`n=65536 mp=0.50 seed=0 mode=frhdr bs=<0|4|5|6|7> bm=<0|1> ccs=<0|1> bcs=<0|1> csz=<v> did=<v> lv=<L> size=<7|11|15|19> xxh32=.. xxh64=.. inxxh32=.. inxxh64=.. file=block/<idx>.lz4`(inxxh 为 RDG 输入摘要,格式统一;头字节即 artifact)
   - 行集(输入恒 A=(65536,0.50,0),逐行 fresh cctx + LZ4F_compressBegin(dst 19B)):①全默认(7B);②csz=65536(15B);③did=305419896(11B);④csz+did(19B);⑤ccs=1 bcs=1(7B);⑥bm=1(7B);⑦bs=5;⑧bs=6;⑨bs=7(各 7B);⑩lv=9(7B,头字节与①相同但钉 HC ctx 分配路径)
   - 门检:数据行 426+10=436,总行 436+18(注释 17+1)== 454,`grep -c '^#'`==18,`grep -c 'mode=frhdr'`==10
-- [ ] **Step 2: 失败测试**(lz4frame_test.cj):
+- [x] **Step 2: 失败测试**(lz4frame_test.cj):
   - `lz4fBeginHdrGoldenTest`:10 行按行字段重建 prefs → Begin → size + xxh32/64 + artifact 逐字节;并直接断言魔数字节 `04 22 4D 18`、默认 FLG==0x60、BD==(bsID&7)<<4、HC==lz4fHeaderChecksum
   - `lz4fBeginStateTest`:Begin 后 cStage==1;XXH32_digest(cctx.xxh)==0x02CC5D05(空输入,证 reset);缓冲四象限(af=1+bm=0→65536;af=1+bm=1→0;af=0+bs=4+bm=0→196608;af=0+bm=1→65536);ctxType(lv=0→1/lv=9→2);同一 cctx 连续 Begin lv9→lv0(alloc 保持 2、type 归 1、快流重建、两次头字节一致)与 lv0→lv9(alloc 1→2、HC 新建)
   - `lz4fBeginErrorTest`:dstCapacity=18 → -11 且 isError 真;getErrorName(-11)=="ERROR_dstMaxSize_tooSmall"
   - `lz4fBeginDictStateTest`:Begin_usingDict(A 切 4096B, lv=0) 后 cctx.lz4CtxFast 的 dictSize==4096(internal 可见性,预热 T4)
-- [ ] **Step 3: 实现**(对照 L657-876 逐行;头字节组装用安全索引直写 + XXH32;totalInSize=0 仅 csz 分支)
-- [ ] **Step 4: GREEN(双工具链)+ Commit** `M5: compressBegin family with header encoding and buffer management`
+- [x] **Step 3: 实现**(对照 L657-876 逐行;头字节组装用安全索引直写 + XXH32;totalInSize=0 仅 csz 分支)
+- [x] **Step 4: GREEN(双工具链)+ Commit** `M5: compressBegin family with header encoding and buffer management`
 
 ---
 
@@ -146,7 +146,7 @@ public class LZ4F_cctx {
     - `public func LZ4F_compressEnd(cctx, dstBuf, dstIdx: Int64, dstCapacity: Int64, cOptPtr: Option<LZ4F_compressOptions_t>): Int64`(L1224-1259:flush → 错误透传;endmark 4×0x00(dstCapacity<4 → -11);ccs → XXH32_digest LE32(dstCapacity<8 → -11);cStage=0;csz≠0 且 ≠totalInSize → -14)
 - Consumes: T1/T2 全部;LZ4_compress_fast_continue(lz4.cj 公开偏移);LZ4_compress_HC_continue(lz4hc.cj 公开偏移);LZ4_saveDict/saveDictHC;XXH32_update/digest
 
-- [ ] **Step 1: C golden 扩展**(frame 节,注释 1 条):
+- [x] **Step 1: C golden 扩展**(frame 节,注释 1 条):
   - `mode=frame` 27 行,行格式:`n=<n> mp=<mp> seed=<seed> mode=frame bs=<4..7> bm=<0|1> ccs=<0|1> bcs=<0|1> csz=<v> did=<v> lv=<L> af=<0|1> ss=<0|1> sc=<1shot|chunks<k>|flushmid|umix> size=<c> xxh32=.. xxh64=.. inxxh32=.. inxxh64=.. [file=block/<idx>.lz4]`
   - 场景(fresh cctx/行;dst 单缓冲 = LZ4F_compressFrameBound(n, &prefs),逐调用前移指针、容量 = 剩余;ss=1 行给 Update 传 {stableSrc=1}):
     1-7. A=(65536,0.50,0) sc=1shot:①默认(af=0 ss=0);②af=1;③ccs=1;④bcs=1;⑤ccs=1 bcs=1;⑥bm=1;⑦bm=1 ccs=1 bcs=1
@@ -157,14 +157,14 @@ public class LZ4F_cctx {
     24-26. D=(255,0.50,0)/G=(1,0.00,0)/F=(0,0.00,0) 默认 sc=1shot;F 行 ccs=1(Begin+End,空内容校验和 0x02CC5D05 钉入帧尾)
     27. A did=42 sc=1shot
   - 门检:数据行 436+27=463,总行 463+19(注释 18+1)== 482,`grep -c '^#'`==19,`grep -c 'mode=frame '`==27
-- [ ] **Step 2: 失败测试**(lz4frame_test.cj):
+- [x] **Step 2: 失败测试**(lz4frame_test.cj):
   - `lz4fFrameGoldenTest`:27 行重建 prefs/场景 → 逐字节 + digest + artifact;**独立块闭环**:bm=1 行解析自身输出(跳头 7/15B,按 4B 块头迭代至 endmark,最高位未压缩则原样切),每块 LZ4_decompress_safe == 对应输入切片;**ccs 闭环**:ccs=1 行尾 4B == XXH32(输入, seed 0)
   - `lz4fUpdateStateTest`:af=0 下 chunks5 前 2 次 Update 返回 0(全缓冲,26214×2<65536);tmpInSize 累积断言;csz 行 totalInSize 演进;A 默认行单 Update 返回 0(恰一块满,入 tmpBuff)、End flush 出块
   - `lz4fUpdateErrorTest`:未 Begin 先 Update → -20;dstCapacity=compressBound-1 → -11;End 时 csz=1(≠实际)→ -14 且 isError;错误后状态废弃(上游契约,不测复用)
   - `lz4fFlushQuirkTest`:fresh cctx(未 Begin)flush → 0(tmpInSize==0 先于 cStage 检查);Begin 后无数据 flush → 0;buffering 后 flush 返回块字节数;再 flush → 0
   - `lz4fUncompressedSemanticsTest`:bm=1 umix 序列仓颉侧重放 == C golden 行 22;uncompressedUpdate 于 af=0 下先缓冲后切模式 flush 的返回值序列钉住(0/块/0/块)
-- [ ] **Step 3: 实现**(lz4.cj/lz4hc.cj At 变体重构先行,跑既有全量确认不回归;再对照 L900-1259 逐行落 lz4frame.cj;XXH32_update 的 offset 具名参传 srcIdx)
-- [ ] **Step 4: GREEN(双工具链)+ Commit** `M5: block machinery, update/flush/end and frame golden matrix`
+- [x] **Step 3: 实现**(lz4.cj/lz4hc.cj At 变体重构先行,跑既有全量确认不回归;再对照 L900-1259 逐行落 lz4frame.cj;XXH32_update 的 offset 具名参传 srcIdx)
+- [x] **Step 4: GREEN(双工具链)+ Commit** `M5: block machinery, update/flush/end and frame golden matrix`
 
 ---
 
@@ -181,26 +181,26 @@ public class LZ4F_cctx {
   - `public func LZ4F_compressFrame(dstBuf: Array<UInt8>, dstIdx: Int64, dstCapacity: Int64, srcBuf: Array<UInt8>, srcSize: Int64, preferencesPtr: Option<LZ4F_preferences_t>): Int64`(L486-526 HEAPMODE=0 等价:临时 cctx(GC),version=LZ4F_VERSION,maxBufferSize=5MB 防分配 hack(注释:依赖 af=1+ss=1,tmpBuff 恒不分配);prefs==None 或 level<2 → 预置 LZ4_stream_t(initStream)+alloc=1/type=ctxFast;委托 usingCDict(None))
 - Consumes: T1-T3 全部;LZ4_loadDictSlow/LZ4_initStream(lz4.cj);LZ4_initStreamHC/LZ4_setCompressionLevel/LZ4_loadDictHC(lz4hc.cj)
 
-- [ ] **Step 1: C golden 扩展**(3 个新节,注释 3 条):
+- [x] **Step 1: C golden 扩展**(3 个新节,注释 3 条):
   - `mode=f1s` 8 行(行格式 `… mode=f1s lv=<L> [csz=<1|auto>] [did=<v>] [ccs=<1>] [bcs=<1>] size=… xxh32=… …`):①A prefs=NULL;②B=(65536,0.90,7) lv=3;③B lv=9;④B lv=12;⑤C lv=9(多块 linked 保留);⑥A csz=1(自动改写为 65536);⑦A did=305419896 ccs=1;⑧A lv=-3
   - `mode=fcd` 2 行(`… dd=<dictSize> dmp=0.50 dseed=<seed> lv=<L> [bm=1] …`):①A dd=65536 dseed=99 lv=0(单块,CDict 快路径);②C bm=1 dd=65536 dseed=99 lv=9(独立多块,每块 attach)
   - `mode=fdt` 2 行(同上字段,经 LZ4F_compressBegin_usingDict):①A dd=65536 dseed=99 lv=0 bm=0(linked,loadDict at Begin);②C dd=64 dseed=77 lv=9 bm=1(上游"仅首块用字典"怪癖钉住:首块有字典增益,后续块无)
   - 字典均 RDG(dmp=0.50, dseed);harness 每行 fresh cctx;dst = compressFrameBound
   - 门检:数据行 463+12=475,总行 475+22(注释 19+3)== 497,`grep -c '^#'`==22,`grep -c 'mode=f1s '`==8,`grep -c 'mode=fcd '`==2,`grep -c 'mode=fdt '`==2;corpus 体积复查 ≤ 8MB
-- [ ] **Step 2: 失败测试**(lz4frame_test.cj):
+- [x] **Step 2: 失败测试**(lz4frame_test.cj):
   - `lz4fFrameOneShotGoldenTest`:f1s 8 行逐字节 + digest + artifact(NULL prefs 行传 None)
   - `lz4fCDictGoldenTest`:fcd 2 行逐字节(字典 RDG 再生 → createCDict → compressFrame_usingCDict)
   - `lz4fBeginDictGoldenTest`:fdt 2 行逐字节(compressBegin_usingDict + Update + End)
   - `lz4fCDictUnitTest`:>64KB 字典(131072B)→ dictContent.size==65536(截尾);fastCtx/HCCtx 预消化断言(以同一输入块对比:createCDict 流的首块输出 == 直接 loadDict/loadDictHC 新流的首块输出,逐字节)
   - `lz4fFrameEquivalenceTest`(仓颉内自证):compressFrame(A, None) == Begin/Update/End 手工链(prefs{bm=1, af=1} + options{ss=1},由四联变换推导)逐字节;compressFrame(B, lv9) 同法
   - `lz4fFrameBoundGuaranteeTest`:对 golden 全部 f1s/frame 行参数,断言 产物 size ≤ compressFrameBound(n, prefs)
-- [ ] **Step 3: 实现**(对照 L430-526、L533-597;compressFrame 的 5MB hack 与预置 fast 流两分支逐条)
-- [ ] **Step 4: fuzz 扩展**(src/fuzz_test.cj)`fuzzFrameTest`:120 种子,每种子随机 {n∈[0,150000]、mp、bs∈{4,5,6,7}、bm、ccs、bcs、af、lv∈{-3,0,3,9,12}、ss、chunks∈[1,6]}:
+- [x] **Step 3: 实现**(对照 L430-526、L533-597;compressFrame 的 5MB hack 与预置 fast 流两分支逐条)
+- [x] **Step 4: fuzz 扩展**(src/fuzz_test.cj)`fuzzFrameTest`:120 种子,每种子随机 {n∈[0,150000]、mp、bs∈{4,5,6,7}、bm、ccs、bcs、af、lv∈{-3,0,3,9,12}、ss、chunks∈[1,6]}:
   - 场景 A:compressFrame 一次成帧;场景 B:Begin + 随机切分 Update(bm=1 时随机插入 uncompressedUpdate,含模式切换)+ 随机中途 flush + End
   - 断言:无异常逃逸;各调用返回非错误(容量恒给 compressFrameBound);总输出 == 各段返回和;endmark 4×0x00 位于 [total-4-ccs*4, total-4);ccs=1 → 尾 4B == XXH32(拼接输入);bm=1 → 逐块 LZ4_decompress_safe 闭环 == 输入切片;同参数二次运行逐字节确定
-- [ ] **Step 5: 覆盖率门禁**:`cjcov --html-details`(LTS);库源码行覆盖 ≥ 96%(基线 96.60%,frame 新增约 900-1000 行);未覆盖行逐条归类(防御/不可达/台账登记 M7)
-- [ ] **Step 6: 文档收尾**:progress.md(M5 行 + 证据数字 + API 计数更新 frame 压缩侧 14 函数 + 常量族 + 台账处置;下一步 M6);CHANGELOG 0.6.0(frame 压缩侧全量 + golden 475 行 + 覆盖率 + 双绿 + corpus 政策);README API 对照表 frame 节(枚举 Int32 承载、位置对签名、createCompressionContext 出参、reserved 省略、usingDict 仅首块语义注记)+ **golden 语料再生工作流一节**(corpus 不入库;`scripts/gen_golden.sh` 依赖 cc 与 ~/lz4@0774d055;测试摘要断言自足,artifacts 存在时才逐字节比对)
-- [ ] **Step 7: 全量门禁 `scripts/build_and_test.sh both` + Commit** `M5: CDict, one-shot frame family, fuzz and milestone wrap-up`
+- [x] **Step 5: 覆盖率门禁**:`cjcov --html-details`(LTS);库源码行覆盖 ≥ 96%(基线 96.60%,frame 新增约 900-1000 行);未覆盖行逐条归类(防御/不可达/台账登记 M7)
+- [x] **Step 6: 文档收尾**:progress.md(M5 行 + 证据数字 + API 计数更新 frame 压缩侧 14 函数 + 常量族 + 台账处置;下一步 M6);CHANGELOG 0.6.0(frame 压缩侧全量 + golden 475 行 + 覆盖率 + 双绿 + corpus 政策);README API 对照表 frame 节(枚举 Int32 承载、位置对签名、createCompressionContext 出参、reserved 省略、usingDict 仅首块语义注记)+ **golden 语料再生工作流一节**(corpus 不入库;`scripts/gen_golden.sh` 依赖 cc 与 ~/lz4@0774d055;测试摘要断言自足,artifacts 存在时才逐字节比对)
+- [x] **Step 7: 全量门禁 `scripts/build_and_test.sh both` + Commit** `M5: CDict, one-shot frame family, fuzz and milestone wrap-up`
 
 ---
 
