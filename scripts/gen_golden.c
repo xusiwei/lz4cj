@@ -18,6 +18,22 @@
 //         dict RDG(65536,0.50,99)) plus mode=fdt
 //         (LZ4F_compressBegin_usingDict frames, 2 rows: A linked loadDict /
 //         C bm=1 dd=64 first-block-only dict quirk) => 475 rows.
+// + M6 Task 3 decompression-probe rows: mode=fdmp (14 rows - getFrameInfo
+//         fresh-dctx pins x2, mid-frame getFrameInfo branches x3, fragmented
+//         resumption call sequences seq1/seq2 over a D ccs=1 bcs=1 bm=0
+//         frame, skippable seq3/seq4, 3-segment concat on one dctx, dict
+//         dseed=0 with-dict triple + no-dict -16 double pin, corrupted-frame
+//         error codes errhdr/errblk/errtail) => 489 rows.
+//
+// fdmp rows (M6 Task 3) extend the line format:
+//   n=<n> mp=<mp> seed=<seed> mode=fdmp sc=<id> [params] out=<c:w:h;...>
+//   code=<v> fi=<bs,bm,ccs,bcs,type,csz,did> outxxh32=<..>
+// - out= triples are consumed:written:hint per LZ4F_decompress call,
+//   semicolon-joined for call sequences (seq/cat rows); code= pins error
+//   codes (';'-joined for multi-probe rows); hint= pins a positive
+//   truncated-feed hint (errtail row 3rd probe); fi= is the decoded
+//   frameInfo; pre= records the setup-call triple (fimid/fimid2 rows);
+//   fdmp adds no artifacts (no file= fields, corpus budget unchanged)
 //
 // Matrix: sizes {0,1,255,4096,65535,65536,65537,131072} x mp {0.0,0.5,0.9,1.0}
 //         x lp {0.0} x seeds {0,7}; modes default / fast1 / fast8 / dest
@@ -184,6 +200,34 @@ static void writeArtifact(const unsigned char* out, int c, int idx) {
         fclose(f);
         printf(" file=block/%03d.lz4", idx);
     }
+}
+
+/* fdmp helper (M6 Task 3): build a full streaming frame (Begin +
+   Update(whole) + End) over buf[0..n) with raw row prefs - no
+   compressFrame transforms (af/bm land in the header as configured).
+   Returns a malloc'd frame, size via *sz. */
+static unsigned char* fdmpFrame(const unsigned char* buf, size_t n,
+                                const LZ4F_preferences_t* prefs, size_t* sz) {
+    size_t cap = LZ4F_compressFrameBound(n, prefs);
+    unsigned char* dst = (unsigned char*)malloc(cap);
+    LZ4F_cctx* cctx = NULL;
+    size_t pos = 0, r;
+    if (!dst) { fprintf(stderr, "oom\n"); exit(1); }
+    if (LZ4F_isError(LZ4F_createCompressionContext(&cctx, LZ4F_VERSION))) {
+        fprintf(stderr, "fdmp: createCompressionContext failed\n"); exit(1);
+    }
+    r = LZ4F_compressBegin(cctx, dst, cap, prefs);
+    if (LZ4F_isError(r)) { fprintf(stderr, "fdmp: begin failed\n"); exit(1); }
+    pos += r;
+    r = LZ4F_compressUpdate(cctx, dst + pos, cap - pos, buf, n, NULL);
+    if (LZ4F_isError(r)) { fprintf(stderr, "fdmp: update failed\n"); exit(1); }
+    pos += r;
+    r = LZ4F_compressEnd(cctx, dst + pos, cap - pos, NULL);
+    if (LZ4F_isError(r)) { fprintf(stderr, "fdmp: end failed\n"); exit(1); }
+    pos += r;
+    LZ4F_freeCompressionContext(cctx);
+    *sz = pos;
+    return dst;
 }
 
 int main(void) {
@@ -2290,6 +2334,630 @@ int main(void) {
             LZ4F_freeCompressionContext(cctx);
             free(buf); free(dictBuf); free(dst);
         }
+    }
+    /* fdmp rows (M6 Task 3): LZ4F decompression probes - fragmented
+       resumption call sequences, getFrameInfo branches, skippable frames,
+       frame concatenation on one dctx, dictionary decode double pins and
+       corrupted-frame error codes. Every out=/code=/hint=/fi= value is
+       produced by this C build (upstream 0774d055) and embedded verbatim
+       in the Cangjie lz4fDecodeFdmpGoldenTest. Frames come from the
+       streaming builder fdmpFrame (raw row prefs), except hand-built
+       skippable/corrupted buffers. Inputs: A=RDG(65536,0.50,0),
+       D=RDG(255,0.50,0), dict=RDG(65536,0.50,dseed). 14 rows, no
+       artifacts. */
+    {
+        const size_t nA = 65536, nD = 255;
+        unsigned char* A = (unsigned char*)malloc(nA);
+        unsigned char* D = (unsigned char*)malloc(nD);
+        unsigned char* out = (unsigned char*)malloc(nA);
+        if (!A || !D || !out) { fprintf(stderr, "oom\n"); return 1; }
+        RDG_genBuffer(A, nA, 0.50, 0.0, 0);
+        RDG_genBuffer(D, nD, 0.50, 0.0, 0);
+        printf("# fdmp=LZ4F decompression probes (fragmented resumption, getFrameInfo branches, "
+               "skippable, concat, dict double pin, corrupted frames); frames via streaming builder "
+               "(Begin+Update+End, raw prefs); A=RDG(n=65536 mp=0.50 lp=0.00 seed=0) D=RDG(n=255 "
+               "mp=0.50 lp=0.00 seed=0); out=consumed:written:hint triples, code=/hint= error and "
+               "positive probe pins, fi=bs,bm,ccs,bcs,type,csz,did; C-pinned, no artifacts\n");
+        /* rows 1-2: sc=fi - getFrameInfo on a fresh dctx, srcSize=19 */
+        {
+            LZ4F_preferences_t p;
+            LZ4F_dctx* dctx = NULL;
+            LZ4F_frameInfo_t fi;
+            size_t ssz, r, sz;
+            unsigned char* f;
+            memset(&p, 0, sizeof(p));
+            f = fdmpFrame(A, nA, &p, &sz);
+            if (LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) {
+                fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+            }
+            ssz = 19;
+            r = LZ4F_getFrameInfo(dctx, &fi, f, &ssz);
+            printf("n=%zu mp=0.50 seed=0 mode=fdmp sc=fi csz=0 did=0 out=%zu:%zu "
+                   "fi=%d,%d,%d,%d,%d,%llu,%u\n",
+                   nA, ssz, r,
+                   (int)fi.blockSizeID, (int)fi.blockMode, (int)fi.contentChecksumFlag,
+                   (int)fi.blockChecksumFlag, (int)fi.frameType,
+                   (unsigned long long)fi.contentSize, fi.dictID);
+            LZ4F_freeDecompressionContext(dctx);
+            free(f);
+            memset(&p, 0, sizeof(p));
+            p.frameInfo.contentSize = nA;
+            p.frameInfo.dictID = 305419896U;
+            f = fdmpFrame(A, nA, &p, &sz);
+            dctx = NULL;
+            if (LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) {
+                fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+            }
+            ssz = 19;
+            r = LZ4F_getFrameInfo(dctx, &fi, f, &ssz);
+            printf("n=%zu mp=0.50 seed=0 mode=fdmp sc=fi csz=%llu did=%u out=%zu:%zu "
+                   "fi=%d,%d,%d,%d,%d,%llu,%u\n",
+                   nA, (unsigned long long)nA, 305419896U, ssz, r,
+                   (int)fi.blockSizeID, (int)fi.blockMode, (int)fi.contentChecksumFlag,
+                   (int)fi.blockChecksumFlag, (int)fi.frameType,
+                   (unsigned long long)fi.contentSize, fi.dictID);
+            LZ4F_freeDecompressionContext(dctx);
+            free(f);
+        }
+        /* row 3: sc=fimid - A ccs=1 frame, decompress everything but the
+           4-byte content checksum, then getFrameInfo (already-decoded
+           branch: consumed=0, hint = NULL-decompress want) */
+        {
+            LZ4F_preferences_t p;
+            LZ4F_dctx* dctx = NULL;
+            LZ4F_frameInfo_t fi;
+            size_t ssz, dsz, r, r2, isz, sz;
+            unsigned char* f;
+            memset(&p, 0, sizeof(p));
+            p.frameInfo.contentChecksumFlag = 1;
+            f = fdmpFrame(A, nA, &p, &sz);
+            if (LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) {
+                fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+            }
+            ssz = sz - 4;
+            dsz = nA;
+            r = LZ4F_decompress(dctx, out, &dsz, f, &ssz, NULL);
+            isz = 19;
+            r2 = LZ4F_getFrameInfo(dctx, &fi, f, &isz);
+            printf("n=%zu mp=0.50 seed=0 mode=fdmp sc=fimid ccs=1 pre=%zu:%zu:%zu out=%zu:%zu "
+                   "fi=%d,%d,%d,%d,%d,%llu,%u\n",
+                   nA, ssz, dsz, r, isz, r2,
+                   (int)fi.blockSizeID, (int)fi.blockMode, (int)fi.contentChecksumFlag,
+                   (int)fi.blockChecksumFlag, (int)fi.frameType,
+                   (unsigned long long)fi.contentSize, fi.dictID);
+            LZ4F_freeDecompressionContext(dctx);
+            free(f);
+        }
+        /* row 4: sc=fimid2 - A frame, decompress only 6 bytes (mid
+           storeFrameHeader), then getFrameInfo -> alreadyStarted */
+        {
+            LZ4F_preferences_t p;
+            LZ4F_dctx* dctx = NULL;
+            LZ4F_frameInfo_t fi;
+            size_t ssz, dsz, r, r2, isz, sz;
+            unsigned char* f;
+            memset(&p, 0, sizeof(p));
+            f = fdmpFrame(A, nA, &p, &sz);
+            if (LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) {
+                fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+            }
+            ssz = 6;
+            dsz = 256;
+            r = LZ4F_decompress(dctx, out, &dsz, f, &ssz, NULL);
+            isz = 19;
+            r2 = LZ4F_getFrameInfo(dctx, &fi, f, &isz);
+            printf("n=%zu mp=0.50 seed=0 mode=fdmp sc=fimid2 pre=%zu:%zu:%zu code=%lld\n",
+                   nA, ssz, dsz, r, (long long)r2);
+            LZ4F_freeDecompressionContext(dctx);
+            free(f);
+        }
+        /* row 5: sc=fishort - getFrameInfo with srcSize=6 (hSize known,
+           incomplete) and srcSize=4 (< MIN_SIZE_TO_KNOW_HEADER_LENGTH) */
+        {
+            LZ4F_preferences_t p;
+            LZ4F_frameInfo_t fi;
+            size_t ssz, r1, r2, sz;
+            unsigned char* f;
+            memset(&p, 0, sizeof(p));
+            f = fdmpFrame(A, nA, &p, &sz);
+            LZ4F_dctx* d1 = NULL;
+            LZ4F_dctx* d2 = NULL;
+            if (LZ4F_isError(LZ4F_createDecompressionContext(&d1, LZ4F_VERSION)) ||
+                LZ4F_isError(LZ4F_createDecompressionContext(&d2, LZ4F_VERSION))) {
+                fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+            }
+            ssz = 6;
+            r1 = LZ4F_getFrameInfo(d1, &fi, f, &ssz);
+            ssz = 4;
+            r2 = LZ4F_getFrameInfo(d2, &fi, f, &ssz);
+            printf("n=%zu mp=0.50 seed=0 mode=fdmp sc=fishort code=%lld;%lld\n",
+                   nA, (long long)r1, (long long)r2);
+            LZ4F_freeDecompressionContext(d1);
+            LZ4F_freeDecompressionContext(d2);
+            free(f);
+        }
+        /* row 6: sc=seq1 - D ccs=1 bcs=1 bm=0 lv=0 frame, feeds
+           [1,6,11,55,55,rest] x dstCap=65536: storeFrameHeader resumption,
+           storeCBlock fragmentation, getSuffix */
+        {
+            LZ4F_preferences_t p;
+            LZ4F_dctx* dctx = NULL;
+            size_t sz, off = 0, written = 0;
+            unsigned char* f;
+            static const size_t kS1[6] = {1, 6, 11, 55, 55, (size_t)-1};
+            memset(&p, 0, sizeof(p));
+            p.frameInfo.contentChecksumFlag = 1;
+            p.frameInfo.blockChecksumFlag = 1;
+            p.frameInfo.blockMode = LZ4F_blockLinked;
+            p.compressionLevel = 0;
+            f = fdmpFrame(D, nD, &p, &sz);
+            if (LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) {
+                fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+            }
+            printf("n=%zu mp=0.50 seed=0 mode=fdmp sc=seq1 ccs=1 bcs=1 bm=0 lv=0 "
+                   "feed=1,6,11,55,55,rest out=", nD);
+            for (int k = 0; k < 6; k++) {
+                size_t chunk = kS1[k] == (size_t)-1 ? sz - off : kS1[k];
+                size_t ssz = chunk, dsz = nD - written;
+                size_t r = LZ4F_decompress(dctx, out + written, &dsz, f + off, &ssz, NULL);
+                printf("%s%zu:%zu:%zu", k ? ";" : "", ssz, dsz, r);
+                off += ssz;
+                written += dsz;
+                if (r == 0) break;
+            }
+            printf("\n");
+            if (off != sz || written != nD) {
+                fprintf(stderr, "fdmp seq1: incomplete off=%zu/%zu written=%zu/%zu\n",
+                        off, sz, written, nD);
+                return 1;
+            }
+            LZ4F_freeDecompressionContext(dctx);
+            free(f);
+        }
+        /* row 7: sc=seq2 - same frame geometry, feeds [30,30,30,30,blk,rest]
+           x caps [2,2,2,2,2,65536]: the four 30-byte calls accumulate the
+           header + block header + partial compressed block in tmpIn; call 5
+           (cap 2) completes the compressed block -> decode into tmpOut ->
+           flushOut partial (tmpOutStart=2, withinTmp updateDict) ->
+           tail-history save flushOut branch; call 6 (cap 65536) flushes the
+           remainder and closes the frame. NOTE: the task brief sketched
+           caps 2,2,2,2,65536,65536 - cap 5 is kept at 2 here so the
+           compressed block completes under a small dst, which is what
+           forces the flushOut-partial path this row exists to pin. */
+        {
+            LZ4F_preferences_t p;
+            LZ4F_dctx* dctx = NULL;
+            size_t sz, csize, blockEnd, off = 0, written = 0;
+            unsigned char* f;
+            memset(&p, 0, sizeof(p));
+            p.frameInfo.contentChecksumFlag = 1;
+            p.frameInfo.blockChecksumFlag = 1;
+            p.frameInfo.blockMode = LZ4F_blockLinked;
+            p.compressionLevel = 0;
+            f = fdmpFrame(D, nD, &p, &sz);
+            csize = (size_t)f[7] | ((size_t)f[8] << 8) | ((size_t)f[9] << 16) | ((size_t)f[10] << 24);
+            csize &= 0x7FFFFFFFU;
+            blockEnd = 11 + csize + 4;   /* bcs=1: + 4-byte block checksum */
+            if (LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) {
+                fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+            }
+            printf("n=%zu mp=0.50 seed=0 mode=fdmp sc=seq2 ccs=1 bcs=1 bm=0 lv=0 "
+                   "feed=30,30,30,30,blk,rest cap=2,2,2,2,2,65536 out=", nD);
+            for (int k = 0; k < 6; k++) {
+                size_t chunk = k < 4 ? 30 : (k == 4 ? blockEnd - off : sz - off);
+                size_t cap = k < 5 ? 2 : nD - written;
+                size_t ssz = chunk, dsz = cap;
+                size_t r = LZ4F_decompress(dctx, out + written, &dsz, f + off, &ssz, NULL);
+                printf("%s%zu:%zu:%zu", k ? ";" : "", ssz, dsz, r);
+                off += ssz;
+                written += dsz;
+                if (r == 0) break;
+            }
+            printf("\n");
+            if (off != sz || written != nD) {
+                fprintf(stderr, "fdmp seq2: incomplete off=%zu/%zu written=%zu/%zu\n",
+                        off, sz, written, nD);
+                return 1;
+            }
+            LZ4F_freeDecompressionContext(dctx);
+            free(f);
+        }
+        /* row 8: sc=seq3 - skippable magic 0x184D2A50 size 13 (zero
+           payload), feeds [3,2,6,rest]: getSFrameSize/storeSFrameSize
+           resumption + skipSkippable fragmentation */
+        {
+            unsigned char sf[21];
+            LZ4F_dctx* dctx = NULL;
+            size_t off = 0;
+            static const size_t kS3[4] = {3, 2, 6, (size_t)-1};
+            sf[0] = 0x50; sf[1] = 0x2A; sf[2] = 0x4D; sf[3] = 0x18;
+            sf[4] = 13; sf[5] = 0; sf[6] = 0; sf[7] = 0;
+            memset(sf + 8, 0, 13);
+            if (LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) {
+                fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+            }
+            printf("n=0 mp=0.00 seed=0 mode=fdmp sc=seq3 magic=0x184D2A50 ssize=13 "
+                   "feed=3,2,6,rest out=");
+            for (int k = 0; k < 4; k++) {
+                size_t chunk = kS3[k] == (size_t)-1 ? sizeof(sf) - off : kS3[k];
+                size_t ssz = chunk, dsz = 0;
+                size_t r = LZ4F_decompress(dctx, NULL, &dsz, sf + off, &ssz, NULL);
+                printf("%s%zu:%zu:%zu", k ? ";" : "", ssz, dsz, r);
+                off += ssz;
+                if (r == 0) break;
+            }
+            printf("\n");
+            if (off != sizeof(sf)) {
+                fprintf(stderr, "fdmp seq3: incomplete off=%zu/%zu\n", off, sizeof(sf));
+                return 1;
+            }
+            LZ4F_freeDecompressionContext(dctx);
+        }
+        /* row 9: sc=seq4 - skippable magic 0x184D2A5F size 0, single
+           whole-frame call */
+        {
+            unsigned char sf[8] = {0x5F, 0x2A, 0x4D, 0x18, 0, 0, 0, 0};
+            LZ4F_dctx* dctx = NULL;
+            size_t ssz = sizeof(sf), dsz = 0;
+            if (LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) {
+                fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+            }
+            size_t r = LZ4F_decompress(dctx, NULL, &dsz, sf, &ssz, NULL);
+            printf("n=0 mp=0.00 seed=0 mode=fdmp sc=seq4 magic=0x184D2A5F ssize=0 "
+                   "out=%zu:%zu:%zu\n", ssz, dsz, r);
+            LZ4F_freeDecompressionContext(dctx);
+        }
+        /* row 10: sc=cat - D ccs=1 frame + skippable(size=5) + D bcs=1
+           frame, decoded sequentially on ONE dctx (frame concatenation;
+           auto-reset at each segment boundary) */
+        {
+            LZ4F_preferences_t p1, p3;
+            LZ4F_dctx* dctx = NULL;
+            size_t sz1, sz3, written = 0;
+            unsigned char* f1;
+            unsigned char* f3;
+            unsigned char sf[13] = {0x50, 0x2A, 0x4D, 0x18, 5, 0, 0, 0, 0, 0, 0, 0, 0};
+            memset(&p1, 0, sizeof(p1));
+            p1.frameInfo.contentChecksumFlag = 1;
+            f1 = fdmpFrame(D, nD, &p1, &sz1);
+            memset(&p3, 0, sizeof(p3));
+            p3.frameInfo.blockChecksumFlag = 1;
+            f3 = fdmpFrame(D, nD, &p3, &sz3);
+            if (LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) {
+                fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+            }
+            printf("n=%zu mp=0.50 seed=0 mode=fdmp sc=cat out=", nD);
+            for (int k = 0; k < 3; k++) {
+                const unsigned char* seg = k == 0 ? f1 : (k == 1 ? sf : f3);
+                size_t segsz = k == 0 ? sz1 : (k == 1 ? sizeof(sf) : sz3);
+                size_t ssz = segsz, dsz = nA - written;
+                size_t r = LZ4F_decompress(dctx, out + written, &dsz, seg, &ssz, NULL);
+                printf("%s%zu:%zu:%zu", k ? ";" : "", ssz, dsz, r);
+                written += dsz;
+                if (k == 2 && r != 0) {
+                    fprintf(stderr, "fdmp cat: last segment r=%lld\n", (long long)r);
+                    return 1;
+                }
+            }
+            printf("\n");
+            if (written != 2 * nD) {
+                fprintf(stderr, "fdmp cat: written=%zu/%zu\n", written, 2 * nD);
+                return 1;
+            }
+            LZ4F_freeDecompressionContext(dctx);
+            free(f1);
+            free(f3);
+        }
+        /* row 11: sc=dict - A dd=65536 dseed=0 (dict content == input, so
+           the compressed block references the dict), lv=0 bm=0
+           compressBegin_usingDict frame: with-dict triple + no-dict code
+           double pin; the dseed=99 variant (fdt row 473 geometry) is probed
+           on stderr for the Cangjie T2-deferred no-dict assertion */
+        {
+            const size_t dd = 65536;
+            unsigned char* dict0 = (unsigned char*)malloc(dd);
+            unsigned char* dict99 = (unsigned char*)malloc(dd);
+            unsigned char* out2 = (unsigned char*)malloc(nA);
+            size_t dictTri[3] = {0, 0, 0};
+            unsigned dictXxh = 0;
+            long long dictNoDictCode = 0;
+            if (!dict0 || !dict99 || !out2) { fprintf(stderr, "oom\n"); return 1; }
+            RDG_genBuffer(dict0, dd, 0.5, 0.0, 0);
+            RDG_genBuffer(dict99, dd, 0.5, 0.0, 99);
+            for (int v = 0; v < 2; v++) {
+                LZ4F_preferences_t p;
+                const unsigned char* dv = v == 0 ? dict0 : dict99;
+                size_t cap, pos = 0, sz, ssz, dsz, r;
+                unsigned char* f;
+                LZ4F_cctx* cctx = NULL;
+                LZ4F_dctx* dctx = NULL;
+                memset(&p, 0, sizeof(p));
+                p.compressionLevel = 0;
+                p.frameInfo.blockMode = LZ4F_blockLinked;
+                cap = LZ4F_compressFrameBound(nA, &p);
+                f = (unsigned char*)malloc(cap);
+                if (!f) { fprintf(stderr, "oom\n"); return 1; }
+                if (LZ4F_isError(LZ4F_createCompressionContext(&cctx, LZ4F_VERSION))) {
+                    fprintf(stderr, "fdmp: createCompressionContext failed\n"); return 1;
+                }
+                pos = LZ4F_compressBegin_usingDict(cctx, f, cap, dv, dd, &p);
+                if (LZ4F_isError(pos)) { fprintf(stderr, "fdmp: begin_usingDict failed\n"); return 1; }
+                r = LZ4F_compressUpdate(cctx, f + pos, cap - pos, A, nA, NULL);
+                if (LZ4F_isError(r)) { fprintf(stderr, "fdmp: update failed\n"); return 1; }
+                pos += r;
+                r = LZ4F_compressEnd(cctx, f + pos, cap - pos, NULL);
+                if (LZ4F_isError(r)) { fprintf(stderr, "fdmp: end failed\n"); return 1; }
+                pos += r;
+                sz = pos;
+                LZ4F_freeCompressionContext(cctx);
+                if (v == 0) {
+                    /* with dict */
+                    if (LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) {
+                        fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+                    }
+                    ssz = sz;
+                    dsz = nA;
+                    r = LZ4F_decompress_usingDict(dctx, out, &dsz, f, &ssz, dict0, dd, NULL);
+                    if (r != 0 || ssz != sz || dsz != nA) {
+                        fprintf(stderr, "fdmp dict: with-dict probe r=%zu c=%zu/%zu w=%zu/%zu\n",
+                                r, ssz, sz, dsz, nA);
+                        return 1;
+                    }
+                    dictTri[0] = ssz;
+                    dictTri[1] = dsz;
+                    dictTri[2] = r;
+                    dictXxh = XXH32(out, nA, 0);
+                }
+                /* no dict, both variants */
+                {
+                    LZ4F_dctx* d2 = NULL;
+                    if (LZ4F_isError(LZ4F_createDecompressionContext(&d2, LZ4F_VERSION))) {
+                        fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+                    }
+                    ssz = sz;
+                    dsz = nA;
+                    r = LZ4F_decompress(d2, out2, &dsz, f, &ssz, NULL);
+                    if (v == 0) {
+                        dictNoDictCode = (long long)r;
+                    } else {
+                        fprintf(stderr, "fdmp dict: dseed=99 frame size=%zu no-dict r=%lld "
+                                "(Cangjie T2-deferred pin)\n", sz, (long long)r);
+                    }
+                    LZ4F_freeDecompressionContext(d2);
+                }
+                if (v == 0) {
+                    LZ4F_freeDecompressionContext(dctx);
+                }
+                free(f);
+            }
+            printf("n=%zu mp=0.50 seed=0 mode=fdmp sc=dict dd=%zu dseed=0 lv=0 bm=0 "
+                   "out=%zu:%zu:%zu code=%lld outxxh32=%08x\n",
+                   nA, dd, dictTri[0], dictTri[1], dictTri[2], dictNoDictCode, dictXxh);
+            free(dict0);
+            free(dict99);
+            free(out2);
+        }
+        /* row 12: sc=errhdr - 5 corrupted headers (bad magic / FLG
+           version=2 / FLG reserved bit / BD bsID=3 / bad HC byte) */
+        {
+            long long codes[5];
+            for (int v = 0; v < 5; v++) {
+                unsigned char h[19];
+                LZ4F_dctx* dctx = NULL;
+                size_t ssz, dsz, r;
+                memset(h, 0, sizeof(h));
+                h[0] = 0x04; h[1] = 0x22; h[2] = 0x4D; h[3] = 0x18;
+                h[4] = 0x60; h[5] = 0x40; h[6] = 0;
+                if (v == 0) h[3] = 0x05;
+                else if (v == 1) h[4] = 0x80;
+                else if (v == 2) h[4] = 0x62;
+                else if (v == 3) h[5] = 0x30;
+                else h[6] = (unsigned char)(((XXH32(h, 2, 0) >> 8) & 0xFF) ^ 0xFF);
+                if (LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) {
+                    fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+                }
+                ssz = 19;
+                dsz = nA;
+                r = LZ4F_decompress(dctx, out, &dsz, h, &ssz, NULL);
+                codes[v] = (long long)r;
+                if (ssz != 0 || dsz != 0) {
+                    fprintf(stderr, "fdmp errhdr: error contract violated v=%d c=%zu w=%zu\n",
+                            v, ssz, dsz);
+                    return 1;
+                }
+                LZ4F_freeDecompressionContext(dctx);
+            }
+            printf("n=%zu mp=0.50 seed=0 mode=fdmp sc=errhdr code=%lld;%lld;%lld;%lld;%lld\n",
+                   nA, codes[0], codes[1], codes[2], codes[3], codes[4]);
+        }
+        /* row 13: sc=errblk - A frame with the block-size field patched to
+           65537 (> maxBlockSize) -> -2; A bcs=1 frame with the block
+           checksum tail byte flipped -> -7 */
+        {
+            long long c1, c2;
+            LZ4F_preferences_t p;
+            size_t sz, csize, ssz, dsz, r;
+            unsigned char* f;
+            memset(&p, 0, sizeof(p));
+            f = fdmpFrame(A, nA, &p, &sz);
+            f[7] = 0x01; f[8] = 0x00; f[9] = 0x00; f[10] = 0x01;   /* 65537 LE */
+            {
+                LZ4F_dctx* dctx = NULL;
+                if (LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) {
+                    fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+                }
+                ssz = sz;
+                dsz = nA;
+                r = LZ4F_decompress(dctx, out, &dsz, f, &ssz, NULL);
+                c1 = (long long)r;
+                LZ4F_freeDecompressionContext(dctx);
+            }
+            free(f);
+            memset(&p, 0, sizeof(p));
+            p.frameInfo.blockChecksumFlag = 1;
+            f = fdmpFrame(A, nA, &p, &sz);
+            csize = (size_t)f[7] | ((size_t)f[8] << 8) | ((size_t)f[9] << 16) | ((size_t)f[10] << 24);
+            csize &= 0x7FFFFFFFU;
+            f[11 + csize] ^= 0xFF;
+            {
+                LZ4F_dctx* dctx = NULL;
+                if (LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) {
+                    fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+                }
+                ssz = sz;
+                dsz = nA;
+                r = LZ4F_decompress(dctx, out, &dsz, f, &ssz, NULL);
+                c2 = (long long)r;
+                LZ4F_freeDecompressionContext(dctx);
+            }
+            free(f);
+            printf("n=%zu mp=0.50 seed=0 mode=fdmp sc=errblk code=%lld;%lld\n", nA, c1, c2);
+        }
+        /* row 14: sc=errtail - A ccs=1 frame with the tail CRC flipped ->
+           -18; csz=60000 header + csz=0 A-frame body decoded to completion
+           -> -14 (frameRemainingSize != 0 at getSuffix); A default frame
+           truncated at half feed -> positive hint (pinned) */
+        {
+            long long c1, c2;
+            size_t hint3;
+            LZ4F_preferences_t p;
+            size_t sz, ssz, dsz, r;
+            unsigned char* f;
+            memset(&p, 0, sizeof(p));
+            p.frameInfo.contentChecksumFlag = 1;
+            f = fdmpFrame(A, nA, &p, &sz);
+            f[sz - 1] ^= 0xFF;
+            {
+                LZ4F_dctx* dctx = NULL;
+                if (LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) {
+                    fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+                }
+                ssz = sz;
+                dsz = nA;
+                r = LZ4F_decompress(dctx, out, &dsz, f, &ssz, NULL);
+                c1 = (long long)r;
+                LZ4F_freeDecompressionContext(dctx);
+            }
+            free(f);
+            /* csz=60000 frankenframe: 15B header + csz=0 frame body */
+            {
+                LZ4F_cctx* cctx = NULL;
+                LZ4F_preferences_t ph;
+                unsigned char hdr[19];
+                size_t hb, sz0, fksz;
+                unsigned char* f0;
+                unsigned char* fk;
+                memset(&ph, 0, sizeof(ph));
+                ph.frameInfo.contentSize = 60000;
+                memset(&p, 0, sizeof(p));
+                f0 = fdmpFrame(A, nA, &p, &sz0);
+                if (LZ4F_isError(LZ4F_createCompressionContext(&cctx, LZ4F_VERSION))) {
+                    fprintf(stderr, "fdmp: createCompressionContext failed\n"); return 1;
+                }
+                hb = LZ4F_compressBegin(cctx, hdr, sizeof(hdr), &ph);
+                if (LZ4F_isError(hb) || hb != 15) {
+                    fprintf(stderr, "fdmp: errtail begin hb=%zu\n", hb);
+                    return 1;
+                }
+                LZ4F_freeCompressionContext(cctx);
+                fksz = 15 + sz0 - 7;
+                fk = (unsigned char*)malloc(fksz);
+                if (!fk) { fprintf(stderr, "oom\n"); return 1; }
+                memcpy(fk, hdr, 15);
+                memcpy(fk + 15, f0 + 7, sz0 - 7);
+                {
+                    LZ4F_dctx* dctx = NULL;
+                    if (LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) {
+                        fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+                    }
+                    ssz = fksz;
+                    dsz = nA;
+                    r = LZ4F_decompress(dctx, out, &dsz, fk, &ssz, NULL);
+                    c2 = (long long)r;
+                    LZ4F_freeDecompressionContext(dctx);
+                }
+                free(fk);
+                free(f0);
+            }
+            /* truncated at half feed -> positive hint */
+            memset(&p, 0, sizeof(p));
+            f = fdmpFrame(A, nA, &p, &sz);
+            {
+                LZ4F_dctx* dctx = NULL;
+                if (LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) {
+                    fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+                }
+                ssz = sz / 2;
+                dsz = nA;
+                r = LZ4F_decompress(dctx, out, &dsz, f, &ssz, NULL);
+                hint3 = r;
+                if ((long long)hint3 <= 0) {
+                    fprintf(stderr, "fdmp errtail: truncated-feed r=%lld not a positive hint\n",
+                            (long long)hint3);
+                    return 1;
+                }
+                LZ4F_freeDecompressionContext(dctx);
+            }
+            free(f);
+             printf("n=%zu mp=0.50 seed=0 mode=fdmp sc=errtail code=%lld;%lld hint=%zu\n",
+                    nA, c1, c2, hint3);
+        }
+        /* skipChecksums probes (stderr only, no manifest row): upstream
+           0774d055 quirk pinned by the Cangjie lz4fSkipChecksumsTest -
+           checkSuffix IS guarded by skipChecksum (L2047: content CRC
+           skipped), but the storeCBlock one-shot block checksum
+           (L1904-1916) is NOT: a corrupted block checksum fails even
+           with skipChecksums=1 */
+        {
+            LZ4F_preferences_t p;
+            LZ4F_decompressOptions_t o;
+            size_t szB, szC, csize, ssz, dsz;
+            long long rB, rC;
+            unsigned char* fB;
+            unsigned char* fC;
+            memset(&o, 0, sizeof(o));
+            o.skipChecksums = 1;
+            memset(&p, 0, sizeof(p));
+            p.frameInfo.contentChecksumFlag = 1;
+            p.frameInfo.blockChecksumFlag = 1;
+            fB = fdmpFrame(A, nA, &p, &szB);
+            csize = (size_t)fB[7] | ((size_t)fB[8] << 8) | ((size_t)fB[9] << 16) | ((size_t)fB[10] << 24);
+            csize &= 0x7FFFFFFFU;
+            fB[11 + csize] ^= 0xFFU;   /* block checksum byte */
+            fB[szB - 1] ^= 0xFFU;      /* content checksum byte */
+            {
+                LZ4F_dctx* dctx = NULL;
+                if (LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) {
+                    fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+                }
+                ssz = szB;
+                dsz = nA;
+                rB = (long long)LZ4F_decompress(dctx, out, &dsz, fB, &ssz, &o);
+                LZ4F_freeDecompressionContext(dctx);
+            }
+            free(fB);
+            memset(&p, 0, sizeof(p));
+            p.frameInfo.contentChecksumFlag = 1;
+            fC = fdmpFrame(A, nA, &p, &szC);
+            fC[szC - 1] ^= 0xFFU;      /* content checksum byte only */
+            {
+                LZ4F_dctx* dctx = NULL;
+                if (LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) {
+                    fprintf(stderr, "fdmp: createDecompressionContext failed\n"); return 1;
+                }
+                ssz = szC;
+                dsz = nA;
+                rC = (long long)LZ4F_decompress(dctx, out, &dsz, fC, &ssz, &o);
+                LZ4F_freeDecompressionContext(dctx);
+            }
+            free(fC);
+            fprintf(stderr, "fdmp skipChecksum: double-corrupt skip=1 r=%lld (block-crc "
+                    "one-shot NOT skipped), content-only skip=1 r=%lld w=%zu/%zu "
+                    "(checkSuffix skipped)\n", rB, rC, dsz, nA);
+        }
+        free(A);
+        free(D);
+        free(out);
     }
     fprintf(stderr, "cases=%d\n", idx);
     return 0;

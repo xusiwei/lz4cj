@@ -51,17 +51,24 @@ scripts/gen_golden | tee corpus/block_golden_ref.txt
 #         + 2 fcd rows (M5 Task 4: LZ4F_compressFrame_usingCDict; A lv=0
 #           single block, C bm=1 lv=9 per-block attach, dict seed=99)
 #         + 2 fdt rows (M5 Task 4: LZ4F_compressBegin_usingDict frames;
-#           A dd=65536 lv=0 bm=0 linked, C dd=64 dseed=77 lv=9 bm=1
-#           blockIndependent dict-discard quirk: frame == no-dict frame)
-# = 475 data rows, plus 22 '#' provenance comments
+#           A dd=65536 dseed=99 lv=0 bm=0 linked, C dd=64 dseed=77 lv=9
+#           bm=1 blockIndependent dict-discard quirk: frame == no-dict frame)
+#         + 14 fdmp rows (M6 Task 3: LZ4F decompression probes - getFrameInfo
+#           fresh-dctx pins x2, mid-frame getFrameInfo branches x3, fragmented
+#           resumption sequences seq1/seq2, skippable seq3/seq4, 3-segment
+#           concat, dict dseed=0 with-dict triple + no-dict -16 double pin,
+#           corrupted-frame codes errhdr/errblk/errtail; no artifacts)
+# = 489 data rows, plus 23 '#' provenance comments
 #   (dict / stream / ring / setdict + cont / savedict / dictfast /
 #    dictslow / attach / extdict / destext + hc / hcdest +
 #    hccont / hcsavedict / hcdict / hcattach / hcdestcont + frhdr + frame
-#    + f1s / fcd / fdt sections)
-[ "$(wc -l < corpus/block_golden_ref.txt)" -eq 497 ] \
-    || { echo "ERROR: expected 497 golden lines (475 rows + 22 comments)" >&2; exit 1; }
-[ "$(grep -c '^#' corpus/block_golden_ref.txt)" -eq 22 ] \
-    || { echo "ERROR: expected exactly 22 comment lines" >&2; exit 1; }
+#    + f1s / fcd / fdt + fdmp sections)
+[ "$(wc -l < corpus/block_golden_ref.txt)" -eq 512 ] \
+    || { echo "ERROR: expected 512 golden lines (489 rows + 23 comments)" >&2; exit 1; }
+[ "$(grep -c '^#' corpus/block_golden_ref.txt)" -eq 23 ] \
+    || { echo "ERROR: expected exactly 23 comment lines" >&2; exit 1; }
+[ "$(grep -c 'mode=fdmp' corpus/block_golden_ref.txt)" -eq 14 ] \
+    || { echo "ERROR: expected 14 fdmp rows" >&2; exit 1; }
 [ "$(grep -c 'mode=f1s ' corpus/block_golden_ref.txt)" -eq 8 ] \
     || { echo "ERROR: expected 8 f1s rows" >&2; exit 1; }
 [ "$(grep -c 'mode=fcd ' corpus/block_golden_ref.txt)" -eq 2 ] \

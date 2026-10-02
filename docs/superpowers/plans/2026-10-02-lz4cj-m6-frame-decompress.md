@@ -132,7 +132,7 @@ public class LZ4F_dctx {
 - Produces: golden 清单新节 `mode=fdmp`(14 行,C 解压探针钉值;行格式 `n=<n> mp=<mp> seed=<seed> mode=fdmp sc=<id> [参数] out=<c:w:h;...> code=<v> fi=<bs,bm,ccs,bcs,type,csz,did> outxxh32=<..>`;scenario 定义如下);Cangjie 侧嵌入常量断言
 - Consumes: T2 全部;gen_golden.c 既有 frhdr/frame 节的帧构造代码
 
-- [ ] **Step 1: C golden 扩展**(gen_golden.c 加 fdmp 节 + gen_golden.sh 门检更新)。行集(帧除注明外均为 C harness 现场构造,bs=4 默认 prefs;A=(65536,0.50,0)、D=(255,0.50,0)):
+- [x] **Step 1: C golden 扩展**(gen_golden.c 加 fdmp 节 + gen_golden.sh 门检更新)。行集(帧除注明外均为 C harness 现场构造,bs=4 默认 prefs;A=(65536,0.50,0)、D=(255,0.50,0)):
   1. `sc=fi` A 默认帧:getFrameInfo(fresh, srcSize=19)→ out=`7:4` fi=`4,0,0,0,0,0,0`
   2. `sc=fi` A csz=65536 did=305419896 帧 → out=`19:4` fi=`4,0,0,0,0,65536,305419896`
   3. `sc=fimid` A ccs=1 帧:decompress(头+首块字节)后 getFrameInfo → out=`0:4`(consumed=0、hint=4)
@@ -148,14 +148,14 @@ public class LZ4F_dctx {
   13. `sc=errblk` A 帧:块大小字段改 65537(>maxBlockSize)→ -2;块校验和尾篡改 → -7 → out=`-2;-7`
   14. `sc=errtail` A ccs=1 帧:尾 CRC 篡改 → -18;csz=60000 帧解码完成 → -14;截断至半块调用 → 正 hint(非错误,钉 hint 值)→ out=`-18;-14;<hint>`
   - 门检(gen_golden.sh sanity 块追加 + 总数改):数据行 475+14=489,总行 489+23(注释 22+1)== 512,`grep -c '^#'`==23,`grep -c 'mode=fdmp'`==14;corpus ≤ 8MB 复查
-- [ ] **Step 2: 失败测试**(lz4frame_test.cj):
+- [x] **Step 2: 失败测试**(lz4frame_test.cj):
   - `lz4fDecodeFdmpGoldenTest`:14 行场景仓颉侧重放,嵌入常量断言全部 out/code/fi/outxxh32(先跑 gen_golden.sh 取 C 值,手工嵌入;skippable 帧与坏帧按行规格构造字节)
   - `lz4fRandomSplitTest`:FRAME_GOLD_REF 27 行 × 切分模式 {1B、7B、997B、LCG 随机(fuzzLcgNext 风格本地 LCG,seed=行号)}:按 hint 喂入循环至 ret==0 → 输出 == 输入逐字节 + Σconsumed==size;另 × dst 容量 {10B、1000B、n}(小容量逼 flushOut 多轮回);dstIdx=4096 位置对解码(输出落于大缓冲中部)
   - `lz4fStableDstTest`:bm=0 多块 C 帧解码:pledge 兑现场景(缓冲 = 128KB,dstIdx=65536,先前调用产出留在 [0, dstIdx) 不动)stableDst=1 与 =0 输出一致、调用数 ≤ 无 stable 基线(性能语义,仅断言正确性 + 不抛)
   - `lz4fSkipChecksumsTest`:ccs=1 bcs=1 帧篡改两处 CRC 字节:skipChecksums=1 → 解压成功且输出 == 输入(校验跳过);=0 → -7/-18;粘滞性:首调用置 1 后续调用不传 options 仍跳过
   - `lz4fSkippableTest`:尺寸 {0,1,13,70000} × 魔数 {0x184D2A50, 0x184D2A5F}:整段与 [3,2,余] 切分解压 → (0, 8+size, 0) 且零输出;skipSkippable 完成后 dctx 可续解正常帧(reset 语义)
   - `lz4fFrameConcatTest`:仓颉自产 4 帧矩阵(含 ccs/bcs/skippable 混排)单 dctx 顺序解压,输出拼接 == 各输入拼接;getFrameInfo 在段间可调用
-- [ ] **Step 3: GREEN(双工具链)+ Commit** `M6: resumption matrix, skippable/concat and fdmp C golden pinning`
+- [x] **Step 3: GREEN(双工具链)+ Commit** `M6: resumption matrix, skippable/concat and fdmp C golden pinning`
 
 ---
 
