@@ -3454,3 +3454,74 @@ func lz4SameBufferProbeTest(): Unit {
     @Assert(!lz4SameBuffer(Array<UInt8>(0, {_ => 0u8}), Array<UInt8>(0, {_ => 0u8})))
     println("same-buffer probe: alias true (contents restored), twins false, complementary single-sentinel corner false")
 }
+
+/*-************************************
+*  M7 Task 1: overlap-shrink branch pin (stream continue)
+**************************************/
+// scripts/probe_overlap.c pass-2 geometry replayed in-suite (the probe
+// was C-differential-only, ledger M7): after the 7 golden rolling
+// blocks (same RDG 501/502/503 buffer), block 0 is compressed AGAIN
+// with the accumulated dict still spanning [0,262144) - the source
+// lies inside the dictionary, so lz4.c L1744-1752 shrinks it to the
+// 64KB window [196608,262144) before the extdict run (lz4.cj L1176-
+// 1187 branch body, suite-unpinned until now). Pins: pass2 c=20106
+// xxh32=55883273 (probe_overlap.c @ 0774d055 / CHANGELOG 0.4.0
+// differential provenance), decode closed against a copy of the exact
+// 64KB window, and the post-call L1788-89 extdict aftermath state.
+@Test
+func lz4StreamOverlapShrinkTest(): Unit {
+    let buf = contSourceBuffer()
+    let cs = LZ4_createStream()
+    let bound = LZ4_compressBound(40960)
+    let out = Array<UInt8>(Int64(bound), {_ => 0u8})
+    // pass 1: the 7 rolling blocks, identical geometry to the golden
+    // cont section (probe re-prints the CONT_REF sizes/digests)
+    for (k in 0..7) {
+        let (off0, n, _, _) = contBlockInfo(k)
+        let c1 = LZ4_compress_fast_continue(cs, buf, off0, Int32(n), out, bound, 1)
+        @Assert(c1 > 0)
+    }
+    // pre-shrink state: dict covers the whole buffer
+    @Assert(cs.dictStartIdx == 0 && cs.dictSize == 262144)
+    // pass 2: block 0 again -> sourceEnd(40960) inside the dict span
+    // -> shrink branch body (dictSize 221184 clamped to 65536,
+    // dictStartIdx 196608), extdict run against that window
+    let c = LZ4_compress_fast_continue(cs, buf, 0, 40960, out, bound, 1)
+    if (c != 20106) { println("OVERLAP: got ${c} want 20106") }
+    @Assert(c == 20106)
+    @Assert(XXH32(out, Int64(c), 0u32) == 0x55883273u32)
+    // post-call state: L1788-89 extdict aftermath (dictionary = this
+    // source, dictSize = input size; the shrunken window was internal
+    // to this call only)
+    @Assert(cs.dictStartIdx == 0 && cs.dictSize == 40960)
+    // decode closure with the exact 64KB window the encoder kept
+    let win = Array<UInt8>(65536, {i => buf[196608 + i]})
+    let d = Array<UInt8>(40960, {_ => 0u8})
+    @Assert(LZ4_decompress_safe_usingDict(out, c, d, 40960, win, 65536) == 40960)
+    var eq = true
+    for (i in 0..40960) {
+        if (d[i] != buf[i]) { eq = false; break }
+    }
+    if (!eq) { println("OVERLAP decode: bytes differ") }
+    @Assert(eq)
+    /* pass 3 (probe pass-3): fresh stream replays pass-1, then a
+       4-byte block at 262139 whose end lands 1 byte below dictEnd
+       (262144) -> shrink computes dictSize=1 -> <4 discard arm (lz4.c
+       L1749-50, lz4.cj L1183-1184); dictSize=0 -> plain literals,
+       closes with plain safe decode. Pins: c=5 xxh32=b66095df. */
+    let cs2 = LZ4_createStream()
+    for (k in 0..7) {
+        let (off0, n, _, _) = contBlockInfo(k)
+        let c2 = LZ4_compress_fast_continue(cs2, buf, off0, Int32(n), out, bound, 1)
+        @Assert(c2 > 0)
+    }
+    @Assert(cs2.dictStartIdx == 0 && cs2.dictSize == 262144)
+    let c3 = LZ4_compress_fast_continue(cs2, buf, 262139, 4, out, bound, 1)
+    @Assert(c3 == 5)
+    @Assert(XXH32(out, Int64(c3), 0u32) == 0xb66095dfu32)
+    @Assert(cs2.dictStartIdx == 262139 && cs2.dictSize == 4)   // L1788-89 aftermath
+    let d3 = Array<UInt8>(4, {_ => 0u8})
+    @Assert(LZ4_decompress_safe(out, c3, d3, 4) == 4)
+    @Assert(d3[0] == buf[262139] && d3[1] == buf[262140] && d3[2] == buf[262141] && d3[3] == buf[262142])
+    println("overlap-shrink: pass2 c=20106 xxh32=55883273 pinned, 64KB-window decode exact; pass3 discard arm c=5 pinned")
+}

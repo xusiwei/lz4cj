@@ -3555,3 +3555,218 @@ func lz4fDifferingSwitchControlTest(): Unit {
     @Assert(pre)
     println("lz4f differing-content switch control pins verified")
 }
+
+/*-************************************
+*  M7 Task 1: ctx type swap on one cctx
+**************************************/
+// scripts/ctx_swap_probe.c @ 0774d055: one cctx, 8 alternating frames
+// (lv0/lv9 x4; swaps 3-8 = upstream lz4frame.c L743-751 in-place type
+// reinterpretation). lv0 frames 38688 / a2371855 / 54ad2015adcf2431
+// (== golden row 436 geometry), lv9 frames 32931 / 8f08e8b0 /
+// 389d9f6634532f79; every reused frame byte-equal to a fresh-cctx
+// frame (probe fresh=.../eq=1 x8). (k, lv, wantSize, want32, want64)
+let CTX_SWAP_REF: Array<(Int64, Int32, Int64, UInt32, UInt64)> = [
+    (0, 0, 38688, 0xa2371855u32, 0x54ad2015adcf2431u64),
+    (1, 9, 32931, 0x8f08e8b0u32, 0x389d9f6634532f79u64),
+    (2, 0, 38688, 0xa2371855u32, 0x54ad2015adcf2431u64),
+    (3, 9, 32931, 0x8f08e8b0u32, 0x389d9f6634532f79u64),
+    (4, 0, 38688, 0xa2371855u32, 0x54ad2015adcf2431u64),
+    (5, 9, 32931, 0x8f08e8b0u32, 0x389d9f6634532f79u64),
+    (6, 0, 38688, 0xa2371855u32, 0x54ad2015adcf2431u64),
+    (7, 9, 32931, 0x8f08e8b0u32, 0x389d9f6634532f79u64),
+]
+
+@Test
+func lz4fCtxTypeSwapTest(): Unit {
+    let n: Int64 = 65536
+    let A = Array<UInt8>(n, {_ => 0u8})
+    RDG_genBuffer(A, n, 0.50, 0.0, 0u32)
+    @Assert(XXH32(A, n, 0u32) == 0xc20f7bccu32)   // probe: A xxh32=c20f7bcc
+    let cap = LZ4F_compressFrameBound(n, Option<LZ4F_preferences_t>.None)
+    let cctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+    let f = Array<UInt8>(cap, {_ => 0u8})
+    let noneOpt = Option<LZ4F_compressOptions_t>.None
+    for ((k, lv, wantSize, want32, want64) in CTX_SWAP_REF) {
+        var prefs = LZ4F_preferences_t()
+        prefs.compressionLevel = lv
+        prefs.frameInfo.blockMode = LZ4F_blockLinked
+        prefs.frameInfo.blockSizeID = 4
+        var pos: Int64 = 0
+        let r1 = LZ4F_compressBegin(cctx, f, pos, cap - pos, Some(prefs))
+        @Assert(!LZ4F_isError(r1))
+        pos += r1
+        let r2 = LZ4F_compressUpdate(cctx, f, pos, cap - pos, A, 0, n, noneOpt)
+        @Assert(!LZ4F_isError(r2))
+        pos += r2
+        let r3 = LZ4F_compressEnd(cctx, f, pos, cap - pos, noneOpt)
+        @Assert(!LZ4F_isError(r3))
+        pos += r3
+        if (pos != wantSize) { println("CTXSWAP k=${k}: size ${pos} want ${wantSize}") }
+        @Assert(pos == wantSize)
+        @Assert(XXH32(f, pos, 0u32) == want32)
+        @Assert(XXH64(f, pos, 0u64) == want64)
+        // reuse equivalence: byte-identical to a fresh-cctx frame
+        // (probe fresh=.../eq=1 per row)
+        let (ff, fs) = lz4fFdmpFrame(prefs, A, n)
+        @Assert(fs == pos)
+        var eq = true
+        for (i in 0..pos) {
+            if (f[i] != ff[i]) { eq = false; break }
+        }
+        if (!eq) { println("CTXSWAP k=${k}: differs from fresh frame") }
+        @Assert(eq)
+        // swap bookkeeping: swaps 1-2 realloc (alloc climbs 1 -> 2),
+        // swaps 3+ switch type in place at alloc == 2
+        let wantType: Int32 = if (lv == 0) { 1 } else { 2 }
+        @Assert(cctx.lz4CtxType == wantType)
+        let wantAlloc: Int32 = if (k == 0i64) { 1 } else { 2 }
+        @Assert(cctx.lz4CtxAlloc == wantAlloc)
+        if (k == 3i64) {
+            // two full alternations done: both ctx objects alive (fast
+            // rebuilt in place on swap 3, HC retained) - the state the
+            // type-switch Some arms operate on
+            @Assert(cctx.lz4CtxFast.isSome() && cctx.lz4CtxHC.isSome())
+        }
+    }
+    @Assert(cctx.lz4CtxFast.isSome() && cctx.lz4CtxHC.isSome())
+    // HC-None arm (lz4frame.cj L487-490): the two-Option model's own
+    // symmetry branch - type switch to HC while no HC object exists.
+    // No public sequence reaches it (alloc=2 is only ever set by the
+    // realloc arm, which always materializes the HC object, and no
+    // later write drops it), so it is constructed white-box: land in
+    // type=1, drop the HC reference (C's single-pointer model has no
+    // such state - it reinterprets the same memory in place; output
+    // equivalence per design 4.4), then Begin(lv=9) must rebuild a
+    // fresh HC object and yield the standard lv9 frame.
+    var p0 = LZ4F_preferences_t()
+    p0.compressionLevel = 0
+    p0.frameInfo.blockMode = LZ4F_blockLinked
+    p0.frameInfo.blockSizeID = 4
+    @Assert(LZ4F_compressBegin(cctx, f, 0, cap, Some(p0)) == 7)   // type -> 1 (fast-Some arm)
+    cctx.lz4CtxHC = None
+    var p9 = LZ4F_preferences_t()
+    p9.compressionLevel = 9
+    p9.frameInfo.blockMode = LZ4F_blockLinked
+    p9.frameInfo.blockSizeID = 4
+    @Assert(LZ4F_compressBegin(cctx, f, 0, cap, Some(p9)) == 7)   // HC-None arm rebuilds
+    @Assert(cctx.lz4CtxHC.isSome() && cctx.lz4CtxType == 2)
+    var pos: Int64 = 7
+    let r2 = LZ4F_compressUpdate(cctx, f, pos, cap - pos, A, 0, n, noneOpt)
+    @Assert(!LZ4F_isError(r2))
+    pos += r2
+    let r3 = LZ4F_compressEnd(cctx, f, pos, cap - pos, noneOpt)
+    @Assert(!LZ4F_isError(r3))
+    pos += r3
+    @Assert(pos == 32931)
+    @Assert(XXH32(f, pos, 0u32) == 0x8f08e8b0u32)
+    @Assert(XXH64(f, pos, 0u64) == 0x389d9f6634532f79u64)
+    println("ctx type swap: 8 reuse frames == fresh pins, alloc/type bookkeeping + model HC-rebuild arm verified")
+}
+
+/*-************************************
+*  M7 Task 1: tight-capacity error contracts
+**************************************/
+// Three -LZ4F_ERROR_dstMaxSize_tooSmall guards reachable only with a
+// capacity chosen inside their specific gap (API contract assertions,
+// no C probe needed - the guards precede any output):
+//  - lz4frame.cj L836 (uncompressedUpdate raw guard): fires between
+//    the compressed compressBound and srcSize - with af=0 and srcSize
+//    below the block size, the bound collapses to the 4-byte frame end
+//    (no full block charged), so bm=1/bs=5 + src 65536 leaves the gap
+//    [4, 65536) where capacity=srcSize-1 lands. NOTE the brief's bs=4
+//    reading cannot reach L836 (src 65536 = one full block -> bound
+//    65544 > srcSize-1 fails the FIRST guard).
+//  - lz4frame.cj L1025 (compressEnd checksum tail): needs flush to
+//    succeed with tiny capacity -> af=1 Update leaves tmpInSize==0
+//    (flush returns 0 early), then capacity in [4,7] passes the
+//    endmark check but misses endmark+ccs (8). The brief's literal
+//    capacity=3 only reaches the (already-covered) endmark guard
+//    L1016-1017 - pinned here as well, cap=7 is the L1025 hit.
+//  - lz4frame.cj L1076 (compressFrame_usingCDict one-shot bound):
+//    capacity = compressFrameBound-1 vs bound.
+@Test
+func lz4fTightCapacityErrorTest(): Unit {
+    let n: Int64 = 65536
+    let A = Array<UInt8>(n, {_ => 0u8})
+    RDG_genBuffer(A, n, 0.50, 0.0, 0u32)
+    let noneOpt = Option<LZ4F_compressOptions_t>.None
+
+    // L836: uncompressedUpdate capacity guard
+    var pu = LZ4F_preferences_t()
+    pu.frameInfo.blockMode = LZ4F_blockIndependent
+    pu.frameInfo.blockSizeID = 5
+    let cu = LZ4F_createCompressionContext(LZ4F_VERSION)
+    let dstU = Array<UInt8>(n + 64, {_ => 0u8})
+    @Assert(LZ4F_compressBegin(cu, dstU, 0, 19, Some(pu)) == 7)
+    let ru = LZ4F_uncompressedUpdate(cu, dstU, 7, n - 1, A, 0, n, noneOpt)
+    @Assert(ru == -11)
+    @Assert(LZ4F_isError(ru))
+    @Assert(LZ4F_getErrorCode(ru) == LZ4F_ERROR_dstMaxSize_tooSmall)
+    @Assert(LZ4F_getErrorName(ru) == "ERROR_dstMaxSize_tooSmall")
+    // same call at capacity == srcSize succeeds (af=0: all buffered)
+    let cu2 = LZ4F_createCompressionContext(LZ4F_VERSION)
+    @Assert(LZ4F_compressBegin(cu2, dstU, 0, 19, Some(pu)) == 7)
+    let ru2 = LZ4F_uncompressedUpdate(cu2, dstU, 7, n, A, 0, n, noneOpt)
+    @Assert(ru2 == 0)
+    @Assert(cu2.blockCompressMode == LZ4F_LZ4B_UNCOMPRESSED && cu2.tmpInSize == n)
+
+    // L1025: compressEnd tail capacity (ccs=1, af=1 keeps tmpInSize==0
+    // so the internal flush returns 0 regardless of capacity)
+    var pc = LZ4F_preferences_t()
+    pc.frameInfo.contentChecksumFlag = LZ4F_contentChecksumEnabled
+    pc.autoFlush = 1u32
+    let capC = LZ4F_compressFrameBound(n, Some(pc))
+    let dstC = Array<UInt8>(capC + 16, {_ => 0u8})
+    // capacity 3: below even the endmark -> endmark guard (regression pin)
+    let cc1 = LZ4F_createCompressionContext(LZ4F_VERSION)
+    @Assert(LZ4F_compressBegin(cc1, dstC, 0, 19, Some(pc)) == 7)
+    let u1 = LZ4F_compressUpdate(cc1, dstC, 7, capC - 7, A, 0, n, noneOpt)
+    @Assert(!LZ4F_isError(u1))
+    @Assert(cc1.tmpInSize == 0)
+    let e3 = LZ4F_compressEnd(cc1, dstC, 7 + u1, 3, noneOpt)
+    @Assert(e3 == -11)
+    @Assert(LZ4F_isError(e3))
+    @Assert(LZ4F_getErrorCode(e3) == LZ4F_ERROR_dstMaxSize_tooSmall)
+    // capacity 7: endmark written, then checksum room missing -> L1025
+    let cc2 = LZ4F_createCompressionContext(LZ4F_VERSION)
+    @Assert(LZ4F_compressBegin(cc2, dstC, 0, 19, Some(pc)) == 7)
+    let u2 = LZ4F_compressUpdate(cc2, dstC, 7, capC - 7, A, 0, n, noneOpt)
+    @Assert(!LZ4F_isError(u2))
+    @Assert(cc2.tmpInSize == 0)
+    let e7 = LZ4F_compressEnd(cc2, dstC, 7 + u2, 7, noneOpt)
+    @Assert(e7 == -11)
+    @Assert(LZ4F_isError(e7))
+    @Assert(LZ4F_getErrorCode(e7) == LZ4F_ERROR_dstMaxSize_tooSmall)
+    @Assert(lz4fReadLE32(dstC, 7 + u2) == 0u32)   // endmark already laid down
+    // capacity 8: success -> 4 endmark + 4 content checksum
+    let cc3 = LZ4F_createCompressionContext(LZ4F_VERSION)
+    @Assert(LZ4F_compressBegin(cc3, dstC, 0, 19, Some(pc)) == 7)
+    let u3 = LZ4F_compressUpdate(cc3, dstC, 7, capC - 7, A, 0, n, noneOpt)
+    @Assert(!LZ4F_isError(u3))
+    let e8 = LZ4F_compressEnd(cc3, dstC, 7 + u3, 8, noneOpt)
+    @Assert(e8 == 8)
+    @Assert(lz4fReadLE32(dstC, 7 + u3 + 4) == 0xc20f7bccu32)   // ccs = XXH32(A)
+
+    // L1076: compressFrame_usingCDict one-shot bound
+    let pd = LZ4F_preferences_t()   // raw defaults; the transform forces
+    // af=1 + blockIndependent (65536 <= getBlockSize(4)) internally
+    let capD = LZ4F_compressFrameBound(n, Some(pd))
+    @Assert(capD == 65563)
+    let dstD = Array<UInt8>(capD, {_ => 0u8})
+    let cd1 = LZ4F_createCompressionContext(LZ4F_VERSION)
+    let rd1 = LZ4F_compressFrame_usingCDict(cd1, dstD, 0, capD - 1, A, n,
+        Option<LZ4F_CDict>.None, Some(pd))
+    @Assert(rd1 == -11)
+    @Assert(LZ4F_isError(rd1))
+    @Assert(LZ4F_getErrorCode(rd1) == LZ4F_ERROR_dstMaxSize_tooSmall)
+    @Assert(LZ4F_getErrorName(rd1) == "ERROR_dstMaxSize_tooSmall")
+    // capacity == bound succeeds; frame == one-shot transform geometry
+    // (golden row 463): 36474 / c4aa94e0 / e004ae20c13bd03b
+    let cd2 = LZ4F_createCompressionContext(LZ4F_VERSION)
+    let rd2 = LZ4F_compressFrame_usingCDict(cd2, dstD, 0, capD, A, n,
+        Option<LZ4F_CDict>.None, Some(pd))
+    @Assert(rd2 == 36474)
+    @Assert(XXH32(dstD, rd2, 0u32) == 0xc4aa94e0u32)
+    @Assert(XXH64(dstD, rd2, 0u64) == 0xe004ae20c13bd03bu64)
+    println("lz4f tight-capacity error pins verified (uncompressedUpdate raw guard, compressEnd ccs tail, usingCDict bound)")
+}
