@@ -182,6 +182,9 @@ internal func lz4fZeroFrameInfo(): LZ4F_frameInfo_t {
 internal func lz4fDecodeHeader(dctx: LZ4F_dctx, srcBuf: Array<UInt8>, srcIdx: Int64,
         srcSize: Int64, srcIsHeader: Bool): Int64 {
     if (srcSize < LZ4F_HEADER_SIZE_MIN) {                             /* L1382-1383 */
+        /* 防御(调用方结构排除,M6 收尾 cjcov 归类):getFrameHeader 捷径
+           ≥19、storeFrameHeader 以 tmpInTarget ≥ 7 调入、getFrameInfo 经
+           headerSize(≥7)过滤后调入 —— 三调用点均不达 <7;C 同构守卫 */
         return -LZ4F_ERROR_frameHeader_incomplete
     }
     dctx.frameInfo = lz4fZeroFrameInfo()                              /* L1385 MEM_INIT */
@@ -227,6 +230,8 @@ internal func lz4fDecodeHeader(dctx: LZ4F_dctx, srcBuf: Array<UInt8>, srcIdx: In
 
     if (srcSize < frameHeaderSize) {                                  /* L1426-1433:头不完整 */
         if (!srcIsHeader) {                                           /* srcPtr != dctx->header → memcpy */
+            /* 防御(调用方结构排除,M6 收尾 cjcov 归类):非 header 路径
+               调入时 srcSize ≥ hSize = frameHeaderSize,不达本分支;C 同构 */
             var i: Int64 = 0
             while (i < srcSize) {
                 dctx.header[i] = srcBuf[srcIdx + i]
@@ -407,6 +412,8 @@ internal func lz4fUpdateDict(dctx: LZ4F_dctx, dstBuf: Array<UInt8>, dstPos: Int6
 
     if (dctx.dictInTmp) {                                             /* L1598-1608:dict==tmpOutBuffer(非 withinTmp)→ dst 内容拷至 tmp 补全 */
         if (dctx.dictSize + dstSize > dctx.maxBufferSize) {           /* tmp 容量不足 → 保尾 64KB-dstSize */
+            /* 可达未测(M6 收尾 cjcov 归类,台账 M7):需 tmp 内字典经
+               withinTmp 延展累计超 maxBufferSize 后再直解满块方入 */
             let preserveSize = 65536 - dstSize
             var i: Int64 = 0
             while (i < preserveSize) {
@@ -995,6 +1002,10 @@ internal func lz4fDecompressBody(dctx: LZ4F_dctx, dstBuf: Array<UInt8>, dstIdx: 
             }
             if (copySize > preserveSize) {
                 copySize = preserveSize
+                /* 仓颉侧结构不可达(M6 收尾 cjcov 归类):out 侧字典经
+                   span/≥64K prefix 建立 ⇒ tmpOut=65536 ≥ copySize 恒立;
+                   C 可经 dictSize==0 指针邻接延展到达,内容窗口谓词将其
+                   路由至输出等价的 join 路径(设计 §4.3 规则 4) */
             }
             var i: Int64 = 0
             while (i < copySize) {

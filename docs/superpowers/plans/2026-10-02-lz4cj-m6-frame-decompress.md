@@ -167,14 +167,14 @@ public class LZ4F_dctx {
 - Produces: `fuzzFrameDecodeTest`(fuzz_test.cj);文档三件套收尾
 - Consumes: T2/T3 全部;M5 fuzzFrameTest 的帧规划器(fuzzFramePlanBlocks/fuzzFrameRunChain 复用)
 
-- [ ] **Step 1: fuzz 扩展**(fuzz_test.cj)`fuzzFrameDecodeTest`:150 种子,每种子随机 {n∈[0,150000]、mp、bs∈{4..7}、bm、ccs、bcs、af、lv∈{-3,0,3,9,12}、成帧方式一次性/流式}:
+- [x] **Step 1: fuzz 扩展**(fuzz_test.cj)`fuzzFrameDecodeTest`:150 种子,每种子随机 {n∈[0,150000]、mp、bs∈{4..7}、bm、ccs、bcs、af、lv∈{-3,0,3,9,12}、成帧方式一次性/流式}:
   - 场景 A(随机切分):成帧 → LCG 随机 src 切分 + 随机 dst 容量 ∈ {0、小(逼 flushOut/storeCBlock)、恰 maxBlockSize、n}逐调用 → 输出 == 输入 + 末次 ret==0
   - 场景 B(拼接):2-4 帧连发(混 skippable)单 dctx 顺序解 → 输出拼接断言
   - 场景 C(损坏):对帧字节随机翻转 1-3 处/随机截断/随机块内篡改 → 解压循环至 ret==0 或 isError;断言绝无异常逃逸、错误时三元组零消费零写出;若"完成"则输出可任意(损坏可能巧合合法)
   - 断言:全部调用返回值非错误或恰为错误(无异常);同种子二次运行逐字节确定
-- [ ] **Step 2: 覆盖率门禁**:`cjpm test --coverage` + `cjcov --html-details`(LTS);库源码行覆盖 ≥ 96%(基线 96.43%,lz4frame_decode.cj 预计 ~700 行);未覆盖行逐条归类(预期防御类:dictSize>1GB 截尾、部分 updateDict 尾分支若 fuzz 未达 → 补定向用例或台账登记 M7)
-- [ ] **Step 3: 文档收尾**:progress.md(M6 行 + 证据数字 + API 计数更新 frame 解压侧 7 函数 + decompressOptions/常量;下一步 M7);CHANGELOG 0.7.0(frame 解压全量 + fdmp 14 行 + 覆盖率 + 双绿 + 订正注记);README API 对照 frame 解压节(位置对签名、getFrameInfo/decompress 元组返回、free 返回 dStage、create 出参、dst NULL = 空数组+容量 0、isSkippedFrame/decompress_usingCDict 不存在订正、skippable 经 frameType 判定)+ 测试计数更新
-- [ ] **Step 4: 全量门禁 `scripts/build_and_test.sh both` + Commit** `M6: frame decode fuzz, coverage and milestone wrap-up`
+- [x] **Step 2: 覆盖率门禁**:`cjpm test --coverage` + `cjcov --html-details`(LTS);库源码行覆盖 ≥ 96%(基线 96.43%,lz4frame_decode.cj 预计 ~700 行);未覆盖行逐条归类(预期防御类:dictSize>1GB 截尾、部分 updateDict 尾分支若 fuzz 未达 → 补定向用例或台账登记 M7)
+- [x] **Step 3: 文档收尾**:progress.md(M6 行 + 证据数字 + API 计数更新 frame 解压侧 7 函数 + decompressOptions/常量;下一步 M7);CHANGELOG 0.7.0(frame 解压全量 + fdmp 14 行 + 覆盖率 + 双绿 + 订正注记);README API 对照 frame 解压节(位置对签名、getFrameInfo/decompress 元组返回、free 返回 dStage、create 出参、dst NULL = 空数组+容量 0、isSkippedFrame/decompress_usingCDict 不存在订正、skippable 经 frameType 判定)+ 测试计数更新
+- [x] **Step 4: 全量门禁 `scripts/build_and_test.sh both` + Commit** `M6: frame decode fuzz, coverage and milestone wrap-up`
 
 ---
 

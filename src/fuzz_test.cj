@@ -941,3 +941,460 @@ func fuzzFrameTest(): Unit {
     @Assert(failures == 0)
     println("fuzz frame: 120 seeds x (one-shot + streaming chain, uncompressedUpdate inserts + mid flush) x2 determinism, 0 exceptions, 0 failures")
 }
+
+/*-************************************
+*  fuzzFrameDecodeTest: frame decompression fuzz (M6 Task 4)
+**************************************/
+// One case: LCG-derive {n in 0..150000, mp, bs in 4..7, bm, ccs, bcs, af,
+// lv in {-3,0,3,9,12}, framing one-shot|streaming, dseed} with every choice
+// drawn BEFORE any API call (rerun replays the identical call sequence):
+//   scenario A (random split): frame the input (compressFrame, or Begin +
+//     random-split Update chain at a provably sufficient capacity - the
+//     per-chunk worst case is one block overhead 4+4*bcs per switch/flush
+//     plus raw data plus multi-block splitting n/bsz*(4+4*bcs) <= n/512*8,
+//     so 7 + nb*(4+4*bcs) + 2n + 4 + 4*ccs always fits, unlike
+//     fuzzFrameRunChain which probes/degrades against compressFrameBound),
+//     then decode through LCG-random src chunks (1..997) with per-call dst
+//     capacity drawn from {0, 1..40 (forces flushOut/storeCBlock staging),
+//     exactly maxBlockSize, n}, all clamped to the remaining budget;
+//   scenario B (concat): 2-4 segments, each ~1/3 skippable else a frame
+//     with fresh random {n in 0..20000, bs, bm, ccs, bcs}, fed as ONE
+//     concatenated stream through a single dctx (frame-complete auto-reset
+//     continuation, fidelity point 17);
+//   scenario C (corruption): 1-3 bit flips / truncation 1..64 / in-block
+//     tamper (2-6 consecutive random bytes) of the scenario-A frame bytes,
+//     decode loop until ret==0, isError, or the finite caller-side budget
+//     ends (src exhausted -> positive hint is the legitimate truncated
+//     valid-frame state, fdmp errtail row pins it; output buffer full -> a
+//     corrupted payload can decode "successfully" to arbitrary output and
+//     can also produce MORE than n decoded bytes, so the caller-side out
+//     buffer of max(n, 4096) bytes ends the loop).
+// Contract: no exception escapes; A/B every call non-error, final ret==0,
+// sum(consumed)==frame size, sum(written)==n, output byte-exact == input
+// (concatenated for B); C error triples exactly (code, 0, 0); every seed
+// replays scenario A end-to-end (fresh dctx + fresh buffers, same LCG
+// seed) with identical call count and byte-identical output.
+// Byte-compare loops follow the ledger-#44 mitigation: full scan into a
+// flag (no early exit) + tagged print before the assert.
+private func fuzzFrameDecodeChain(dst: Array<UInt8>, cap: Int64, src: Array<UInt8>, n: Int64,
+        prefs: LZ4F_preferences_t, sizes: Array<Int64>, nb: Int64,
+        rawCoin: Array<Bool>): Int64 {
+    let cctx = LZ4F_createCompressionContext(LZ4F_VERSION)
+    var pos: Int64 = 0
+    let rb = LZ4F_compressBegin(cctx, dst, pos, cap - pos, Some(prefs))
+    if (LZ4F_isError(rb)) { return -1 }
+    pos += rb
+    var off: Int64 = 0
+    for (k in 0..nb) {
+        let sz = sizes[k]
+        let ru = if (prefs.frameInfo.blockMode == LZ4F_blockIndependent && rawCoin[k]) {
+                LZ4F_uncompressedUpdate(cctx, dst, pos, cap - pos, src, off, sz,
+                    Option<LZ4F_compressOptions_t>.None)
+            } else {
+                LZ4F_compressUpdate(cctx, dst, pos, cap - pos, src, off, sz,
+                    Option<LZ4F_compressOptions_t>.None)
+            }
+        if (LZ4F_isError(ru)) { return -1 }
+        pos += ru
+        off += sz
+    }
+    let re = LZ4F_compressEnd(cctx, dst, pos, cap - pos, Option<LZ4F_compressOptions_t>.None)
+    if (LZ4F_isError(re)) { return -1 }
+    pos += re
+    return pos
+}
+
+// Split-decode kernel for valid streams (scenario A: one frame; scenario
+// B: concatenated stream): random src chunks + random per-call capacity
+// from the {0, small, maxBlockSize, n} ladder, loop while the frame wants
+// more (r != 0) or src remains (concat boundary: r==0 mid-stream re-enters
+// getFrameHeader). Returns the call count (determinism replay compares
+// it). Progress guarantee: every call consumes >= 1 src or writes >= 1 dst
+// (chunk >= 1 while off < size; capacity >= 1 while written < n drains a
+// pending flushOut), so maxIters only guards true stalls.
+private func fuzzFrameDecodeSplit(frame: Array<UInt8>, size: Int64, out: Array<UInt8>,
+        n: Int64, dctx: LZ4F_dctx, mbs: Int64, lcg0: UInt64, seedTag: Int64,
+        scen: Int64): Int64 {
+    var rng = lcg0
+    var off: Int64 = 0
+    var written: Int64 = 0
+    var r: Int64 = 1
+    var calls: Int64 = 0
+    let maxIters = 4 * size + 64
+    while (r != 0 || off < size) {
+        calls += 1
+        if (calls > maxIters) {
+            println("FD-SPLIT STALL scen=${scen} seed=${seedTag} off=${off}/${size} w=${written}/${n}")
+        }
+        @Assert(calls <= maxIters)
+        rng = fuzzLcgNext(rng)
+        var chunk = 1 + Int64(rng % 997u64)
+        if (chunk > size - off) { chunk = size - off }
+        rng = fuzzLcgNext(rng)
+        let capSel = Int64(rng % 4u64)
+        var cap: Int64 = 0
+        if (capSel == 1) {
+            rng = fuzzLcgNext(rng)
+            cap = 1 + Int64(rng % 40u64)
+        } else if (capSel == 2) {
+            cap = mbs
+        } else if (capSel == 3) {
+            cap = n
+        }
+        if (cap > n - written) { cap = n - written }
+        let (rr, cc, ww) = LZ4F_decompress(dctx, out, written, cap, frame, off, chunk,
+            Option<LZ4F_decompressOptions_t>.None)
+        if (LZ4F_isError(rr)) {
+            println("FD-SPLIT ERR scen=${scen} seed=${seedTag} off=${off} chunk=${chunk} cap=${cap}: ret=${rr}")
+        }
+        @Assert(!LZ4F_isError(rr))
+        off += cc
+        written += ww
+        r = rr
+    }
+    if (off != size || written != n) {
+        println("FD-SPLIT SUM scen=${scen} seed=${seedTag}: off=${off}/${size} w=${written}/${n}")
+    }
+    @Assert(off == size)
+    @Assert(written == n)
+    return calls
+}
+
+// Ledger-#44 mitigation compare: full scan, tagged print, assert (T3
+// lz4fFdmpSplitDecode pattern).
+private func fuzzFrameDecodeCmp(out: Array<UInt8>, base: Int64, want: Array<UInt8>, n: Int64,
+        seedTag: Int64, scen: Int64): Unit {
+    var eq = true
+    for (k in 0..n) {
+        if (out[base + k] != want[k]) {
+            eq = false
+        }
+    }
+    if (!eq) {
+        println("FD-BYTES scen=${scen} seed=${seedTag} n=${n}")
+    }
+    @Assert(eq)
+}
+
+// stats: [0] scenario-C "complete" stops, [1] error stops, [2] exhausted
+// stops, [3] output-buffer-full stops, [4] scenario-A determinism replays
+private func fuzzFrameDecodeCase(seed: Int64, stats: Array<Int64>): String {
+    var r: UInt64 = 0xD6E8FEB86659FD93u64 * (UInt64(seed) + 1u64)
+    r = fuzzLcgNext(r)
+    let n: Int64 = Int64(r % 150001u64)
+    r = fuzzLcgNext(r)
+    let mp = FUZZ_MPS[Int64(r % 5u64)]
+    r = fuzzLcgNext(r)
+    let bs: Int32 = 4 + Int32(r % 4u64)
+    // bit coins from ONE word's low nibble: with LCG M,C both odd the
+    // parities of CONSECUTIVE outputs strictly alternate (fuzzHcCase
+    // documents the same low-bit locking), so consecutive r%2 draws would
+    // lock (bm,ccs,bcs,af) to two anti-correlated combos out of 16
+    r = fuzzLcgNext(r)
+    let nib: UInt64 = r % 16u64
+    let bm: Int32 = Int32(nib & 1u64)
+    let ccs: Int32 = Int32((nib >> 1u64) & 1u64)
+    let bcs: Int32 = Int32((nib >> 2u64) & 1u64)
+    let af: Int32 = Int32((nib >> 3u64) & 1u64)
+    r = fuzzLcgNext(r)
+    let lv = FUZZ_FRAME_LEVELS[Int64(r % 5u64)]
+    // odd modulus escapes the parity alternation (power-of-2 phenomenon)
+    r = fuzzLcgNext(r)
+    let streaming: Bool = (r % 3u64) == 0u64
+    r = fuzzLcgNext(r)
+    let dseed: UInt32 = UInt32(r % 4294967291u64)
+
+    let src = Array<UInt8>(n, {_ => 0u8})
+    RDG_genBuffer(src, n, mp, 0.0, dseed)
+
+    var prefs = LZ4F_preferences_t()
+    prefs.frameInfo.blockSizeID = bs
+    prefs.frameInfo.blockMode = bm
+    prefs.frameInfo.contentChecksumFlag = ccs
+    prefs.frameInfo.blockChecksumFlag = bcs
+    prefs.compressionLevel = lv
+    prefs.autoFlush = UInt32(af)
+    let mbs = LZ4F_getBlockSize(bs)
+
+    // ---- derive the full streaming plan before any API call ----
+    var nb: Int64 = 0
+    var sizes = Array<Int64>(0, {_ => 0})
+    var rawCoin = Array<Bool>(0, {_ => false})
+    if (streaming) {
+        r = fuzzLcgNext(r)
+        let chunks: Int64 = 1 + Int64(r % 6u64)
+        nb = if (chunks > n) { n } else { chunks }
+        if (n == 0) { nb = 0 }
+        sizes = Array<Int64>(nb, {_ => 1})
+        var rem: Int64 = n - nb
+        for (k in 0..(nb - 1)) {
+            if (rem > 0) {
+                r = fuzzLcgNext(r)
+                let add: Int64 = Int64(r % UInt64(rem + 1))
+                sizes[k] += add
+                rem -= add
+            }
+        }
+        if (nb > 0) {
+            sizes[nb - 1] += rem
+        }
+        rawCoin = Array<Bool>(nb, {_ => false})
+        for (k in 0..nb) {
+            r = fuzzLcgNext(r)
+            rawCoin[k] = (r % 3u64) == 0u64    // odd modulus: no parity lock
+        }
+    }
+
+    // ---- frame the input ----
+    var frame: Array<UInt8>
+    var size: Int64
+    if (!streaming) {
+        let cap = LZ4F_compressFrameBound(n, Some(prefs))
+        frame = Array<UInt8>(cap, {_ => 0u8})
+        size = LZ4F_compressFrame(frame, 0, cap, src, n, Some(prefs))
+        if (LZ4F_isError(size)) { return "frame compressFrame ${size}" }
+    } else {
+        let cap = 7 + nb * (4 + 4 * Int64(bcs)) + 2 * n + 4 + 4 * Int64(ccs)
+        frame = Array<UInt8>(cap, {_ => 0u8})
+        size = fuzzFrameDecodeChain(frame, cap, src, n, prefs, sizes, nb, rawCoin)
+        if (size < 0) { return "chain failed at cap ${cap}" }
+        if (size > cap) { return "chain size ${size} > cap ${cap}" }
+    }
+
+    // ---- scenario A: random-split decode (+ x1 full determinism replay) ----
+    let lcgA = r
+    let dA = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let out1 = Array<UInt8>(n, {_ => 0u8})
+    let calls1 = fuzzFrameDecodeSplit(frame, size, out1, n, dA, mbs, lcgA, seed, 1)
+    fuzzFrameDecodeCmp(out1, 0, src, n, seed, 1)
+    let dA2 = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let out2 = Array<UInt8>(n, {_ => 0u8})
+    let calls2 = fuzzFrameDecodeSplit(frame, size, out2, n, dA2, mbs, lcgA, seed, 11)
+    if (calls2 != calls1) { return "A determinism calls ${calls2} != ${calls1}" }
+    var eqd = true
+    for (k in 0..n) {
+        if (out2[k] != out1[k]) {
+            eqd = false
+        }
+    }
+    if (!eqd) {
+        println("FD-DET seed=${seed} n=${n}")
+    }
+    @Assert(eqd)
+    stats[4] += 1
+
+    // ---- scenario B: 2-4 segments (skippable mixed) on one dctx ----
+    r = fuzzLcgNext(r)
+    let segs: Int64 = 2 + Int64(r % 3u64)
+    let segSkip = Array<Bool>(segs, {_ => false})
+    let segN = Array<Int64>(segs, {_ => 0})
+    let segBs = Array<Int32>(segs, {_ => 4})
+    let segBm = Array<Int32>(segs, {_ => 0})
+    let segCcs = Array<Int32>(segs, {_ => 0})
+    let segBcs = Array<Int32>(segs, {_ => 0})
+    let segSkipSize = Array<Int64>(segs, {_ => 0})
+    let segMagic = Array<UInt8>(segs, {_ => 0x50u8})
+    for (k in 0..segs) {
+        r = fuzzLcgNext(r)
+        segSkip[k] = (r % 3u64) == 0u64
+        r = fuzzLcgNext(r)
+        segN[k] = Int64(r % 20001u64)
+        r = fuzzLcgNext(r)
+        segBs[k] = 4 + Int32(r % 4u64)
+        // bm/ccs/bcs/magic coins from one nibble (see the nib comment above)
+        r = fuzzLcgNext(r)
+        let nibB: UInt64 = r % 16u64
+        segBm[k] = Int32(nibB & 1u64)
+        segCcs[k] = Int32((nibB >> 1u64) & 1u64)
+        segBcs[k] = Int32((nibB >> 2u64) & 1u64)
+        segMagic[k] = if (((nibB >> 3u64) & 1u64) == 0u64) { 0x50u8 } else { 0x5Fu8 }
+        r = fuzzLcgNext(r)
+        segSkipSize[k] = Int64(r % 5001u64)
+    }
+    r = fuzzLcgNext(r)
+    let dseedB: UInt32 = UInt32(r % 4294967291u64)
+    var segBytes = Array<Array<UInt8>>(segs, {_ => Array<UInt8>(0, {_ => 0u8})})
+    let segInputs = Array<Array<UInt8>>(segs, {_ => Array<UInt8>(0, {_ => 0u8})})
+    var totalIn: Int64 = 0
+    var totalFrame: Int64 = 0
+    var mbsB: Int64 = 0
+    for (k in 0..segs) {
+        if (segSkip[k]) {
+            let sz = segSkipSize[k]
+            let sf = Array<UInt8>(8 + sz, {_ => 0u8})
+            sf[0] = segMagic[k]
+            sf[1] = 0x2Au8
+            sf[2] = 0x4Du8
+            sf[3] = 0x18u8
+            sf[4] = UInt8(sz & 0xFF)
+            sf[5] = UInt8((sz >> 8) & 0xFF)
+            sf[6] = UInt8((sz >> 16) & 0xFF)
+            sf[7] = UInt8((sz >> 24) & 0xFF)
+            segBytes[k] = sf
+            totalFrame += 8 + sz
+        } else {
+            let nB = segN[k]
+            let inB = Array<UInt8>(nB, {_ => 0u8})
+            RDG_genBuffer(inB, nB, mp, 0.0, dseedB + UInt32(k))
+            var pB = LZ4F_preferences_t()
+            pB.frameInfo.blockSizeID = segBs[k]
+            pB.frameInfo.blockMode = segBm[k]
+            pB.frameInfo.contentChecksumFlag = segCcs[k]
+            pB.frameInfo.blockChecksumFlag = segBcs[k]
+            let capB = LZ4F_compressFrameBound(nB, Some(pB))
+            let fB = Array<UInt8>(capB, {_ => 0u8})
+            let sB = LZ4F_compressFrame(fB, 0, capB, inB, nB, Some(pB))
+            if (LZ4F_isError(sB)) { return "B seg ${k} compressFrame ${sB}" }
+            let fBs = Array<UInt8>(sB, {_ => 0u8})
+            var fi: Int64 = 0
+            while (fi < sB) {
+                fBs[fi] = fB[fi]
+                fi += 1
+            }
+            segBytes[k] = fBs
+            segInputs[k] = inB
+            totalIn += nB
+            totalFrame += sB
+            let m = LZ4F_getBlockSize(segBs[k])
+            if (m > mbsB) { mbsB = m }
+        }
+    }
+    let cat = Array<UInt8>(totalFrame, {_ => 0u8})
+    let expOut = Array<UInt8>(totalIn, {_ => 0u8})
+    var cp: Int64 = 0
+    var ep: Int64 = 0
+    for (k in 0..segs) {
+        let sb = segBytes[k]
+        var i: Int64 = 0
+        while (i < sb.size) {
+            cat[cp] = sb[i]
+            cp += 1
+            i += 1
+        }
+        let si = segInputs[k]
+        i = 0
+        while (i < si.size) {
+            expOut[ep] = si[i]
+            ep += 1
+            i += 1
+        }
+    }
+    @Assert(cp == totalFrame)
+    @Assert(ep == totalIn)
+    let dB = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let outB = Array<UInt8>(totalIn, {_ => 0u8})
+    let _ = fuzzFrameDecodeSplit(cat, totalFrame, outB, totalIn, dB,
+        if (mbsB == 0) { 65536 } else { mbsB }, lcgA + 0x5DEECE66Du64, seed, 2)
+    fuzzFrameDecodeCmp(outB, 0, expOut, totalIn, seed, 2)
+
+    // ---- scenario C: corruption of the scenario-A frame bytes ----
+    let mod = Array<UInt8>(size, {_ => 0u8})
+    var ci: Int64 = 0
+    while (ci < size) {
+        mod[ci] = frame[ci]
+        ci += 1
+    }
+    var mc = size
+    r = fuzzLcgNext(r)
+    let ct: Int64 = 1 + Int64(r % 3u64)
+    if (ct == 1) {
+        // 1-3 single-bit flips at random positions
+        r = fuzzLcgNext(r)
+        let flips: Int64 = 1 + Int64(r % 3u64)
+        for (_ in 0..flips) {
+            r = fuzzLcgNext(r)
+            let pos = Int64(r % UInt64(mc))
+            r = fuzzLcgNext(r)
+            mod[pos] = mod[pos] ^ UInt8(1 << Int64(r % 8u64))
+        }
+    } else if (ct == 2) {
+        // truncation of 1..64 bytes (>= 1 kept)
+        r = fuzzLcgNext(r)
+        let cut: Int64 = 1 + Int64(r % 64u64)
+        mc = if (size - cut >= 1) { size - cut } else { 1 }
+    } else {
+        // in-block tamper: 2-6 consecutive random bytes mid-stream
+        // (tiny frames fall back to a single XOR)
+        r = fuzzLcgNext(r)
+        let len: Int64 = 2 + Int64(r % 5u64)
+        if (mc > 16) {
+            r = fuzzLcgNext(r)
+            let pos: Int64 = 8 + Int64(r % UInt64(mc - 16))
+            for (k in 0..len) {
+                if (pos + k < mc) {
+                    r = fuzzLcgNext(r)
+                    mod[pos + k] = UInt8(r % 256u64)
+                }
+            }
+        } else {
+            r = fuzzLcgNext(r)
+            let pos = Int64(r % UInt64(mc))
+            mod[pos] = mod[pos] ^ 0xFFu8
+        }
+    }
+    let outCapC: Int64 = if (n < 4096) { 4096 } else { n }
+    let dC = LZ4F_createDecompressionContext(LZ4F_VERSION)
+    let outC = Array<UInt8>(outCapC, {_ => 0u8})
+    var offC: Int64 = 0
+    var writtenC: Int64 = 0
+    var rC: Int64 = 1
+    var itersC: Int64 = 0
+    let maxItersC = 4 * mc + 64
+    // stop reason: 0 = ret==0 (corruption coincidentally valid), 1 = error,
+    // 2 = src exhausted on a positive hint (truncated valid frame state),
+    // 3 = caller-side output buffer full
+    var stopped: Int64 = -1
+    while (true) {
+        if (rC == 0) { stopped = 0; break }
+        if (LZ4F_isError(rC)) { stopped = 1; break }
+        if (offC >= mc) { stopped = 2; break }
+        if (writtenC >= outCapC) { stopped = 3; break }
+        itersC += 1
+        if (itersC > maxItersC) { return "C: stall off=${offC}/${mc} w=${writtenC}/${outCapC}" }
+        r = fuzzLcgNext(r)
+        var chunkC = 1 + Int64(r % 997u64)
+        if (chunkC > mc - offC) { chunkC = mc - offC }
+        let (rr, cc, ww) = LZ4F_decompress(dC, outC, writtenC, outCapC - writtenC,
+            mod, offC, chunkC, Option<LZ4F_decompressOptions_t>.None)
+        if (LZ4F_isError(rr) && (cc != 0 || ww != 0)) {
+            return "C: error triple (${rr},${cc},${ww}) violates (code,0,0) at off=${offC}"
+        }
+        offC += cc
+        writtenC += ww
+        rC = rr
+    }
+    stats[stopped] += 1
+    return ""
+}
+
+@Test
+func fuzzFrameDecodeTest(): Unit {
+    // stats: [0] C-complete [1] C-error [2] C-exhausted [3] C-out-full
+    // [4] determinism replays
+    let stats: Array<Int64> = [0, 0, 0, 0, 0]
+    var failures: Int64 = 0
+    for (seed in 0..150) {
+        var problem = ""
+        try {
+            problem = fuzzFrameDecodeCase(seed, stats)
+        } catch (e: Exception) {
+            problem = "EXCEPTION ${e}"
+        }
+        if (problem != "") {
+            failures += 1
+            println("FUZZ-FDEC FAIL seed=${seed}: ${problem}")
+        }
+    }
+    // every terminal class of scenario C occurs across the fixed 150-seed
+    // set with wide margins (deterministic given the seed set; verified
+    // 22/75/50/3) - guards future edits of the derivation chain
+    println("fuzz frame decode stats: complete ${stats[0]} / error ${stats[1]} / exhausted ${stats[2]} / outfull ${stats[3]} / replays ${stats[4]}")
+    @Assert(stats[0] > 0)
+    @Assert(stats[1] > 0)
+    @Assert(stats[2] > 0)
+    @Assert(stats[3] > 0)
+    @Assert(stats[4] == 150)
+    @Assert(stats[0] + stats[1] + stats[2] + stats[3] == 150)
+    @Assert(failures == 0)
+    println("fuzz frame decode: 150 seeds x (random split w/ capacity ladder + concat w/ skippable + corruption) x2 determinism, 0 exceptions, 0 failures")
+}

@@ -15,7 +15,7 @@ scripts/build_and_test.sh both # 双工具链构建 + 全量测试
 
 ## 测试
 
-共 117 项测试:版本与 compressBound、流状态、XXH32/XXH64(官方向量 + 流式)、datagen(C 交叉验证)、一站式块压缩 golden(256 行清单 + 125 行对抗性 destSize 用例,字节级精确比对)、块解压全家族 golden(清单 v2 共 300 行:解压 artifact 逐字节 + partial 探针 + dict/stream/ring/setdict 滚动解码)、safe/fast 差分(随机 + 合成流 + 损坏输入)、extDict 跨界拷贝对抗用例、流式压缩 golden 46 行(cont/savedict/dictfast/dictslow/attach/extdict/destext)、HC 高压缩 golden 70 行(levels 1-12 全采样三策略 + destSize + 流式 continue/saveDict/loadDict/attach)、Frame 压缩 golden 49 行(10 头编码 + 27 流式帧全参数交叉 + 8 一次性 + 2 CDict 一次性 + 2 Begin_usingDict 帧,清单共 475 数据行,含 usingDict+blockIndependent 字典丢弃怪癖钉值)、模糊测试(2000 解压种子 + 200 流式种子 + 300 HC 压缩种子:分层 mid/hashchain/opt 各 100,one-shot 往返 + 确定性 + 不足容量 + 流式迁移 + 滚动解码闭环;+ 120 frame 种子:一次性/流式链双场景 ×2 确定性重放、未压缩块插入与中途 flush、逐块解码闭环;`LZ4_SKIP_PERF=1` 可跳过性能冒烟)+ 闭环滚动往返 + 边界契约。
+共 138 项测试:版本与 compressBound、流状态、XXH32/XXH64(官方向量 + 流式)、datagen(C 交叉验证)、一站式块压缩 golden(256 行清单 + 125 行对抗性 destSize 用例,字节级精确比对)、块解压全家族 golden(清单 v2 共 300 行:解压 artifact 逐字节 + partial 探针 + dict/stream/ring/setdict 滚动解码)、safe/fast 差分(随机 + 合成流 + 损坏输入)、extDict 跨界拷贝对抗用例、流式压缩 golden 46 行(cont/savedict/dictfast/dictslow/attach/extdict/destext)、HC 高压缩 golden 70 行(levels 1-12 全采样三策略 + destSize + 流式 continue/saveDict/loadDict/attach)、Frame 压缩 golden 49 行(10 头编码 + 27 流式帧全参数交叉 + 8 一次性 + 2 CDict 一次性 + 2 Begin_usingDict 帧,含 usingDict+blockIndependent 字典丢弃怪癖钉值)、Frame 解压 golden 14 行 fdmp C 解压探针(getFrameInfo 三岔、分片续传 hint 三元组、skippable、拼接、dict 双钉、错误码族;清单共 489 数据行)+ 分片续传矩阵(27 行 × 7 变体:固定/LCG 切分 × 容量阶梯 + dstIdx 位置对)+ stableDst/skipChecksums(含上游"skip 不屏蔽压缩块校验"怪癖钉值)/skippable/拼接语义 + 覆盖率门禁定向用例(多缓冲 updateDict 分支、块校验和分片暂存、skippable 头分片怪癖等)、模糊测试(2000 解压种子 + 200 流式种子 + 300 HC 压缩种子:分层 mid/hashchain/opt 各 100,one-shot 往返 + 确定性 + 不足容量 + 流式迁移 + 滚动解码闭环;+ 120 frame 压缩种子:一次性/流式链双场景 ×2 确定性重放、未压缩块插入与中途 flush、逐块解码闭环;+ 150 frame 解压种子:随机切分 × 容量阶梯 {0, 小, maxBlockSize, n} + 2-4 帧拼接混 skippable + 损坏三型零异常,×2 逐字节确定性重放;`LZ4_SKIP_PERF=1` 可跳过性能冒烟)+ 闭环滚动往返 + 边界契约。
 
 ## golden 语料再生工作流
 
@@ -25,7 +25,7 @@ golden 语料(`corpus/`,清单 + artifacts,~5.4MB)**不入 git**(仓库策略,`g
 scripts/gen_golden.sh   # 需要 cc 与 ~/lz4 检出 0774d055(编译上游 C 源生成)
 ```
 
-脚本自带门检(总行 497 / 注释 22 / 各 mode 行数 / corpus 体积)。测试套件内嵌常量摘要断言(尺寸 + XXH32/64)**自足**——语料缺失时仍完整验证;artifact 存在时才做逐字节比对(全有或全无)。上游工作副本需保持检出基线 commit:
+脚本自带门检(总行 512 / 注释 23 / 各 mode 行数 / corpus 体积)。测试套件内嵌常量摘要断言(尺寸 + XXH32/64)**自足**——语料缺失时仍完整验证;artifact 存在时才做逐字节比对(全有或全无)。上游工作副本需保持检出基线 commit:
 
 ```bash
 git -C ~/lz4 checkout 0774d055
@@ -40,13 +40,14 @@ git -C ~/lz4 checkout 0774d055
 - **M3b(完成)**:流式压缩全家(`createStream` / `freeStream` / `resetStream(+fast)` / `loadDict(+Slow)` / `attach_dictionary` / `compress_fast_continue` / `saveDict` / `destSize_extState`),真实 `prepareTable` 表保留语义,四字典模式压缩核心;golden 扩至 356 行(46 行新增逐字节)、闭环滚动往返、边界契约 C 探针钉值;库源码行覆盖 96.8%。**block 层(lz4.c 非弃用 API 全量)就此闭环**。
 - **M4(完成)**:HC 高压缩全量(lz4hc.c 非弃用 17 函数):三策略核心 LZ4MID(lv1-2)/ hashChain(lv3-9)/ optimal(lv10-12)+ `favorDecompressionSpeed`,one-shot / extState(+fastReset)/ destSize / 流式 `loadDictHC` / `attach` / `continue(+destSize)` / `saveDictHC`;golden 扩至 426 数据行(70 行新增,levels 1-12 全采样逐字节)、C 探针 7 案例钉值、300 种子 HC 模糊测试(分层 100/100/100);库源码行覆盖 96.6%。**HC 层(lz4hc.c 非弃用 API 全量)就此闭环**。
 - **M5(完成)**:Frame 压缩全量(lz4frame.c 压缩侧 21 函数):版本/错误/界限族、cctx 生命周期、`compressBegin`(+`_usingDict`/+`_usingCDict`)、`compressUpdate` / `uncompressedUpdate` / `flush` / `compressEnd`、一次性 `compressFrame`(+`_usingCDict`)、`LZ4F_CDict` 预消化字典;golden 扩至 475 数据行(49 行新增逐字节,含 fdt 字典丢弃怪癖 C 探针钉值)、120 种子 frame 模糊测试(双场景 + 确定性重放 + 逐块解码闭环);库源码行覆盖 96.4%。**frame 压缩侧就此闭环,frame 接口(压缩方向)对外提供**。
-- **M6(下一步)**:Frame 解压(dctx 状态机、getFrameInfo、校验和、skippable)。
+- **M6(完成)**:Frame 解压全量(lz4frame.c 解压侧 7 函数):dctx 生命周期 `create/free/resetDecompressionContext`、`headerSize`、`getFrameInfo`、`decompress` / `decompress_usingDict`;14-stage 分片续传状态机(随机切分 × 容量阶梯 + 位置对全矩阵)、块/内容校验和、skippable、帧拼接;fdmp C 解压探针 golden 14 行(清单扩至 489 数据行)、150 种子 frame 解压模糊测试(随机切分/拼接/损坏三型,×2 确定性重放);覆盖率门禁定向用例 5 个;库源码行覆盖 96.5%。**frame 层(压缩 + 解压)双向闭环,lz4frame API 全量对外提供**。
+- **M7(下一步)**:收尾测试(golden 全矩阵扩容、三文件可达未覆盖行、fuzz 加压、bench 复评)。
 
 **移植基线**:上游 dev commit `0774d055`(2026-06-01,v1.10.0 发布线之上的官方修复线)。压缩输出与 v1.10.0 发布版逐字节一致(300 行 golden 双 ref 重验零差异);解压包含其后官方 OOB/边界修复,损坏输入行为更严格;详见 [docs/design.md](docs/design.md) 与 [docs/progress.md](docs/progress.md)。
 
-一站式块压缩、块解压、流式压缩(字典/续压/attach)、HC 高压缩(级别 1-12、最优解析、HC 流式字典)与 frame 压缩(流式 + 一次性 + CDict)API 均已对外提供;frame 解压在 M6 提供,路线图见 [docs/design.md](docs/design.md)。
+一站式块压缩、块解压、流式压缩(字典/续压/attach)、HC 高压缩(级别 1-12、最优解析、HC 流式字典)与 frame 压缩/解压(流式 + 一次性 + CDict + dctx 分片续传)API 均已对外提供;路线图见 [docs/design.md](docs/design.md)。
 
-## API 对照摘要(frame 压缩侧)
+## API 对照摘要(frame 压缩侧 + 解压侧)
 
 与上游 `lz4frame.h`(0774d055)逐函数对应,承载差异如下:
 
@@ -54,11 +55,16 @@ git -C ~/lz4 checkout 0774d055
 |---|---|---|
 | 五枚举(blockSizeID/blockMode/contentChecksum/blockChecksum/frameType)与错误码 | C enum | **Int32 / Int64 常量族**(仓颉无 C 值枚举;成员名逐字,如 `LZ4F_max64KB`、`LZ4F_ERROR_dstMaxSize_tooSmall`) |
 | 缓冲 + 指针入参 | `dstBuffer` / `srcBuffer` 裸指针 | **位置对** `(dstBuf, dstIdx)` / `(srcBuf, srcIdx)`;一次性族 `compressFrame` 源取整缓冲(无位置对,对齐上游单指针形态) |
-| `LZ4F_createCompressionContext(&cctx, version)` 出参 | 双参 + 错误码 | **返回 `LZ4F_cctx`**(`version` 入参保留,仅存不校验,同上游 advanced 语义) |
-| 可空指针(`preferencesPtr` 等) | `NULL` | `Option<T>`(`None` 代入 MEM_INIT 零值语义,非 INIT 默认) |
-| `reserved[3]` 保留字段 | 结构体内存占位 | **省略**(默认值结构体 + 显式 init 等价覆盖 INIT 宏) |
+| `LZ4F_createCompressionContext(&cctx, version)` / `LZ4F_createDecompressionContext(&dctx, version)` 出参 | 双参 + 错误码 | **返回 `LZ4F_cctx` / `LZ4F_dctx`**(`version` 入参保留,仅存不校验,同上游 advanced 语义) |
+| `LZ4F_freeDecompressionContext(dctxPtr)` | 释放并返回错误码 | **返回释放时 `dStage`**(C 语义;堆释放由 GC 承载) |
+| 可空指针(`preferencesPtr` / `dOptPtr` 等) | `NULL` | `Option<T>`(`None` 代入 MEM_INIT 零值语义,非 INIT 默认) |
+| `reserved[3]` 保留字段(compressOptions / decompressOptions) | 结构体内存占位 | **省略**(默认值结构体 + 显式 init 等价覆盖 INIT 宏) |
+| `LZ4F_decompress(dctx, dstBuffer, dstSizePtr, srcBuffer, srcSizePtr, dOptPtr)` 返回码 + 双出参 | 单返回值 + 出参 | **元组 `(ret, srcConsumed, dstWritten)`**(design §4.3 规则 1;错误契约恒 `(code, 0, 0)`,`ret` 为 0 表帧完成、正值表下次调用建议字节数 hint);`LZ4F_getFrameInfo` 同式元组 `(code, frameInfo, srcConsumed)` |
+| dst NULL(C `dstBuffer==NULL, *dstSizePtr==0`) | NULL 守卫 | **空数组 + `dstCapacity=0`**(全部 NULL 守卫在容量 0 算术下自然归零,无特判分支) |
 | `LZ4F_compressBegin_usingDict` 字典语义 | 头文件注记"仅首块使用字典" | **实测怪癖如实钉住**:blockIndependent 帧字典被逐块 reset 整体丢弃(帧 == 无字典帧,C 探针验证);linked 帧字典全帧有效;需逐块字典请用 `compressFrame_usingCDict`/`Begin_usingCDict` |
 | `LZ4F_createCDict` NULL/分配失败路径 | 返回 NULL | GC 下不可达,注释登记 |
+| `LZ4F_isSkippedFrame` / `LZ4F_decompress_usingCDict`(解压侧) | **上游 0774d055 不存在**(设计 §4.5 原清单误记,已订正) | 不移植;skippable 判定经 `getFrameInfo` 返回的 `frameInfo.frameType == LZ4F_skippableFrame` 表达 |
+| mid-src 压缩块解码 | `LZ4_decompress_safe_usingDict(selectedIn, ...)` 原位解码 | `LZ4_decompress_generic` 无 src 位置参数 → **经 tmpIn 暂存一次再从索引 0 解码**(字节相同 ⇒ 输出等价,仅性能差异;偏差登记) |
 
 ## 变更记录
 
