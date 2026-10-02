@@ -2153,3 +2153,705 @@ func lz4hcMidDictCtxConsultTest(): Unit {
     @Assert(hcBytesEqual(dec7, D3, 16384))
     println("hc mid dictctx consult + dict-as-block takeover pins verified")
 }
+
+/*-************************************
+*  M7 Task 2: hard-to-reach HC lines (targeted coverage)
+**************************************/
+/* 共享合成输入族:与 scripts/hc_search3_probe.c 的 buildSweep/buildReprice
+   逐语句对应(UInt64 LCG + 整数模式运算,双实现可移植;钉值均出自该探针
+   对上游 0774d055 的编译运行)。_Search3(_Search2/_Search3 lazy 分析)仅在
+   nbAttempts > 128 时启用 —— 即 hashChain 仅 lv9(lv10-12 为 opt 策略)。 */
+
+private func hc7LcgNext(x: UInt64): UInt64 {
+    return (x * 1103515245u64 + 12345u64) & 0xFFFFFFFFu64
+}
+
+private func hc7Pat(j: Int64, m: Int64, c: Int64): UInt8 {
+    return UInt8((j * m + c) & 0xFF)
+}
+
+private func hcSweepBuild(kind: Int64): Array<UInt8> {
+    let n: Int64 = 65536
+    let b = Array<UInt8>(n, {_ => 0u8})
+    if (kind <= 3) {                       /* F1(p):周期 + 稀疏变异 */
+        let p: Int64 = if (kind == 0) { 5 } else if (kind == 1) { 17 }
+            else if (kind == 2) { 63 } else { 255 }
+        for (i in 0..n) {
+            b[i] = hc7Pat(i % p, 113, 29)
+            if (i % 97 == 13) {
+                b[i] = hc7Pat(i / 97, 151, 7)
+            }
+        }
+    } else if (kind == 4) {                /* F2:512B 段双周期 13/29 交错 */
+        for (i in 0..n) {
+            b[i] = if (((i >> 9) % 2) == 0) { hc7Pat(i % 13, 61, 11) }
+                else { hc7Pat(i % 29, 181, 77) }
+        }
+    } else if (kind <= 7) {                /* F3(L,p):前导文字游程 + 周期 17 */
+        let L: Int64 = if (kind == 5) { 1 } else if (kind == 6) { 5 } else { 33 }
+        var x: UInt64 = 777u64
+        for (i in 0..n) {
+            if (i < L) {
+                x = hc7LcgNext(x)
+                b[i] = UInt8((x >> 16u64) & 0xFFu64)
+            } else {
+                b[i] = hc7Pat(i % 17, 113, 29)
+            }
+        }
+    } else if (kind == 8) {                 /* F4:三层几何 A/B/AB + 周期 7 尾 */
+        var x: UInt64 = 888u64
+        for (i in 0..64) {
+            x = hc7LcgNext(x)
+            b[i] = UInt8((x >> 16u64) & 0xFFu64)
+        }
+        x = 889u64
+        for (i in 64..128) {
+            x = hc7LcgNext(x)
+            b[i] = UInt8((x >> 16u64) & 0xFFu64)
+        }
+        for (i in 128..192) {
+            b[i] = b[i - 128]
+        }
+        for (i in 192..256) {
+            b[i] = b[i - 128]
+        }
+        for (i in 256..n) {
+            b[i] = hc7Pat((i - 256) % 7, 197, 3)
+        }
+    } else if (kind <= 11) {                /* F5(k):16B 基块 + 轮转单字节翻转 + 间隙(短匹配挤压几何) */
+        let flip: Int64 = kind - 9           /* 9: 翻转字节 + 0..2B 间隙;10: 翻转 + 3B 间隙;11: 每 3 块 2 翻 */
+        var x: UInt64 = 3001u64
+        let base = Array<UInt8>(16, {_ => 0u8})
+        for (i in 0..16) {
+            x = hc7LcgNext(x)
+            base[i] = UInt8((x >> 16u64) & 0xFFu64)
+        }
+        for (i in 0..16) {
+            b[i] = base[i]
+        }
+        var pos: Int64 = 16
+        var seg: Int64 = 0
+        while (pos + 16 <= n) {
+            for (i in 0..16) {
+                b[pos + i] = base[i]
+            }
+            let flipBit: Bool = if (flip == 11) { seg % 3 != 0 } else { true }
+            if (flipBit) {
+                b[pos + (seg % 16)] ^= 0x5Au8
+            }
+            pos += 16 + (if (flip == 10) { 3 } else { Int64(seg % 3) })
+            seg += 1
+        }
+        while (pos < n) {                    /* 尾部填充周期 4 */
+            b[pos] = hc7Pat(pos % 4, 113, 29)
+            pos += 1
+        }
+    } else if (kind == 12) {                /* RDG 短长匹配混合 */
+        RDG_genBuffer(b, n, 0.60, 0.0, 4321u32)
+    } else if (kind == 13) {                /* RDG 中等匹配 */
+        RDG_genBuffer(b, n, 0.75, 0.0, 8765u32)
+    } else {                                /* F7(s):重叠自拷贝级联(文字游程/回拷/移位回拷轮转,
+                                              回距 4..303 < 拷长 4..47 → 级联匹配,lazy2 校正高发) */
+        let s: UInt64 = 5000u64 + UInt64(kind - 14)
+        var x: UInt64 = s
+        for (i in 0..256) {
+            x = hc7LcgNext(x)
+            b[i] = UInt8((x >> 16u64) & 0xFFu64)
+        }
+        var pos: Int64 = 256
+        var seg: Int64 = 0
+        while (pos < n) {
+            let act: Int64 = seg % 3
+            if (act == 0) {                 /* 文字游程 3..62 */
+                let L: Int64 = 3 + (seg % 60)
+                x = hc7LcgNext(x)
+                var i: Int64 = 0
+                while (i < L && pos < n) {
+                    x = hc7LcgNext(x)
+                    b[pos] = UInt8((x >> 16u64) & 0xFFu64)
+                    i += 1
+                    pos += 1
+                }
+            } else {                        /* 回拷 4..47 字节自 4..303 回距(可重叠);act==2 时 +2 移位回声 */
+                let ml: Int64 = 4 + (seg % 44)
+                let back: Int64 = 4 + (seg % 300)
+                let src: Int64 = pos - back + (if (act == 2) { 2 } else { 0 })
+                if (src < 0) {
+                    b[pos] = hc7Pat(pos, 113, 29)
+                    pos += 1
+                    seg += 1
+                    continue
+                }
+                var i: Int64 = 0
+                while (i < ml && pos < n) {
+                    b[pos] = b[src + i]
+                    i += 1
+                    pos += 1
+                }
+            }
+            seg += 1
+        }
+    }
+    return b
+}
+
+private func hcRepriceBuild(kind: Int64): Array<UInt8> {
+    let n: Int64 = 65536
+    let b = Array<UInt8>(n, {_ => 0u8})
+    if (kind == 0) {                       /* 随机 | 周期 11 | 随机 | 周期 11 相位 +3 */
+        var x: UInt64 = 1001u64
+        for (i in 0..64) {
+            x = hc7LcgNext(x)
+            b[i] = UInt8((x >> 16u64) & 0xFFu64)
+        }
+        for (i in 64..32768) {
+            b[i] = hc7Pat(i % 11, 113, 29)
+        }
+        x = 1002u64
+        for (i in 32768..32968) {
+            x = hc7LcgNext(x)
+            b[i] = UInt8((x >> 16u64) & 0xFFu64)
+        }
+        for (i in 32968..n) {
+            b[i] = hc7Pat((i + 3) % 11, 113, 29)
+        }
+    } else if (kind == 1) {                /* 文字游程 1..7 交替 + 短匹配(5..7,回距 64..95;前导 256B 头防回引越界) */
+        var x: UInt64 = 1500u64
+        for (i in 0..256) {
+            x = hc7LcgNext(x)
+            b[i] = UInt8((x >> 16u64) & 0xFFu64)
+        }
+        var pos: Int64 = 256
+        var seg: Int64 = 0
+        while (pos < n) {
+            let k: Int64 = (seg % 7) + 1
+            var x2: UInt64 = 1003u64 + UInt64(seg)
+            var i: Int64 = 0
+            while (i < k && pos < n) {
+                x2 = hc7LcgNext(x2)
+                b[pos] = UInt8((x2 >> 16u64) & 0xFFu64)
+                i += 1
+                pos += 1
+            }
+            if (pos >= n) {
+                break
+            }
+            let ml: Int64 = 5 + (seg % 3)
+            let srcBack: Int64 = 64 + (seg % 32)
+            i = 0
+            while (i < ml && pos < n) {
+                b[pos] = b[pos - srcBack]
+                i += 1
+                pos += 1
+            }
+            seg += 1
+        }
+    } else if (kind == 3) {                /* F6:游程 1..40(跨 RUN_MASK=15 台阶)+ 固定 8B 短匹配(前导 256B 头) */
+        var x: UInt64 = 1500u64
+        for (i in 0..256) {
+            x = hc7LcgNext(x)
+            b[i] = UInt8((x >> 16u64) & 0xFFu64)
+        }
+        var pos: Int64 = 256
+        var seg: Int64 = 0
+        while (pos < n) {
+            let L: Int64 = 1 + (seg % 40)
+            var x2: UInt64 = 2000u64 + UInt64(seg)
+            var i: Int64 = 0
+            while (i < L && pos < n) {
+                x2 = hc7LcgNext(x2)
+                b[pos] = UInt8((x2 >> 16u64) & 0xFFu64)
+                i += 1
+                pos += 1
+            }
+            if (pos >= n) {
+                break
+            }
+            i = 0
+            while (i < 8 && pos < n) {
+                b[pos] = b[pos - (64 + (seg % 16))]
+                i += 1
+                pos += 1
+            }
+            seg += 1
+        }
+    } else {                               /* RDG(65536, 0.85, 0, 777) */
+        RDG_genBuffer(b, n, 0.85, 0.0, 777u32)
+    }
+    return b
+}
+
+/* 探针钉值(hc_search3_probe.c,上游 0774d055):代表组合字节保真 */
+private let HC_SEARCH3_PINS: Array<(Int64, Int64, Int32, Int32, Int32, UInt32)> =
+    /* (kind, c0, tg, wantC, wantConsumed, want32) — tg = c0*f/16 的派生值按
+       探针行注释;c0 由仓颉侧重算并断言一致 */
+    [
+    (1, 3425, 856, 856, 15637, 0xfc4490abu32),     /* c0/4 */
+    (4, 833, 416, 416, 29703, 0x7554f991u32),      /* c0/2 */
+    (8, 405, 303, 303, 39556, 0xff397795u32),      /* 3*c0/4 */
+]
+
+@Test
+func lz4hcSearch3SweepTest(): Unit {
+    /* 代表钉值行先断言(c0 一致 → 派生 tg 一致 → c/consumed/xxh32 全等) */
+    for ((kind, wantC0, tg, wantC, wantConsumed, want32) in HC_SEARCH3_PINS) {
+        let buf = hcSweepBuild(kind)
+        let st0 = LZ4_createStreamHC()
+        let out0 = Array<UInt8>(70000, {_ => 0u8})
+        let c0 = LZ4_compress_HC(buf, 65536, out0, 70000, 9)
+        if (c0 != Int32(wantC0)) {
+            println("SWEEP PIN kind=${kind}: c0=${c0} want ${wantC0}")
+        }
+        @Assert(c0 == Int32(wantC0))
+        LZ4_freeStreamHC(st0)
+        let out = Array<UInt8>(Int64(tg), {_ => 0u8})
+        let st = LZ4_createStreamHC()
+        let (c, consumed) = LZ4_compress_HC_destSize(st, buf, 65536, out, tg, 9)
+        @Assert(c == wantC && consumed == wantConsumed)
+        @Assert(XXH32(out, Int64(c), 0u32) == want32)
+        let dec = Array<UInt8>(65536, {_ => 0u8})
+        @Assert(LZ4_decompress_safe(out, c, dec, consumed) == consumed)
+        @Assert(hcBytesEqual(dec, buf, Int64(consumed)))
+        LZ4_freeStreamHC(st)
+    }
+    /* 全族 × tg 阶梯(destSize 解码闭合;_Search3 校正/出口的概率覆盖主体) */
+    var combos = 0
+    for (kind in 0..20) {
+        let buf = hcSweepBuild(kind)
+        let st0 = LZ4_createStreamHC()
+        let out0 = Array<UInt8>(70000, {_ => 0u8})
+        let c0 = LZ4_compress_HC(buf, 65536, out0, 70000, 9)
+        LZ4_freeStreamHC(st0)
+        @Assert(c0 >= 40)
+        for (f in 1..16) {
+            let tg: Int32 = if (f < 15) { c0 * Int32(f) / 16 } else { c0 - 1 }
+            if (tg < 16) {
+                continue
+            }
+            let out = Array<UInt8>(Int64(tg), {_ => 0u8})
+            let st = LZ4_createStreamHC()
+            let (c, consumed) = LZ4_compress_HC_destSize(st, buf, 65536, out, tg, 9)
+            if (c < 1 || c > tg || consumed < 1 || consumed > 65536) {
+                println("SWEEP FAIL kind=${kind} f=${f}/16 tg=${tg}: c=${c} consumed=${consumed}")
+            }
+            @Assert(c >= 1 && c <= tg)
+            @Assert(consumed >= 1 && consumed <= 65536)
+            let dec = Array<UInt8>(65536, {_ => 0u8})
+            @Assert(LZ4_decompress_safe(out, c, dec, consumed) == consumed)
+            @Assert(hcBytesEqual(dec, buf, Int64(consumed)))
+            LZ4_freeStreamHC(st)
+            combos += 1
+        }
+    }
+    /* 流式变体:block0 notLimited 锚定,block1 continue_destSize 阶梯 */
+    let half: Int64 = 32768
+    let capHalf = Int64(LZ4_compressBound(Int32(half)))
+    var contCombos = 0
+    for (kind in 0..20) {
+        let buf = hcSweepBuild(kind)
+        let block0 = Array<UInt8>(half, {i => buf[i]})
+        /* block1 的 notLimited 基线 cB(供阶梯派生) */
+        let stB = LZ4_createStreamHC()
+        LZ4_resetStreamHC(stB, 9)
+        let outA = Array<UInt8>(capHalf, {_ => 0u8})
+        @Assert(LZ4_compress_HC_continue(stB, buf, 0, Int32(half), outA, Int32(capHalf)) > 0)
+        let outB = Array<UInt8>(capHalf, {_ => 0u8})
+        let cB = LZ4_compress_HC_continue(stB, buf, half, Int32(half), outB, Int32(capHalf))
+        LZ4_freeStreamHC(stB)
+        @Assert(cB >= 40)
+        for (f in 1..16) {
+            let tg: Int32 = if (f < 15) { cB * Int32(f) / 16 } else { cB - 1 }
+            if (tg < 16) {
+                continue
+            }
+            let st = LZ4_createStreamHC()
+            LZ4_resetStreamHC(st, 9)
+            @Assert(LZ4_compress_HC_continue(st, buf, 0, Int32(half), outA, Int32(capHalf)) > 0)
+            let out = Array<UInt8>(Int64(tg), {_ => 0u8})
+            let (c, consumed) = LZ4_compress_HC_continue_destSize(st, buf, half,
+                Int32(half), out, tg)
+            if (c < 1 || c > tg || consumed < 1 || consumed > 65536) {
+                println("SWEEP CONT FAIL kind=${kind} f=${f}/16 tg=${tg}: c=${c} consumed=${consumed}")
+            }
+            @Assert(c >= 1 && c <= tg)
+            @Assert(consumed >= 1 && consumed <= 65536)
+            let dec = Array<UInt8>(65536, {_ => 0u8})
+            @Assert(LZ4_decompress_safe_usingDict(out, c, dec, consumed, block0,
+                Int32(half)) == consumed)
+            @Assert(hcBytesEqual(dec, Array<UInt8>(half, {i => buf[half + i]}),
+                Int64(consumed)))
+            LZ4_freeStreamHC(st)
+            contCombos += 1
+        }
+    }
+    @Assert(combos >= 100 && contCombos >= 100)
+    /* LIMITED 容量路径(非 destSize 的一次性欠容量):LZ4_OUTPUT_LIMITED 下
+       _Search3 出口的 return (0,0) 分支(L839/886/930);一次性压缩全有或全无 →
+       欠容量必 0,足容量(= bound)必成功 */
+    var failSeen = 0
+    var okSeen = 0
+    let fracsA: Array<Int32> = [2, 4, 6, 8]
+    for (kind in 0..20) {
+        let buf = hcSweepBuild(kind)
+        let st0 = LZ4_createStreamHC()
+        let out0 = Array<UInt8>(70000, {_ => 0u8})
+        let c0 = LZ4_compress_HC(buf, 65536, out0, 70000, 9)
+        LZ4_freeStreamHC(st0)
+        for (f in fracsA) {
+            let cap: Int32 = c0 * f / 16
+            if (cap < 16) {
+                continue
+            }
+            let st = LZ4_createStreamHC()
+            let out = Array<UInt8>(Int64(cap), {_ => 0u8})
+            let c = LZ4_compress_HC(buf, 65536, out, cap, 9)
+            @Assert(c >= 0 && c <= cap)
+            if (c == 0) {
+                failSeen += 1
+            } else {
+                let dec = Array<UInt8>(65536, {_ => 0u8})
+                @Assert(LZ4_decompress_safe(out, c, dec, 65536) == 65536)
+                @Assert(hcBytesEqual(dec, buf, 65536))
+                okSeen += 1
+            }
+            LZ4_freeStreamHC(st)
+        }
+        /* 足容量对照:bound 下必成功(每族恰一次) */
+        let stF = LZ4_createStreamHC()
+        let outF = Array<UInt8>(70000, {_ => 0u8})
+        let cF = LZ4_compress_HC(buf, 65536, outF, 70000, 9)
+        @Assert(cF > 0)
+        let decF = Array<UInt8>(65536, {_ => 0u8})
+        @Assert(LZ4_decompress_safe(outF, cF, decF, 65536) == 65536)
+        @Assert(hcBytesEqual(decF, buf, 65536))
+        LZ4_freeStreamHC(stF)
+        okSeen += 1
+    }
+    @Assert(failSeen >= 1 && okSeen >= 20)
+    println("hc search3 sweep: ${combos} one-shot + ${contCombos} continue destSize + " +
+        "${failSeen} limited-fail / ${okSeen} limited-ok combos, all roundtrip")
+}
+
+/* fillOutput 深度钳制(MID L784 / hashChain L2101):巨型 match + 紧输出 */
+@Test
+func lz4hcFillOverflowClampTest(): Unit {
+    let zeros = Array<UInt8>(131072, {_ => 0u8})
+    let per4 = Array<UInt8>(131072, {i => hc7Pat(i % 4, 113, 29)})
+    /* 探针钉值(hc_search3_probe.c):zeros 三级别同输出,per4 lv4 tg=128 */
+    let st1 = LZ4_createStreamHC()
+    let o1 = Array<UInt8>(100, {_ => 0u8})
+    let (cz2, kz2) = LZ4_compress_HC_destSize(st1, zeros, 131072, o1, 100, 2)
+    @Assert(cz2 == 100 && kz2 == 22974)
+    @Assert(XXH32(o1, Int64(cz2), 0u32) == 0xc9cb1972u32)
+    LZ4_freeStreamHC(st1)
+    let st2 = LZ4_createStreamHC()
+    let o2 = Array<UInt8>(100, {_ => 0u8})
+    let (cz4, kz4) = LZ4_compress_HC_destSize(st2, zeros, 131072, o2, 100, 4)
+    @Assert(cz4 == 100 && kz4 == 22974)
+    @Assert(XXH32(o2, Int64(cz4), 0u32) == 0xc9cb1972u32)
+    LZ4_freeStreamHC(st2)
+    let st3 = LZ4_createStreamHC()
+    let o3 = Array<UInt8>(100, {_ => 0u8})
+    let (cz9, kz9) = LZ4_compress_HC_destSize(st3, zeros, 131072, o3, 100, 9)
+    @Assert(cz9 == 100 && kz9 == 22974)
+    @Assert(XXH32(o3, Int64(cz9), 0u32) == 0xc9cb1972u32)
+    LZ4_freeStreamHC(st3)
+    let st4 = LZ4_createStreamHC()
+    let o4 = Array<UInt8>(128, {_ => 0u8})
+    let (cp4, kp4) = LZ4_compress_HC_destSize(st4, per4, 131072, o4, 128, 4)
+    @Assert(cp4 == 128 && kp4 == 29352)
+    @Assert(XXH32(o4, Int64(cp4), 0u32) == 0xc2a195c2u32)
+    LZ4_freeStreamHC(st4)
+    /* 扫描:双输入 × lv {2,4,9,10,12} × tg {64,100,128,256},解码闭合(opt
+       级 10/12 覆盖 L1739:opt 解析器 _dest_overflow 的 ovml 钳制) */
+    var combos = 0
+    let inputs: Array<Array<UInt8>> = [zeros, per4]
+    let lvs: Array<Int32> = [2, 4, 9, 10, 12]
+    let tgs: Array<Int32> = [64, 100, 128, 256]
+    for (inp in inputs) {
+        for (lv in lvs) {
+            for (tg in tgs) {
+                let st = LZ4_createStreamHC()
+                let out = Array<UInt8>(Int64(tg), {_ => 0u8})
+                let (c, consumed) = LZ4_compress_HC_destSize(st, inp, 131072, out, tg, lv)
+                @Assert(c >= 1 && c <= tg)
+                @Assert(consumed >= 1 && consumed <= 131072)
+                let dec = Array<UInt8>(131072, {_ => 0u8})
+                @Assert(LZ4_decompress_safe(out, c, dec, consumed) == consumed)
+                @Assert(hcBytesEqual(dec, inp, Int64(consumed)))
+                LZ4_freeStreamHC(st)
+                combos += 1
+            }
+        }
+    }
+    @Assert(combos == 40)
+    println("hc fillOverflow clamp: 4 pins + ${combos} sweep combos, all roundtrip")
+}
+
+/* optimal 解析器字面量前缀改价(L1988-1998):探针钉值 × 确定性 × 往返 */
+@Test
+func lz4hcOptLiteralRepriceTest(): Unit {
+    /* (kind, lv, wantC, want32) — hc_search3_probe.c */
+    let pins: Array<(Int64, Int32, Int32, UInt32)> = [
+        (0, 10, 550, 0xaafbf8b8u32),
+        (0, 11, 549, 0xb2f68005u32),
+        (0, 12, 546, 0xe7bfe00fu32),
+        (1, 10, 45905, 0x08bd0883u32),
+        (1, 11, 45905, 0x08bd0883u32),
+        (1, 12, 45905, 0x08bd0883u32),
+        (2, 10, 10356, 0xb12ba8afu32),
+        (2, 11, 10264, 0x25426923u32),
+        (2, 12, 10208, 0x4847c43eu32),
+    ]
+    var checked = 0
+    for ((kind, lv, wantC, want32) in pins) {
+        let buf = hcRepriceBuild(kind)
+        let out = Array<UInt8>(70000, {_ => 0u8})
+        let st = LZ4_createStreamHC()
+        let c = LZ4_compress_HC(buf, 65536, out, 70000, lv)
+        if (c != wantC) {
+            println("REPRICE PIN kind=${kind} lv=${lv}: c=${c} want ${wantC}")
+        }
+        @Assert(c == wantC)
+        @Assert(XXH32(out, Int64(c), 0u32) == want32)
+        /* fresh 态二次压缩逐字节确定 */
+        let out2 = Array<UInt8>(70000, {_ => 0u8})
+        let st2 = LZ4_createStreamHC()
+        @Assert(LZ4_compress_HC(buf, 65536, out2, 70000, lv) == c)
+        @Assert(hcBytesEqual(out, out2, Int64(c)))
+        /* 往返 */
+        let dec = Array<UInt8>(65536, {_ => 0u8})
+        @Assert(LZ4_decompress_safe(out, c, dec, 65536) == 65536)
+        @Assert(hcBytesEqual(dec, buf, 65536))
+        LZ4_freeStreamHC(st)
+        LZ4_freeStreamHC(st2)
+        checked += 1
+    }
+    @Assert(checked == 9)
+    /* 改价概率主体:crafted F6(kind=3,游程跨 RUN_MASK 台阶 + 8B 短匹配)+
+       RDG mp 阶梯 × 多种子 × lv10-12(notLimited 往返;L1629 数据依赖)+ 
+       代表 kind × lv12 destSize(opt fillOutput 组合) */
+    var swept = 0
+    let optLvs: Array<Int32> = [10, 11, 12]
+    let buf3 = hcRepriceBuild(3)
+    let out3 = Array<UInt8>(70000, {_ => 0u8})
+    for (lv in optLvs) {
+        let st = LZ4_createStreamHC()
+        let c = LZ4_compress_HC(buf3, 65536, out3, 70000, lv)
+        @Assert(c > 0)
+        let dec = Array<UInt8>(65536, {_ => 0u8})
+        @Assert(LZ4_decompress_safe(out3, c, dec, 65536) == 65536)
+        @Assert(hcBytesEqual(dec, buf3, 65536))
+        LZ4_freeStreamHC(st)
+        swept += 1
+    }
+    let mps: Array<Float64> = [0.30, 0.50, 0.70, 0.80, 0.90, 0.95, 0.99]
+    let seeds: Array<UInt32> = [1u32, 2u32, 3u32]
+    let rbuf = Array<UInt8>(65536, {_ => 0u8})
+    let rout = Array<UInt8>(70000, {_ => 0u8})
+    for (mp in mps) {
+        for (sd in seeds) {
+            RDG_genBuffer(rbuf, 65536, mp, 0.0, sd)
+            for (lv in optLvs) {
+                let st = LZ4_createStreamHC()
+                let c = LZ4_compress_HC(rbuf, 65536, rout, 70000, lv)
+                @Assert(c > 0)
+                let dec = Array<UInt8>(65536, {_ => 0u8})
+                @Assert(LZ4_decompress_safe(rout, c, dec, 65536) == 65536)
+                @Assert(hcBytesEqual(dec, rbuf, 65536))
+                LZ4_freeStreamHC(st)
+                swept += 1
+            }
+        }
+    }
+    let fracsB: Array<Int32> = [2, 4, 8]
+    for (kind in 0..3) {
+        let buf = hcRepriceBuild(kind)
+        let st0 = LZ4_createStreamHC()
+        let out0 = Array<UInt8>(70000, {_ => 0u8})
+        let c0 = LZ4_compress_HC(buf, 65536, out0, 70000, 12)
+        LZ4_freeStreamHC(st0)
+        for (f in fracsB) {
+            let tg: Int32 = c0 * f / 8
+            if (tg < 16) {
+                continue
+            }
+            let out = Array<UInt8>(Int64(tg), {_ => 0u8})
+            let st = LZ4_createStreamHC()
+            let (c, consumed) = LZ4_compress_HC_destSize(st, buf, 65536, out, tg, 12)
+            @Assert(c >= 1 && c <= tg && consumed >= 1 && consumed <= 65536)
+            let dec = Array<UInt8>(65536, {_ => 0u8})
+            @Assert(LZ4_decompress_safe(out, c, dec, consumed) == consumed)
+            @Assert(hcBytesEqual(dec, buf, Int64(consumed)))
+            LZ4_freeStreamHC(st)
+            swept += 1
+        }
+    }
+    @Assert(swept >= 70)
+    println("hc opt literal reprice: ${checked} pins + ${swept} sweep combos verified")
+}
+
+/* HC 流式 overlap 收缩 <4 丢弃(lz4hc.c L1755-1766 对应体):单缓冲内
+   loadDictHC 后 continue 源与字典重叠,存活 < LZ4HC_HASHSIZE(4)→ 丢弃;
+   独立缓冲对照(同内容异分配)字典保留。探针双钉 c=52 xxh=d7dcf0f0。 */
+@Test
+func lz4hcOverlapShrinkTest(): Unit {
+    var x: UInt64 = 999u64
+    let sbuf = Array<UInt8>(64, {_ => 0u8})
+    for (i in 0..64) {
+        x = hc7LcgNext(x)
+        sbuf[i] = UInt8((x >> 16u64) & 0xFFu64)
+    }
+    let dict8 = Array<UInt8>(8, {i => sbuf[i]})
+    let src2 = Array<UInt8>(64, {i => sbuf[i]})
+    let bound = Int64(LZ4_compressBound(50))
+    /* in-place:同分配 → 收缩 → 2 字节 < 4 → 丢弃 */
+    let s1 = LZ4_createStreamHC()
+    LZ4_resetStreamHC(s1, 9)
+    @Assert(LZ4_loadDictHC(s1, sbuf, 8) == 8)
+    let out1 = Array<UInt8>(bound, {_ => 0u8})
+    let c1 = LZ4_compress_HC_continue(s1, sbuf, 6, 50, out1, Int32(bound))
+    @Assert(c1 == 52)
+    @Assert(XXH32(out1, Int64(c1), 0u32) == 0xd7dcf0f0u32)
+    /* 丢弃证据:lowLimit == dictLimit(字典空) */
+    @Assert(s1.lowLimit == s1.dictLimit)
+    /* 字典已丢弃 → 块内仅后向引用 → standalone 解码闭合 */
+    let dec1 = Array<UInt8>(50, {_ => 0u8})
+    @Assert(LZ4_decompress_safe(out1, c1, dec1, 50) == 50)
+    @Assert(hcBytesEqual(dec1, Array<UInt8>(50, {i => sbuf[6 + i]}), 50))
+    LZ4_freeStreamHC(s1)
+    /* 对照:独立分配字典(同内容)→ lz4SameBuffer 假 → 无收缩,字典保留 */
+    let s2 = LZ4_createStreamHC()
+    LZ4_resetStreamHC(s2, 9)
+    @Assert(LZ4_loadDictHC(s2, dict8, 8) == 8)
+    let out2 = Array<UInt8>(bound, {_ => 0u8})
+    let c2 = LZ4_compress_HC_continue(s2, src2, 6, 50, out2, Int32(bound))
+    @Assert(c2 == 52)
+    @Assert(XXH32(out2, Int64(c2), 0u32) == 0xd7dcf0f0u32)
+    @Assert(s2.dictLimit - s2.lowLimit == 8u32)
+    let dec2 = Array<UInt8>(50, {_ => 0u8})
+    @Assert(LZ4_decompress_safe_usingDict(out2, c2, dec2, 50, dict8, 8) == 50)
+    @Assert(hcBytesEqual(dec2, Array<UInt8>(50, {i => sbuf[6 + i]}), 50))
+    LZ4_freeStreamHC(s2)
+    println("hc overlap shrink discard: in-place(sep-state assert) + separate-dict control pinned")
+}
+
+/*-************************************
+*  M7 Task 2 (cont.): _Search3 校正路径的手工构造几何
+**************************************/
+/* 三组级联三匹配构造(几何意图:逼近 _Search3 校正块;实测经全量插桩观测,
+   m3>m2>s 情态下 s3 恒 < m1.len,校正块结构性不可达 —— 残行按 M6 先例登记,
+   见任务报告与台账;本测试保留价值 = 挤压 lazy 解析空间的解码闭环 + 一次性/
+   destSize 紧容量失败契约):
+   - craft1:m1.len=9 / m2.len=10(back 0,s=7)/ m3.len=11(start3=14)
+   - craft2:m1.len=17 / m2.len=20(back 2,s=13)/ m3.len=21(start3=30)
+   - craft3:m1.len=7 / m2.len=9(back 2,s=3)/ m3.len=10(start3=9 ∈ [7,10))
+   H 构造:先随机填充,后打补丁(H[x..y) := H[a..b))使级联窗口在 H 内成源;
+   L 布局按匹配映射放置;填充区 LCG。 */
+private func hcCraftBuild(which: Int64): Array<UInt8> {
+    let hn: Int64 = 256
+    let ln: Int64 = 512
+    let H = Array<UInt8>(hn, {_ => 0u8})
+    let b = Array<UInt8>(ln, {_ => 0u8})
+    var x: UInt64 = 6101u64 + UInt64(which)
+    for (i in 0..hn) {
+        x = hc7LcgNext(x)
+        H[i] = UInt8((x >> 16u64) & 0xFFu64)
+    }
+    if (which == 1) {
+        for (i in 0..2) { H[32 + i] = H[7 + i] }        /* B 头 = A 尾 */
+        for (i in 0..3) { H[48 + i] = H[39 + i] }       /* C 头 = B 尾 */
+        for (i in 0..9) { b[i] = H[i] }                 /* L[0..9) = A */
+        for (i in 0..8) { b[9 + i] = H[34 + i] }        /* L[9..17) = B[2..10) */
+        for (i in 0..8) { b[17 + i] = H[51 + i] }       /* L[17..25) = C[3..11) */
+        var y: UInt64 = 7101u64
+        for (i in 25..256) {
+            y = hc7LcgNext(y)
+            b[i] = UInt8((y >> 16u64) & 0xFFu64)
+        }
+    } else if (which == 2) {
+        for (i in 0..2) { H[62 + i] = H[13 + i] }       /* m2 回扩 2 字节源前缀 */
+        for (i in 0..2) { H[64 + i] = H[15 + i] }       /* B 头 = A 尾(重叠区) */
+        for (i in 0..3) { H[84 + i] = H[79 + i] }       /* C 头 = B 尾 */
+        for (i in 0..17) { b[i] = H[i] }                /* L[0..17) = A */
+        for (i in 0..16) { b[17 + i] = H[66 + i] }      /* L[17..33) = 源 H[66..82) */
+        for (i in 0..18) { b[33 + i] = H[87 + i] }      /* L[33..51) = 源 H[87..105) */
+        var y: UInt64 = 7102u64
+        for (i in 51..256) {
+            y = hc7LcgNext(y)
+            b[i] = UInt8((y >> 16u64) & 0xFFu64)
+        }
+    } else {
+        for (i in 0..2) { H[104 + i] = H[3 + i] }       /* m2 回扩 2 字节源前缀 */
+        for (i in 0..2) { H[106 + i] = H[5 + i] }       /* B 头 = A 尾(重叠区) */
+        for (i in 0..3) { H[114 + i] = H[110 + i] }     /* C 头 = m2 尾 */
+        for (i in 0..7) { b[i] = H[i] }                 /* L[0..7) = A */
+        for (i in 0..5) { b[7 + i] = H[108 + i] }       /* L[7..12) = 源 H[108..113) */
+        for (i in 0..7) { b[12 + i] = H[117 + i] }      /* L[12..19) = 源 H[117..124) */
+        var y: UInt64 = 7103u64
+        for (i in 19..256) {
+            y = hc7LcgNext(y)
+            b[i] = UInt8((y >> 16u64) & 0xFFu64)
+        }
+    }
+    /* 布局基址 256:H 即前 256 字节 */
+    for (i in 0..hn) {
+        b[hn + i] = H[i]
+    }
+    return b
+}
+
+@Test
+func lz4hcSearch3CraftTest(): Unit {
+    let bound = Int64(LZ4_compressBound(512))
+    for (which in 1..4) {
+        let buf = hcCraftBuild(which)
+        /* notLimited 往返 + 确定性 */
+        let st = LZ4_createStreamHC()
+        let out = Array<UInt8>(bound, {_ => 0u8})
+        let c = LZ4_compress_HC(buf, 512, out, Int32(bound), 9)
+        @Assert(c > 0)
+        let out2 = Array<UInt8>(bound, {_ => 0u8})
+        let st2 = LZ4_createStreamHC()
+        @Assert(LZ4_compress_HC(buf, 512, out2, Int32(bound), 9) == c)
+        @Assert(hcBytesEqual(out, out2, Int64(c)))
+        let dec = Array<UInt8>(512, {_ => 0u8})
+        @Assert(LZ4_decompress_safe(out, c, dec, 512) == 512)
+        @Assert(hcBytesEqual(dec, buf, 512))
+        LZ4_freeStreamHC(st)
+        LZ4_freeStreamHC(st2)
+        /* 紧容量阶梯:出口 #3/#4 的 encodeSequence 失败(首序列在 m1 编码点)。
+           H(256 随机字面量)+ 首序列 ≈ 260-266 字节输出 → 阶梯扫过失败点 */
+        var failDest = 0
+        var failLim = 0
+        for (tg in 250..270) {
+            let stD = LZ4_createStreamHC()
+            let oD = Array<UInt8>(tg, {_ => 0u8})
+            let (cd, kd) = LZ4_compress_HC_destSize(stD, buf, 512, oD, Int32(tg), 9)
+            @Assert(cd >= 1 && cd <= Int32(tg) && kd >= 1 && kd <= 512)
+            let dD = Array<UInt8>(512, {_ => 0u8})
+            @Assert(LZ4_decompress_safe(oD, cd, dD, kd) == kd)
+            @Assert(hcBytesEqual(dD, buf, Int64(kd)))
+            LZ4_freeStreamHC(stD)
+            if (kd < 512) {
+                failDest += 1
+            }
+        }
+        for (cap in 250..270) {
+            let stL = LZ4_createStreamHC()
+            let oL = Array<UInt8>(cap, {_ => 0u8})
+            let cl = LZ4_compress_HC(buf, 512, oL, Int32(cap), 9)
+            @Assert(cl >= 0 && cl <= Int32(cap))
+            if (cl > 0) {
+                let dL = Array<UInt8>(512, {_ => 0u8})
+                @Assert(LZ4_decompress_safe(oL, cl, dL, 512) == 512)
+                @Assert(hcBytesEqual(dL, buf, 512))
+            } else {
+                failLim += 1
+            }
+            LZ4_freeStreamHC(stL)
+        }
+        @Assert(failDest >= 1 && failLim >= 1)
+    }
+    println("hc search3 craft: 3 geometries roundtrip + tight-cap exits verified")
+}

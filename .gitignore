@@ -29,3 +29,4 @@ scripts/probe_overlap
 scripts/ctx_swap_probe
 # M5 corpus policy (2026-10-01): binaries not tracked, regenerate via scripts/gen_golden.sh
 corpus/
+scripts/hc_search3_probe
