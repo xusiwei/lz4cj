@@ -39,11 +39,11 @@
 - Consumes: 公开 API `LZ4_compressBound` / `LZ4_compress_default` / `LZ4_decompress_safe` / `LZ4_compress_HC` / `LZ4F_compressFrameBound` / `LZ4F_compressFrame` / `LZ4F_isError` / `LZ4F_getErrorName` / `LZ4F_createDecompressionContext` / `LZ4F_decompress`(签名见 src/lz4.cj:851,1803、src/lz4hc.cj:2039、src/lz4frame.cj:128,133,239,1114、src/lz4frame_decode.cj:88,1069)
 - Produces: `scripts/verify_downstream.sh [lt|st|both]`(Task 3 复用,分支验收门);零警告构建配置(Task 2 文档引用)
 
-- [ ] **Step 1: cjpm.toml 三处定稿**
+- [x] **Step 1: cjpm.toml 三处定稿**
 
 改 `version = "1.0.0"` → `version = "0.9.0"`;`compile-option = "--int-overflow=wrapping -O2"` → `compile-option = "--int-overflow=wrapping -O2 -Woff unused -Woff parser"`;`repository = ["https://example.com/lz4cj"]` → `repository = ["https://atomgit.com/xusiwei1236/lz4cj"]`。其余字段不动。
 
-- [ ] **Step 2: 写入 scripts/downstream_smoke.cj**(逐字使用已验证版本)
+- [x] **Step 2: 写入 scripts/downstream_smoke.cj**(逐字使用已验证版本)
 
 ```cangjie
 package lz4_ds_smoke
@@ -92,7 +92,7 @@ main() {
 
 注意:该文件位于 scripts/,不在 src/ 编译范围(cjpm.toml `exclude` 含 `scripts/**`),不参与本仓库构建。
 
-- [ ] **Step 3: 写入 scripts/verify_downstream.sh**(逐字使用,`chmod +x`)
+- [x] **Step 3: 写入 scripts/verify_downstream.sh**(逐字使用,`chmod +x`)
 
 ```bash
 #!/usr/bin/env bash
@@ -147,16 +147,16 @@ case "$MODE" in
 esac
 ```
 
-- [ ] **Step 4: 验收脚本双跑**
+- [x] **Step 4: 验收脚本双跑**
 
 Run: `scripts/verify_downstream.sh both`
 Expected: `[lt] PASS` 与 `[st] PASS`(各打印 DOWNSTREAM_SMOKE_OK 行)。遇 cjpm `DataModelException` → `rm -rf target` 重试(全局约束)。
 
-- [ ] **Step 5: 零警告 + 全量回归**
+- [x] **Step 5: 零警告 + 全量回归**
 
 Run: `rm -rf target && source ~/sdk/cangjie-1.0.5/envsetup.sh && cjpm build 2>&1 | grep -c warning;` 同式 STS 一遍 → 两侧均 0;然后 `scripts/build_and_test.sh both` → 两侧 156/156 通过。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add cjpm.toml scripts/downstream_smoke.cj scripts/verify_downstream.sh
@@ -177,7 +177,7 @@ git commit -m "M8: release engineering - version 0.9.0, warning-clean build, dow
 - Consumes: Task 1 的 `-Woff` 配置、verify_downstream.sh、smoke 钉值(c=517/hc=517/fc=532);M7 性能基线表(CHANGELOG 0.8.0);progress.md L29 的 74 函数清单(README 函数分组表的数据源);README 既有 frame 侧差异表(保留)
 - Produces: Task 3 分支/tag 的文档依据(CHANGELOG 0.9.0 条目中分支/tag 命名)
 
-- [ ] **Step 1: README 使用示例节**(插在"## 构建"节之后,新节 `## 使用(下游依赖)`)
+- [x] **Step 1: README 使用示例节**(插在"## 构建"节之后,新节 `## 使用(下游依赖)`)
 
 内容要点(中文,与 README 现行风格一致):
 1. 本地 path 依赖示例 cjpm.toml 片段(`[dependencies]` 下 `lz4 = { path = "<lz4cj 路径>" }`);说明仓颉侧导入形态:库为单包 `lz4`,源文件 `import lz4.*`,下游自身需 `package <下游包名>` 声明;
@@ -185,7 +185,7 @@ git commit -m "M8: release engineering - version 0.9.0, warning-clean build, dow
 3. 验收脚本说明:`scripts/verify_downstream.sh [lt|st|both]`(M8 验收:块/HC/frame 三路往返 + 钉值);
 4. 注记:中心仓发布暂未接入,后续可经 `cangjie-repo.toml` 补充。
 
-- [ ] **Step 2: README API 对照表补全**
+- [x] **Step 2: README API 对照表补全**
 
 将现有 `## API 对照摘要(frame 压缩侧 + 解压侧)` 改为 `## API 对照摘要`,frame 表保留为第三张表,前面新增两张:
 
@@ -212,12 +212,12 @@ git commit -m "M8: release engineering - version 0.9.0, warning-clean build, dow
 
 **函数清单概览表**(数据源 progress.md L29,按层给分组计数):版本族 2、compressBound 族、压缩 6、解压 4、流式解码 5、流式压缩 10、stream 状态原语 2、HC 17 + 常量族、frame 压缩 21、frame 解压 7、常量族(错误码 24、五枚举 Int32 族、dstage_* 等)—— 总计 **74 函数 + 常量族**,注明"逐函数清单见 docs/progress.md"。
 
-- [ ] **Step 3: README 性能节 + 进度节收尾**
+- [x] **Step 3: README 性能节 + 进度节收尾**
 
 1. `## 性能基线(M7)` 节末追加一段:**M8 §2.2 裁定(2026-10-03)**:差距结构性(数组安全层/GC/调用开销 vs C 裸内存 + SIMD memcpy),单点微调预期收益远小于差距且危及"压缩输出与 C 逐字节一致"保真资产,裁定不做性能优化,库源码冻结;非回归监控沿用 `benchAllTest`(LZ4_SKIP_BENCH=1 可跳)。
 2. `## 当前进度`:修正 M7 行为 `**M7(完成)**`;新增 `**M8(完成)**` 行:cjpm.toml 0.9.0 定稿 + 零警告构建(`-Woff unused -Woff parser`)、下游依赖验收脚本(双工具链 PASS)、性能 §2.2 书面裁定结案、README API 对照表/使用示例补全、发布分支 `lz4_lt_1.0.5` / `lz4_st_1.2.0` 与 tag `v0.9.0-lt` / `v0.9.0-st`。
 
-- [ ] **Step 4: CHANGELOG 0.9.0 条目**(顶部插入,要点)
+- [x] **Step 4: CHANGELOG 0.9.0 条目**(顶部插入,要点)
 
 ```markdown
 ## 0.9.0 (M8)
@@ -230,11 +230,11 @@ git commit -m "M8: release engineering - version 0.9.0, warning-clean build, dow
 - 验收:`scripts/build_and_test.sh both` 156/156 双绿;lib 构建零警告(双工具链);`scripts/verify_downstream.sh both` PASS
 ```
 
-- [ ] **Step 5: design.md §10 M8 行勾选**
+- [x] **Step 5: design.md §10 M8 行勾选**
 
 `| M8 发布 | README/CHANGELOG、发布分支、(可选)中心仓 | 双制品可被下游 cjpm 依赖引用成功 |` 验收标准单元格追加 `✅ 达成(verify_downstream 双 PASS;中心仓按裁定暂不接入,留待需求)`。其余节不动(§7.4 分支模型已被 Task 3 兑现,无需改写)。
 
-- [ ] **Step 6: progress.md 收尾**
+- [x] **Step 6: progress.md 收尾**
 
 1. "已完成"表追加 M8 行(内容同 CHANGELOG 0.9.0 要点,证据列:双绿 156/156、零警告、verify_downstream both PASS、分支/tag 落地);
 2. "剩余(依赖顺序)"节:替换为"(无 —— 路线图 M0-M8 全部完成)";
@@ -242,7 +242,7 @@ git commit -m "M8: release engineering - version 0.9.0, warning-clean build, dow
 4. "待决事项"追加一行:中心仓接入(M8 裁定暂不;需求出现时补 cangjie-repo.toml + 发布流程);
 5. "下一步"节替换为:`路线图全部完成(M0-M8)。可选后续:中心仓发布、lz4file API 增补(§4.6 裁剪项)、上游同步(dev > 0774d055 时)。`
 
-- [ ] **Step 7: 回归 + Commit**
+- [x] **Step 7: 回归 + Commit**
 
 Run: `scripts/build_and_test.sh both` → 156/156(纯文档改动,守恒检查)。
 Commit: `M8: documentation - README API tables and usage, CHANGELOG 0.9.0, milestone closeout`
@@ -259,11 +259,11 @@ Commit: `M8: documentation - README API tables and usage, CHANGELOG 0.9.0, miles
 - Consumes: Task 1 `scripts/verify_downstream.sh`;Task 2 后的 main HEAD(文档收尾完毕)
 - Produces: 双发布分支 + 双 tag(里程碑最终交付物;不推送远端)
 
-- [ ] **Step 1: 前置确认**
+- [x] **Step 1: 前置确认**
 
 Run: `git status`(main 干净)、`git log --oneline -3`(Task 1/2 提交在列)。main 的 HEAD 即发布基线。
 
-- [ ] **Step 2: lt 分支 + 验收 + tag**
+- [x] **Step 2: lt 分支 + 验收 + tag**
 
 ```bash
 git branch lz4_lt_1.0.5 main
@@ -274,7 +274,7 @@ ls target/release/lz4/                # 断言 liblz4.a 与 lz4.cjo 存在(双�
 git tag -a v0.9.0-lt -m "lz4cj 0.9.0 LTS-1.0.5 release (upstream lz4 0774d055)"
 ```
 
-- [ ] **Step 3: st 分支 + cjc-version 微调 + 验收 + tag**
+- [x] **Step 3: st 分支 + cjc-version 微调 + 验收 + tag**
 
 ```bash
 git checkout -b lz4_st_1.2.0 main
@@ -286,7 +286,7 @@ git add cjpm.toml && git commit -m "M8: st release branch - cjc-version 1.2.0"
 git tag -a v0.9.0-st -m "lz4cj 0.9.0 STS-1.2.0 release (upstream lz4 0774d055)"
 ```
 
-- [ ] **Step 4: 回 main + 终态核对(不 push)**
+- [x] **Step 4: 回 main + 终态核对(不 push)**
 
 ```bash
 git checkout main

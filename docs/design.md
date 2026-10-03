@@ -78,9 +78,9 @@ lz4cj/
   cjc-version = "1.0.5"        # 以 LTS 为基线;若 STS 校验策略不同,在发布分支微调
   name = "lz4"
   description = "Cangjie port of the LZ4 lossless compression library"
-  version = "1.0.0"
+  version = "0.9.0"
   output-type = "static"
-  compile-option = "--int-overflow=wrapping -O2"
+  compile-option = "--int-overflow=wrapping -O2 -Woff unused -Woff parser"
   include = ["src/**/*.cj", "docs/design.md", "README.md", "LICENSE"]
   exclude = ["src/**/*_test.cj", "scripts/**", "corpus/**"]
   license = ["BSD-2-Clause"]

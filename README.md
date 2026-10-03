@@ -131,7 +131,7 @@ frame(上游 `lz4frame.h`,0774d055)逐函数对应,承载差异如下:
 | `LZ4F_getFrameInfo` 错误路径的 `*frameInfoPtr` | C 错误时不写 out 参(保持调用方原值) | **错误时也返回 dctx.frameInfo 拷贝**(仓颉无 out 参,元组第二元恒有值;Cangjie 侧不可观测差异 —— 调用方无从区分"未写"与"写了同值",登记) |
 | updateDict 调用条件 | C 在 `dstPtr==NULL` 时整段跳过 flushOut/copyDirect(含 `LZ4F_updateDict` 调用;`dstPtr!=NULL` 而 sizeToCopy==0 时仍调用) | **空数组 + 容量 0 映射下 flushOut/copyDirect 仍以 dstSize=0 调用 updateDict**(NULL 守卫算术归零路径直落;dstSize=0 下各分支为不动式,状态等价,登记) |
 
-函数清单概览(按层分组计数,总计 **74 函数 + 常量族**;逐函数清单见 [docs/progress.md](docs/progress.md)):
+函数清单概览(按层分组计数,总计 **74 函数 + 常量族**;各组计数与总数均只计函数,常量族不计入;逐函数清单见 [docs/progress.md](docs/progress.md)):
 
 | 分组 | 内容 |
 |---|---|
@@ -141,7 +141,7 @@ frame(上游 `lz4frame.h`,0774d055)逐函数对应,承载差异如下:
 | 解压 4 | `LZ4_decompress_safe` / `safe_partial` / `safe_usingDict` / `safe_partial_usingDict` |
 | 流式解码 5 | `LZ4_createStreamDecode` / `freeStreamDecode` / `setStreamDecode` / `decoderRingBufferSize` / `decompress_safe_continue` |
 | 流式压缩 10 | `LZ4_createStream` / `freeStream` / `resetStream`(+`fast`)/ `loadDict`(+`Slow`)/ `attach_dictionary` / `compress_fast_continue` / `saveDict` + `initStream`(归状态原语) |
-| stream 状态原语 2 | `LZ4_sizeofState` / `LZ4_STREAMSIZE`(信息性常量,§4.4) |
+| stream 状态原语 1(函数) + 1(常量) | `LZ4_sizeofState`(函数) / `LZ4_STREAMSIZE`(信息性常量,不计入函数计数,§4.4) |
 | HC 17 + 常量族 | one-shot `compress_HC` / `extStateHC`(+`fastReset`)/ `destSize`、`sizeofStateHC`;状态族 `createStreamHC` / `freeStreamHC` / `initStreamHC` / `resetStreamHC`(+`fast`)/ `setCompressionLevel` / `favorDecompressionSpeed`;流式 `loadDictHC` / `attach_HC_dictionary` / `compress_HC_continue`(+`destSize`)/ `saveDictHC`;+ `LZ4HC_CLEVEL_{MIN,DEFAULT,OPT_MIN,MAX}` |
 | frame 压缩 21 | 版本/错误 5、界限 3、cctx 生命周期 2、`compressBegin` 族 3、Update 族 4(`compressUpdate` / `uncompressedUpdate` / `flush` / `compressEnd`)、一次性 2、`LZ4F_CDict` 2 |
 | frame 解压 7 | dctx 生命周期 3(`create` / `free` / `resetDecompressionContext`)、查询 2(`headerSize` / `getFrameInfo`)、解压 2(`decompress` / `decompress_usingDict`) |
