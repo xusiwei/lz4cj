@@ -174,3 +174,12 @@
 - 类型一致性:所有新测试走既有公开/internal API 签名(位置对 (buf,idx)、destSize 元组、frame 三元组),无新库接口;探针脚本沿用 scripts/*.c 头注惯例。
 - 占位扫描:无 TBD;两处"按 cjcov 复查迭代几何"(T2 Step 1/Step 4)为数据依赖路径,已给候选族与升级方向,非占位;>1GB 裁定为显式决策非延后(附事实链)。
 - 已知风险:①_Search3 28 行纯几何触达是最大不确定项 —— 扫描组合 ≥100 + 阶梯 tg + 流式双路,并以未覆盖行语义逐条补救;若终有残行,按 M6 先例在台账登记具体行 + 构造思路,覆盖率门槛相应说明(不视为任务失败,视为发现);②lz4fDictInTmpPreserveTest 的阶段切点依赖 maxBufferSize 内部布局 —— 以参数扫描兜底;③bench 比值受机器噪声 —— best-of-3 + 双工具链各一次,结论以数量级判;④gc_stale_repro 若两工具链 API 分歧,以分配压方案为准并在脚本头注记录。
+
+- 修订记录(2026-10-03 收官,内联执行——子代理配额于 T2 派发时耗尽,切换 executing-plans 模式):
+  - T1 三处简报修正(HC-None 臂公开不可达穷举证明 → 白盒;L836 需 bs=5;L1025 需 cap∈[4,7])+ 两扩展(probe pass3、8 帧序列)
+  - T2 残行 22 裁定:_Search3 校正族(807/873-874/909-911 代数不可达;906-915/881-886/925-930 经验不可达,11008 插桩状态零命中)、L1046 上游死代码、L1629 改价恒平价;maxBufferSize = maxBlockSize+128KB(简报 64KB 有误)由 T3 修正利用
+  - T3 几何重推导(调用止点 getCBlock vs flushOut、帧完成自动 reset、调用预消费块头三陷阱)+ join 族 3 子钳制发现性补充
+  - T4 lv12 帧分歧疑云 = 测试元组转录错位(非端口 bug,三路独立探针排查)
+  - T5 0.85x 不可复现裁定(实测 0.02-0.6x 结构性差距,基线表入 CHANGELOG);bench_probe 弃 decompress_fast(上游弃用 API,ASAN 实证 OOB)
+  - T6 两调查关闭: cjcov 会话内确定/跨构建行归因漂移;GC 陈旧读 10 轮零复现(程序入库)
+  - 证据细节见 .superpowers/sdd/2026-10-02-lz4cj-m7-final-testing/task-{1..5}-report.md(git 忽略区,本修订记录为其库内摘要)
