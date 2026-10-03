@@ -13,6 +13,39 @@ scripts/build_and_test.sh both # 双工具链构建 + 全量测试
 
 `build_and_test.sh` 也接受 `lt`(LTS-1.0.5)/ `st`(STS-1.2.0)单工具链参数,缺省 `both`。
 
+## 使用(下游依赖)
+
+下游工程以本地 path 依赖引入,`cjpm.toml`:
+
+```toml
+[dependencies]
+  lz4 = { path = "<lz4cj 路径>" }
+```
+
+库为单包 `lz4`(模块 `lz4cj` 下唯一包),下游源文件 `import lz4.*`,且下游自身需有 `package <下游包名>` 声明。最小往返示例(block 段,同 `scripts/downstream_smoke.cj`):
+
+```cangjie
+package lz4_ds_smoke
+
+import lz4.*
+
+main() {
+    let n: Int32 = 65536
+    let src = Array<UInt8>(Int64(n), { i => UInt8((i * 31 + 7) % 251) })
+    let bound = LZ4_compressBound(n)
+    let dst = Array<UInt8>(Int64(bound), { _ => 0u8 })
+    let c = LZ4_compress_default(src, n, dst, bound)
+    if (c <= 0) { println("block compress FAILED"); return 1 }
+    let back = Array<UInt8>(Int64(n), { _ => 0u8 })
+    let d = LZ4_decompress_safe(dst, c, back, n)
+    if (d != n) { println("block decompress FAILED"); return 1 }
+    for (i in 0..Int64(n)) { if (src[i] != back[i]) { println("block roundtrip MISMATCH"); return 1 } }
+    return 0
+}
+```
+
+验收脚本 `scripts/verify_downstream.sh [lt|st|both]`(缺省 `both`):临时下游 executable 经本地 path 依赖构建运行,做块 / HC / frame 三路压缩-解压逐字节往返 + 钉值断言(M8 验收,双工具链 PASS)。注:中心仓发布暂未接入,后续可经 `cangjie-repo.toml` 补充(设计 §9 非 MVP)。
+
 ## 测试
 
 共 156 项测试(M7:三侧定向覆盖 + >256KB 运行时矩阵 large_probe 18 钉值行 + bench 基线;残行不可达裁定见 CHANGELOG 0.8.0):版本与 compressBound、流状态、XXH32/XXH64(官方向量 + 流式)、datagen(C 交叉验证)、一站式块压缩 golden(256 行清单 + 125 行对抗性 destSize 用例,字节级精确比对)、块解压全家族 golden(清单 v2 共 300 行:解压 artifact 逐字节 + partial 探针 + dict/stream/ring/setdict 滚动解码)、safe/fast 差分(随机 + 合成流 + 损坏输入)、extDict 跨界拷贝对抗用例、流式压缩 golden 46 行(cont/savedict/dictfast/dictslow/attach/extdict/destext)、HC 高压缩 golden 70 行(levels 1-12 全采样三策略 + destSize + 流式 continue/saveDict/loadDict/attach)、Frame 压缩 golden 49 行(10 头编码 + 27 流式帧全参数交叉 + 8 一次性 + 2 CDict 一次性 + 2 Begin_usingDict 帧,含 usingDict+blockIndependent 字典丢弃怪癖钉值)、Frame 解压 golden 14 行 fdmp C 解压探针(getFrameInfo 三岔、分片续传 hint 三元组、skippable、拼接、dict 双钉、错误码族;清单共 489 数据行)+ 分片续传矩阵(27 行 × 7 变体:固定/LCG 切分 × 容量阶梯 + dstIdx 位置对)+ stableDst/skipChecksums(含上游"skip 不屏蔽压缩块校验"怪癖钉值)/skippable/拼接语义 + 前缀谓词分配同一性回归(字典前缀输出 / 内容等值换缓冲 / 异值对照,C 探针 scripts/frame_decode_probe.c 钉值)+ 覆盖率门禁定向用例(多缓冲 updateDict 分支、块校验和分片暂存、skippable 头分片怪癖等)、模糊测试(3000 解压种子 + 320 流式种子 + 420 HC 压缩种子:分层 mid/hashchain/opt 各 140,one-shot 往返 + 确定性 + 不足容量 + 流式迁移 + 滚动解码闭环;+ 240 frame 压缩种子(压缩侧 LCG 奇偶锁已修):一次性/流式链双场景 ×2 确定性重放、未压缩块插入与中途 flush、逐块解码闭环;+ 300 frame 解压种子:随机切分 × 容量阶梯 {0, 小, maxBlockSize, n} + 2-4 帧拼接混 skippable + 损坏三型零异常,场景 A ×2 逐字节确定性重放;`LZ4_SKIP_PERF=1` 可跳过性能冒烟)+ 闭环滚动往返 + 边界契约。
@@ -35,6 +68,8 @@ git -C ~/lz4 checkout 0774d055
 
 `scripts/bench_probe.c`(C,上游 0774d055)与 `src/bench_test.cj`(仓颉,`LZ4_SKIP_BENCH=1` 可跳过)同输入同口径 best-of-3 对照:仓颉/C 比值 0.02-0.6x(差距结构性:数组安全层/GC/调用开销 vs C 裸内存 + SIMD;详见 CHANGELOG 0.8.0 基线表);非回归门槛,用于数量级劣化监控。
 
+**M8 §2.2 裁定(2026-10-03)**:差距结构性(数组安全层/GC/调用开销 vs C 裸内存 + SIMD memcpy),单点微调预期收益远小于差距且危及"压缩输出与 C 逐字节一致"保真资产,裁定不做性能优化,库源码冻结;非回归监控沿用 `benchAllTest`(`LZ4_SKIP_BENCH=1` 可跳)。
+
 ## 当前进度
 
 - **M0(完成)**:cjpm 静态库工程、双工具链脚本、LICENSE、README。
@@ -45,15 +80,39 @@ git -C ~/lz4 checkout 0774d055
 - **M4(完成)**:HC 高压缩全量(lz4hc.c 非弃用 17 函数):三策略核心 LZ4MID(lv1-2)/ hashChain(lv3-9)/ optimal(lv10-12)+ `favorDecompressionSpeed`,one-shot / extState(+fastReset)/ destSize / 流式 `loadDictHC` / `attach` / `continue(+destSize)` / `saveDictHC`;golden 扩至 426 数据行(70 行新增,levels 1-12 全采样逐字节)、C 探针 7 案例钉值、300 种子 HC 模糊测试(分层 100/100/100);库源码行覆盖 96.6%。**HC 层(lz4hc.c 非弃用 API 全量)就此闭环**。
 - **M5(完成)**:Frame 压缩全量(lz4frame.c 压缩侧 21 函数):版本/错误/界限族、cctx 生命周期、`compressBegin`(+`_usingDict`/+`_usingCDict`)、`compressUpdate` / `uncompressedUpdate` / `flush` / `compressEnd`、一次性 `compressFrame`(+`_usingCDict`)、`LZ4F_CDict` 预消化字典;golden 扩至 475 数据行(49 行新增逐字节,含 fdt 字典丢弃怪癖 C 探针钉值)、120 种子 frame 模糊测试(双场景 + 确定性重放 + 逐块解码闭环);库源码行覆盖 96.4%。**frame 压缩侧就此闭环,frame 接口(压缩方向)对外提供**。
 - **M6(完成)**:Frame 解压全量(lz4frame.c 解压侧 7 函数):dctx 生命周期 `create/free/resetDecompressionContext`、`headerSize`、`getFrameInfo`、`decompress` / `decompress_usingDict`;14-stage 分片续传状态机(随机切分 × 容量阶梯 + 位置对全矩阵)、块/内容校验和、skippable、帧拼接;fdmp C 解压探针 golden 14 行(清单扩至 489 数据行)、150 种子 frame 解压模糊测试(随机切分/拼接/损坏三型,场景 A ×2 确定性重放);覆盖率门禁定向用例 5 个;终审修复:前缀谓词改分配同一性(双哨兵探针,内容窗口谓词在字典前缀输出几何假阳性)+ 三回归与 C 探针;库源码行覆盖 96.5%。**frame 层(压缩 + 解压)双向闭环,lz4frame API 全量对外提供**。
-- **M7(下一步)**:收尾测试(golden 全矩阵扩容、三文件可达未覆盖行、fuzz 加压、bench 复评)。
+- **M7(完成)**:收尾测试(golden 全矩阵扩容、三文件可达未覆盖行、fuzz 加压、bench 复评)。
+- **M8(完成)**:cjpm.toml 0.9.0 定稿 + 零警告构建(`-Woff unused -Woff parser`)、下游依赖验收脚本(双工具链 PASS)、性能 §2.2 书面裁定结案、README API 对照表/使用示例补全、发布分支 `lz4_lt_1.0.5` / `lz4_st_1.2.0` 与 tag `v0.9.0-lt` / `v0.9.0-st`。
 
 **移植基线**:上游 dev commit `0774d055`(2026-06-01,v1.10.0 发布线之上的官方修复线)。压缩输出与 v1.10.0 发布版逐字节一致(300 行 golden 双 ref 重验零差异);解压包含其后官方 OOB/边界修复,损坏输入行为更严格;详见 [docs/design.md](docs/design.md) 与 [docs/progress.md](docs/progress.md)。
 
 一站式块压缩、块解压、流式压缩(字典/续压/attach)、HC 高压缩(级别 1-12、最优解析、HC 流式字典)与 frame 压缩/解压(流式 + 一次性 + CDict + dctx 分片续传)API 均已对外提供;路线图见 [docs/design.md](docs/design.md)。
 
-## API 对照摘要(frame 压缩侧 + 解压侧)
+## API 对照摘要
 
-与上游 `lz4frame.h`(0774d055)逐函数对应,承载差异如下:
+block 压缩/解压/流式 + xxhash(上游 `lz4.h` / `xxhash.h`,0774d055)承载差异如下:
+
+| 差异点 | 上游 C | 仓颉 |
+|---|---|---|
+| in/out 指针参数 | `LZ4_compress_destSize` 的 `srcSizePtr` | 元组返回 `(ret, srcConsumed)`(design §4.3 规则 1) |
+| 滚动/流式续用指针 | 裸指针前移 | 位置对 `(buf, idx)`:`LZ4_decompress_safe_continue(dstBuf, dstIdx)`、`LZ4_compress_fast_continue(srcBuf, srcIdx)`(§4.3 规则 4) |
+| 可空结构体指针 | `preferencesPtr` 等 NULL | `Option<T>`(None 代入零值语义,§4.3 规则 2) |
+| `XXH*_update` 偏移 | 指针前移 | 具名必传参数 `offset!: Int64`(§4.3 规则 3) |
+| `LZ4_decompress_fast` 族 | 不校验输入边界的快路径 | **不提供**(仓颉安全模型无忠实等价物;用 `LZ4_decompress_safe`,ASAN 实证 fast 路径合法输入 OOB) |
+| 指针相等分派 | `prefixEnd == dest` 等 | 解压侧内容窗口谓词(限定等价性,窄分歧角登记 §4.3)/ 压缩侧 `lz4SameBuffer` 分配同一性判定(严格一致) |
+| 错误码 | 负位置编码 | 同 C 语义:解析失败 `-(ip)-1`,尺寸校验 -1(§4.7) |
+| xxhash 可见性 | 公开头文件 | `internal`(frame 仅用 XXH32;XXH64 备用不发布,`freeState` 归零语义偏离登记) |
+| 状态原语 | `void* state` 裸缓冲 | 状态类实例;`LZ4_sizeofState`/`STREAMSIZE` 保留信息性常量(§4.4) |
+
+HC(上游 `lz4hc.h`)承载差异如下:
+
+| 差异点 | 上游 C | 仓颉 |
+|---|---|---|
+| `LZ4_compress_HC_extStateHC(void* stateHC, ...)` | 用户提供裸缓冲当状态 | 参数类型为 `LZ4_streamHC_t` 状态类(§4.4) |
+| `LZ4_compress_HC_destSize` 的 `srcSizePtr` | in/out 指针 | 元组返回 `(ret, srcConsumed)`;`LZ4_compress_HC_continue_destSize` 同式 |
+| 级别常量 | 宏 `LZ4HC_CLEVEL_*` | Int32 常量族(成员名逐字) |
+| 弃用块(lz4hc.c L2196-2255) | `LZ4_DEPRECATED` | 不移植(§4.6) |
+
+frame(上游 `lz4frame.h`,0774d055)逐函数对应,承载差异如下:
 
 | 差异点 | 上游 C | 仓颉 |
 |---|---|---|
@@ -71,6 +130,22 @@ git -C ~/lz4 checkout 0774d055
 | mid-src 压缩块解码 | `LZ4_decompress_safe_usingDict(selectedIn, ...)` 原位解码 | `LZ4_decompress_generic` 无 src 位置参数 → **经 tmpIn 暂存一次再从索引 0 解码**(字节相同 ⇒ 输出等价,仅性能差异;偏差登记) |
 | `LZ4F_getFrameInfo` 错误路径的 `*frameInfoPtr` | C 错误时不写 out 参(保持调用方原值) | **错误时也返回 dctx.frameInfo 拷贝**(仓颉无 out 参,元组第二元恒有值;Cangjie 侧不可观测差异 —— 调用方无从区分"未写"与"写了同值",登记) |
 | updateDict 调用条件 | C 在 `dstPtr==NULL` 时整段跳过 flushOut/copyDirect(含 `LZ4F_updateDict` 调用;`dstPtr!=NULL` 而 sizeToCopy==0 时仍调用) | **空数组 + 容量 0 映射下 flushOut/copyDirect 仍以 dstSize=0 调用 updateDict**(NULL 守卫算术归零路径直落;dstSize=0 下各分支为不动式,状态等价,登记) |
+
+函数清单概览(按层分组计数,总计 **74 函数 + 常量族**;逐函数清单见 [docs/progress.md](docs/progress.md)):
+
+| 分组 | 内容 |
+|---|---|
+| 版本族 2 | `LZ4_versionNumber` / `LZ4_versionString` |
+| compressBound 族 | `LZ4_compressBound` |
+| 压缩 6 | `LZ4_compress_default` / `compress_fast` / `fast_extState`(+`fastReset`)/ `destSize` / `destSize_extState` |
+| 解压 4 | `LZ4_decompress_safe` / `safe_partial` / `safe_usingDict` / `safe_partial_usingDict` |
+| 流式解码 5 | `LZ4_createStreamDecode` / `freeStreamDecode` / `setStreamDecode` / `decoderRingBufferSize` / `decompress_safe_continue` |
+| 流式压缩 10 | `LZ4_createStream` / `freeStream` / `resetStream`(+`fast`)/ `loadDict`(+`Slow`)/ `attach_dictionary` / `compress_fast_continue` / `saveDict` + `initStream`(归状态原语) |
+| stream 状态原语 2 | `LZ4_sizeofState` / `LZ4_STREAMSIZE`(信息性常量,§4.4) |
+| HC 17 + 常量族 | one-shot `compress_HC` / `extStateHC`(+`fastReset`)/ `destSize`、`sizeofStateHC`;状态族 `createStreamHC` / `freeStreamHC` / `initStreamHC` / `resetStreamHC`(+`fast`)/ `setCompressionLevel` / `favorDecompressionSpeed`;流式 `loadDictHC` / `attach_HC_dictionary` / `compress_HC_continue`(+`destSize`)/ `saveDictHC`;+ `LZ4HC_CLEVEL_{MIN,DEFAULT,OPT_MIN,MAX}` |
+| frame 压缩 21 | 版本/错误 5、界限 3、cctx 生命周期 2、`compressBegin` 族 3、Update 族 4(`compressUpdate` / `uncompressedUpdate` / `flush` / `compressEnd`)、一次性 2、`LZ4F_CDict` 2 |
+| frame 解压 7 | dctx 生命周期 3(`create` / `free` / `resetDecompressionContext`)、查询 2(`headerSize` / `getFrameInfo`)、解压 2(`decompress` / `decompress_usingDict`) |
+| 常量族 | frame 错误码 24(Int64)、五枚举 Int32 常量族(blockSizeID/blockMode/contentChecksum/blockChecksum/frameType)、`dstage_*` 内部常量族等 |
 
 ## 变更记录
 

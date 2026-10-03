@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.0 (M8)
+
+- 发布里程碑:cjpm.toml `version` 1.0.0→0.9.0(与 CHANGELOG 序列对齐)、`repository` 订正为 atomgit.com/xusiwei1236/lz4cj;`compile-option` 追加 `-Woff unused -Woff parser`(重复标志形式;逗号合并 cjc 拒绝,实证)—— 23 条 lib 构建警告清零,归类裁定:10 unused function(XXH64 全族 6 + XXH32_createState/freeState + RDG_genBuffer + LZ4_writeLE64 = 设计明定的备用/internal/测试支撑库成员)、5 unused variable(free 族 API 在 GC 语义下参数不用,逐字签名所迫)、7 parser(多行表达式行首二元运算符排版风格);库源码零改动
+- 下游依赖验收(设计 §10 M8 验收标准):`scripts/verify_downstream.sh` + `scripts/downstream_smoke.cj` —— 临时下游 executable 经本地 path 依赖(`lz4 = { path = ... }`;单包 `import lz4.*`)构建运行,block default / HC lv9 / frame 一次性三路压缩-解压逐字节往返 + 钉值(c=517 / hc=517 / fc=532,LTS/STS 同值实证);lt|st|both 三模式,双工具链 PASS
+- 性能整体评估 §2.2 结案(书面裁定):M7 基线(仓颉/C 0.02-0.6x,字面密集 safe 解压 0.024x)判定差距结构性 —— Array 安全层/GC/调用开销 vs C 裸内存 + memcpy→SIMD;单点微调预期收益 << 差距且危及字节保真资产;裁定 M8 不做性能优化,库源码与 M6 收官逐字节一致延续;后续如重议,以 `benchAllTest` 与 `scripts/bench_probe.c` 基线表为起点
+- 发布分支与 tag:main → `lz4_lt_1.0.5`(cjc-version "1.0.5")/ `lz4_st_1.2.0`(cjc-version "1.2.0",设计 §7.4 预期微调);tag `v0.9.0-lt` / `v0.9.0-st`;未推送远端。中心仓(`cangjie-repo.toml`)裁定暂不接入(设计明定非 MVP;需求出现时以本地 path 依赖机制为过渡)
+- 文档:README 新增使用示例(下游依赖)节、API 对照表补全(block/流式/xxhash + HC 两张差异表 + 74 函数分组概览)、性能节 M8 裁定、进度节 M7/M8 收尾;design.md §10 M8 行勾选;progress.md M8 行 + 台账勾销(unused 警告项裁定闭合)+ 剩余/下一步清空
+- 验收:`scripts/build_and_test.sh both` 156/156 双绿;lib 构建零警告(双工具链);`scripts/verify_downstream.sh both` PASS
+
 ## 0.8.0 (M7)
 
 - 收尾测试:三侧定向覆盖 + >256KB 运行时矩阵 + fuzz 加压 + bench 基线 + 两项调查;全部为测试侧/脚本/文档(库源码与 M6 收官逐字节一致,`git diff 6578706..852ea90 -- src/*.cj(非 _test)` 为空)

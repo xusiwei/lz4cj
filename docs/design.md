@@ -384,7 +384,7 @@ C 侧 `LZ4_compress_generic` 是一个多态宏展开的状态机(字典模式 �
 | M5 frame 压缩 | cctx 全 API、CDict | frame 压缩产物与 C golden 一致(L3 单向);头部编码单测;双绿 |
 | M6 frame 解压 | dctx 全 API、续传、getFrameInfo、skippable 解析 | L2 往返 + L3 双向 + L4;双绿 |
 | M7 收尾测试 | golden 全矩阵、fuzz 加压、bench | 全部测试双绿,golden ≥ 200 用例(达成:manifest 489 数据行 + 运行时探针行;>256KB 矩阵经 scripts/large_probe.c 运行时钉值承载,不入库)✅ |
-| M8 发布 | README/CHANGELOG、发布分支、(可选)中心仓 | 双制品可被下游 cjpm 依赖引用成功 |
+| M8 发布 | README/CHANGELOG、发布分支、(可选)中心仓 | 双制品可被下游 cjpm 依赖引用成功 ✅ 达成(verify_downstream 双 PASS;中心仓按裁定暂不接入,留待需求) |
 
 依赖顺序:M1 → M2 → M3 → M4,frame(M5、M6)依赖 M2–M4;M5 与 M6 之间解压侧可先行开发但验收需压缩侧就绪。
 
