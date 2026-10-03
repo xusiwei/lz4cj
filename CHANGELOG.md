@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.0 (M7)
+
+- 收尾测试:三侧定向覆盖 + >256KB 运行时矩阵 + fuzz 加压 + bench 基线 + 两项调查;全部为测试侧/脚本/文档(库源码与 M6 收官逐字节一致,`git diff 6578706..852ea90 -- src/*.cj(非 _test)` 为空)
+- 压缩侧定向(T1):overlap-shrink 分支体套件钉值(lz4StreamOverlapShrinkTest 重放 probe_overlap pass2:c=20106/xxh=55883273 + 64KB 窗解码闭合;探针扩 pass3 钉 <4 丢弃);换型分支 9 行(8 帧交替 lv0↔lv9 序列 + ctx_swap_probe.c 逐帧钉值 + fresh 等价;HC-None 臂经穷举证明公开 API 不可达 → 白盒构造 + 输出等价);紧容量错误 3 行(uncompressedUpdate bs5 几何过 compressBound 首守卫、compressEnd cap∈[4,7] 过 endmark 守卫、usingCDict bound-1;错误契约 + 成功侧对照)
+- HC 定向(T2):lz4hc.cj 1362→1376/1413 —— 翻转 12 行(四处 encodeSequence 出口含 FILL/LIMITED 双模式(_Search3 sweep:14 输入族 × lv9 × tg 阶梯 ≥400 组合 + LIMITED 欠容量失败契约;PA=_Search3 仅 lv9,nbAttempts 256>128)+ MID/opt fillOutput 深度钳制(zeros/per4 × lv{2,4,9,10,12} × tg{64..256},探针 4 钉值)+ HC overlap<4 丢弃(单缓冲 loadDictHC+continue 白盒状态断言 + 独立缓冲对照,探针双钉)+ opt 改价族 9 探针钉值 + 确定性 + 往返);scripts/hc_search3_probe.c 新探针(16 钉值行)
+- **残行裁定(证据链留任务报告)**:L807/873-874/909-911 代数不可达(guard 在约束下恒假);L906-915/881-886/925-930 经验不可达(全量插桩 11008 个 _Search3 状态零命中三序列递增 ∧ s3≥m1+3 情态,三组手工级联几何亦未触达);L1046 上游结构性死代码(LZ4MID_searchHCDict 传 iLowLimit=ip);L1629 改价恒平价(literalsPrice 斜率 ≥1)+ 132 次专项扫描零触发;上游同构保留
+- 解压侧定向(T3):lz4frame_decode.cj 611→622/632 —— dictInTmp 容量保全 8 行(bs4 三满块 withinTmp 延展累计 196608 = maxBufferSize(maxBlockSize+128KB,非 64KB)恰满 + 终块换新缓冲直解(直解例外与 dst-history 双条件精确推导;插桩钉值 dsz=196608/dst=30000));flushOut 尾部保存 copySize 钳制(af-flush 双小块帧 + 容量 b1+7 停点在 flushOut 而非 getCBlock);顺带 join 族 3 子钳制(426/423/465:异缓冲破前缀邻接的三变体);>1GB 截尾 2 行 = 本机内存裁定(3GB 总/~1GB 可用,分配不可行;C 同构保留);残 10 行防御类(decodeHeader 守卫 ×5、谓词早退、兜底 break、>1GB ×2 —— cjcov 计数含裁定行)
+- >256KB 运行时矩阵(T4,设计 §8.2 末行):scripts/large_probe.c(17 钉值行)+ src/large_test.cj —— L_A/B/C/D(RDG 300000..1048576,mp 0.00-1.00)× block{default/fast8/destSize tg=786432} × HC{lv2/9/12/12+favor/lv9+D/continue 4×262144 滚动解码} × frame{bs4/bs6bm1ccs/bcs/csz/bs7af1/lv12/did42+ccs + af0 1MB 流式长链(覆盖 localSaveDict 滞留迁移)};c/xxh32/xxh64 与 C 全等 + 16 组解码闭环;不入 manifest/corpus(设计明定"不入库");frame 压缩侧最大输入 150000→1048576;期间 lv12 帧分歧疑云经三路独立探针排查 = 测试元组转录错位,端口逐字节一致
+- fuzz 加压(T5):fuzzFrameCase LCG 奇偶锁修复(bm/ccs/bcs/af 一字低 nibble 位抽取、ss/rawCoin 奇模数,M6 范式);种子 2000→3000 / 200→320 / 300→420(分层 140×3) / 120→240 / 150→300(终态总数 300);LTS 全量 ~30s
+- bench 基线(T5):scripts/bench_probe.c + benchAllTest(4MB × mp{0,0.5,0.9,1.0} × block/HC/frame 压解,best-of-3,LZ4_SKIP_BENCH 可跳);`LZ4_decompress_fast` 弃用(ASAN 实证合法输入 OOB,双侧 safe 对照)。**0.85x 复评结论:不可复现** —— 同机同轮全面比值 0.02-0.6x(字面密集 safe 解压 110/4482 = 0.024x;HC lv12 mp0.5 = 0.6x),与同轮 perf-smoke 交叉一致(~5% 噪声);判定差距结构性(Array 安全层/GC/调用开销 vs C 裸内存 + memcpy→SIMD),M7 不做单点微调(字节保真优先、预期收益 << 差距),整体优化留 M8 按 §2.2"明显劣化"条款评估
+- 调查关闭(T6):cjcov 快照漂移 = 会话内完全确定(同 commit 双跑 hit/total/未覆盖集全同),跨构建总行数漂移(字节相同文件 627→632)为 gcov 行归因构建期差异 → 门禁沿用同会话口径;GC 陈旧读 = scripts/gc_stale_repro.cj(16MB×2 + 交错索引 + 分配压)双工具链 10 轮零观测,未复现关闭
+- 覆盖率(cangjie-1.0.5,同会话口径):库源码 97.44%(3866/3968;M6 基线 96.52%)—— common/xxhash/datagen 100%、lz4.cj 96.12%、lz4hc.cj 97.38%、lz4frame.cj 96.79%、lz4frame_decode.cj 98.42%;设计 §10 M7 验收达成(双绿 + golden ≥ 200:manifest 489 数据行 + 运行时探针行)
+- 双工具链全绿:LTS-1.0.5 与 STS-1.2.0 各 156/156 测试通过
+
 ## 0.7.0 (M6)
 
 - Frame 解压全量 API(lz4frame.c 解压侧 7 函数 + 类型/常量):dctx 生命周期 `LZ4F_createDecompressionContext`(C 出参 + 错误码 → 直接返回实例;version 仅存不校验)/ `LZ4F_freeDecompressionContext`(返回释放时 dStage,C 语义)/ `LZ4F_resetDecompressionContext`、`LZ4F_headerSize`(srcSize<5 → -12、skippable → 8、7+csz*8+did*4)、`LZ4F_getFrameInfo`(三岔:已解码 consumed=0 + hint、storeFrameHeader 中途 -19、headerSize→decodeHeader 成功返回 BHSize=4;frameInfo 无论如何都拷出)、`LZ4F_decompress` / `LZ4F_decompress_usingDict`(dStage≤init 才注入;字典整帧存活由 GC 引用天然满足);`LZ4F_decompressOptions_t`(stableDst/skipChecksums,reserved 省略)、`LZ4F_MIN_SIZE_TO_KNOW_HEADER_LENGTH=5`、dstage_* 15 级内部常量族(Int32)

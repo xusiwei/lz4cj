@@ -32,3 +32,5 @@ corpus/
 scripts/hc_search3_probe
 scripts/large_probe
 scripts/bench_probe
+scripts/gc_stale_repro_lt
+scripts/gc_stale_repro_st

@@ -15,7 +15,7 @@ scripts/build_and_test.sh both # 双工具链构建 + 全量测试
 
 ## 测试
 
-共 141 项测试:版本与 compressBound、流状态、XXH32/XXH64(官方向量 + 流式)、datagen(C 交叉验证)、一站式块压缩 golden(256 行清单 + 125 行对抗性 destSize 用例,字节级精确比对)、块解压全家族 golden(清单 v2 共 300 行:解压 artifact 逐字节 + partial 探针 + dict/stream/ring/setdict 滚动解码)、safe/fast 差分(随机 + 合成流 + 损坏输入)、extDict 跨界拷贝对抗用例、流式压缩 golden 46 行(cont/savedict/dictfast/dictslow/attach/extdict/destext)、HC 高压缩 golden 70 行(levels 1-12 全采样三策略 + destSize + 流式 continue/saveDict/loadDict/attach)、Frame 压缩 golden 49 行(10 头编码 + 27 流式帧全参数交叉 + 8 一次性 + 2 CDict 一次性 + 2 Begin_usingDict 帧,含 usingDict+blockIndependent 字典丢弃怪癖钉值)、Frame 解压 golden 14 行 fdmp C 解压探针(getFrameInfo 三岔、分片续传 hint 三元组、skippable、拼接、dict 双钉、错误码族;清单共 489 数据行)+ 分片续传矩阵(27 行 × 7 变体:固定/LCG 切分 × 容量阶梯 + dstIdx 位置对)+ stableDst/skipChecksums(含上游"skip 不屏蔽压缩块校验"怪癖钉值)/skippable/拼接语义 + 前缀谓词分配同一性回归(字典前缀输出 / 内容等值换缓冲 / 异值对照,C 探针 scripts/frame_decode_probe.c 钉值)+ 覆盖率门禁定向用例(多缓冲 updateDict 分支、块校验和分片暂存、skippable 头分片怪癖等)、模糊测试(2000 解压种子 + 200 流式种子 + 300 HC 压缩种子:分层 mid/hashchain/opt 各 100,one-shot 往返 + 确定性 + 不足容量 + 流式迁移 + 滚动解码闭环;+ 120 frame 压缩种子:一次性/流式链双场景 ×2 确定性重放、未压缩块插入与中途 flush、逐块解码闭环;+ 150 frame 解压种子:随机切分 × 容量阶梯 {0, 小, maxBlockSize, n} + 2-4 帧拼接混 skippable + 损坏三型零异常,场景 A ×2 逐字节确定性重放;`LZ4_SKIP_PERF=1` 可跳过性能冒烟)+ 闭环滚动往返 + 边界契约。
+共 156 项测试(M7:三侧定向覆盖 + >256KB 运行时矩阵 large_probe 18 钉值行 + bench 基线;残行不可达裁定见 CHANGELOG 0.8.0):版本与 compressBound、流状态、XXH32/XXH64(官方向量 + 流式)、datagen(C 交叉验证)、一站式块压缩 golden(256 行清单 + 125 行对抗性 destSize 用例,字节级精确比对)、块解压全家族 golden(清单 v2 共 300 行:解压 artifact 逐字节 + partial 探针 + dict/stream/ring/setdict 滚动解码)、safe/fast 差分(随机 + 合成流 + 损坏输入)、extDict 跨界拷贝对抗用例、流式压缩 golden 46 行(cont/savedict/dictfast/dictslow/attach/extdict/destext)、HC 高压缩 golden 70 行(levels 1-12 全采样三策略 + destSize + 流式 continue/saveDict/loadDict/attach)、Frame 压缩 golden 49 行(10 头编码 + 27 流式帧全参数交叉 + 8 一次性 + 2 CDict 一次性 + 2 Begin_usingDict 帧,含 usingDict+blockIndependent 字典丢弃怪癖钉值)、Frame 解压 golden 14 行 fdmp C 解压探针(getFrameInfo 三岔、分片续传 hint 三元组、skippable、拼接、dict 双钉、错误码族;清单共 489 数据行)+ 分片续传矩阵(27 行 × 7 变体:固定/LCG 切分 × 容量阶梯 + dstIdx 位置对)+ stableDst/skipChecksums(含上游"skip 不屏蔽压缩块校验"怪癖钉值)/skippable/拼接语义 + 前缀谓词分配同一性回归(字典前缀输出 / 内容等值换缓冲 / 异值对照,C 探针 scripts/frame_decode_probe.c 钉值)+ 覆盖率门禁定向用例(多缓冲 updateDict 分支、块校验和分片暂存、skippable 头分片怪癖等)、模糊测试(3000 解压种子 + 320 流式种子 + 420 HC 压缩种子:分层 mid/hashchain/opt 各 140,one-shot 往返 + 确定性 + 不足容量 + 流式迁移 + 滚动解码闭环;+ 240 frame 压缩种子(压缩侧 LCG 奇偶锁已修):一次性/流式链双场景 ×2 确定性重放、未压缩块插入与中途 flush、逐块解码闭环;+ 300 frame 解压种子:随机切分 × 容量阶梯 {0, 小, maxBlockSize, n} + 2-4 帧拼接混 skippable + 损坏三型零异常,场景 A ×2 逐字节确定性重放;`LZ4_SKIP_PERF=1` 可跳过性能冒烟)+ 闭环滚动往返 + 边界契约。
 
 ## golden 语料再生工作流
 
@@ -30,6 +30,10 @@ scripts/gen_golden.sh   # 需要 cc 与 ~/lz4 检出 0774d055(编译上游 C 源
 ```bash
 git -C ~/lz4 checkout 0774d055
 ```
+
+## 性能基线(M7)
+
+`scripts/bench_probe.c`(C,上游 0774d055)与 `src/bench_test.cj`(仓颉,`LZ4_SKIP_BENCH=1` 可跳过)同输入同口径 best-of-3 对照:仓颉/C 比值 0.02-0.6x(差距结构性:数组安全层/GC/调用开销 vs C 裸内存 + SIMD;详见 CHANGELOG 0.8.0 基线表);非回归门槛,用于数量级劣化监控。
 
 ## 当前进度
 
