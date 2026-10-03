@@ -31,3 +31,4 @@ scripts/ctx_swap_probe
 corpus/
 scripts/hc_search3_probe
 scripts/large_probe
+scripts/bench_probe

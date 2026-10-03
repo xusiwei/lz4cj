@@ -131,7 +131,7 @@ private func fuzzDecompressCase(seed: Int64, info: FuzzInfo): String {
 func fuzzDecompressTest(): Unit {
     let info = FuzzInfo()
     var failures: Int64 = 0
-    for (seed in 0..2000) {
+    for (seed in 0..3000) {
         info.transform = -1
         var problem = ""
         try {
@@ -145,7 +145,7 @@ func fuzzDecompressTest(): Unit {
         }
     }
     @Assert(failures == 0)
-    println("fuzz decompress: 2000 seeds x (safe + partial), 0 exceptions, 0 failures")
+    println("fuzz decompress: 3000 seeds x (safe + partial), 0 exceptions, 0 failures")
 }
 
 /*-************************************
@@ -318,7 +318,7 @@ private func fuzzContinueCase(seed: Int64, info: FuzzInfo): String {
 func fuzzContinueTest(): Unit {
     let info = FuzzInfo()
     var failures: Int64 = 0
-    for (seed in 0..200) {
+    for (seed in 0..320) {
         info.transform = -1
         var problem = ""
         try {
@@ -332,14 +332,14 @@ func fuzzContinueTest(): Unit {
         }
     }
     @Assert(failures == 0)
-    println("fuzz continue: 200 seeds x (3-6 blocks, mid-stream corruption), 0 exceptions, 0 failures")
+    println("fuzz continue: 320 seeds x (3-6 blocks, mid-stream corruption), 0 exceptions, 0 failures")
 }
 
 /*-************************************
 *  fuzzHcTest: HC compression fuzz (M4 Task 6)
 **************************************/
 // Level stratification is deterministic: level = FUZZ_HC_LEVELS[seed % 12].
-// 300 seeds / 12 slots = exactly 25 seeds per slot; the slot layout gives
+// 420 seeds / 12 slots = exactly 35 seeds per slot; the slot layout gives
 // 4 slots per strategy class -> mid (lv 1-2) 100 seeds, hashChain (lv 3-9)
 // 100, optimal (lv 10-12) 100 (>= 80 per class, cross-checked by the
 // derived counters asserted at the end of fuzzHcTest). Slots, in order:
@@ -559,7 +559,7 @@ func fuzzHcTest(): Unit {
     // [3] optimal streaming runs with favorDecompressionSpeed set
     let stats: Array<Int64> = [0, 0, 0, 0]
     var failures: Int64 = 0
-    for (seed in 0..300) {
+    for (seed in 0..420) {
         var problem = ""
         try {
             problem = fuzzHcCase(seed, stats)
@@ -572,11 +572,11 @@ func fuzzHcTest(): Unit {
         }
     }
     // derived stratification check (guards FUZZ_HC_LEVELS edits)
-    @Assert(stats[0] >= 80 && stats[1] >= 80 && stats[2] >= 80)
-    @Assert(stats[0] + stats[1] + stats[2] == 300)
+    @Assert(stats[0] >= 110 && stats[1] >= 110 && stats[2] >= 110)
+    @Assert(stats[0] + stats[1] + stats[2] == 420)
     @Assert(stats[3] > 0)
     @Assert(failures == 0)
-    println("fuzz hc: 300 seeds (mid ${stats[0]} / hashchain ${stats[1]} / optimal ${stats[2]}, favor-on-opt ${stats[3]}), one-shot roundtrip + determinism + insufficient-capacity + streaming(2-4 blocks, savedict variant, rolling decode), 0 exceptions, 0 failures")
+    println("fuzz hc: 420 seeds (mid ${stats[0]} / hashchain ${stats[1]} / optimal ${stats[2]}, favor-on-opt ${stats[3]}), one-shot roundtrip + determinism + insufficient-capacity + streaming(2-4 blocks, savedict variant, rolling decode), 0 exceptions, 0 failures")
 }
 
 /*-************************************
@@ -758,18 +758,20 @@ private func fuzzFrameCase(seed: Int64): String {
     let mp = FUZZ_MPS[Int64(r % 5u64)]
     r = fuzzLcgNext(r)
     let bs: Int32 = 4 + Int32(r % 4u64)
+    /* bit coins from ONE word's low nibble(M6 fuzzFrameDecodeCase 同源
+       修复):LCG M/C 均奇 → 连续输出奇偶严格交替,连续 r%2 会把
+       (bm,ccs,bcs,af) 锁死在两个反相关组合;取一字低 nibble 位抽取
+       解锁全部 16 组合;ss 用奇模数同理 */
     r = fuzzLcgNext(r)
-    let bm: Int32 = Int32(r % 2u64)
-    r = fuzzLcgNext(r)
-    let ccs: Int32 = Int32(r % 2u64)
-    r = fuzzLcgNext(r)
-    let bcs: Int32 = Int32(r % 2u64)
-    r = fuzzLcgNext(r)
-    let af: Int32 = Int32(r % 2u64)
+    let nib: UInt64 = r % 16u64
+    let bm: Int32 = Int32(nib & 1u64)
+    let ccs: Int32 = Int32((nib >> 1u64) & 1u64)
+    let bcs: Int32 = Int32((nib >> 2u64) & 1u64)
+    let af: Int32 = Int32((nib >> 3u64) & 1u64)
     r = fuzzLcgNext(r)
     let lv = FUZZ_FRAME_LEVELS[Int64(r % 5u64)]
     r = fuzzLcgNext(r)
-    let ss: Int32 = Int32(r % 2u64)
+    let ss: Int32 = Int32(if ((r % 3u64) == 0u64) { 1 } else { 0 })   /* 奇模数:无奇偶锁 */
     r = fuzzLcgNext(r)
     var chunks: Int64 = 1 + Int64(r % 6u64)
     r = fuzzLcgNext(r)
@@ -815,7 +817,7 @@ private func fuzzFrameCase(seed: Int64): String {
     let rawCoin = Array<Bool>(nb, {_ => false})
     for (k in 0..nb) {
         r = fuzzLcgNext(r)
-        rawCoin[k] = (r % 2u64) == 1u64
+        rawCoin[k] = (r % 3u64) == 0u64    // odd modulus: no parity lock (M6 style)
     }
     // one mid flush at a random chunk boundary (50% of seeds)
     var flushDrawn: Int64 = -1
@@ -926,7 +928,7 @@ private func fuzzFrameCase(seed: Int64): String {
 @Test
 func fuzzFrameTest(): Unit {
     var failures: Int64 = 0
-    for (seed in 0..120) {
+    for (seed in 0..240) {
         var problem = ""
         try {
             problem = fuzzFrameCase(seed)
@@ -939,7 +941,7 @@ func fuzzFrameTest(): Unit {
         }
     }
     @Assert(failures == 0)
-    println("fuzz frame: 120 seeds x (one-shot + streaming chain, uncompressedUpdate inserts + mid flush) x2 determinism, 0 exceptions, 0 failures")
+    println("fuzz frame: 240 seeds x (one-shot + streaming chain, uncompressedUpdate inserts + mid flush) x2 determinism, 0 exceptions, 0 failures")
 }
 
 /*-************************************
@@ -1373,7 +1375,7 @@ func fuzzFrameDecodeTest(): Unit {
     // [4] determinism replays
     let stats: Array<Int64> = [0, 0, 0, 0, 0]
     var failures: Int64 = 0
-    for (seed in 0..150) {
+    for (seed in 0..300) {
         var problem = ""
         try {
             problem = fuzzFrameDecodeCase(seed, stats)
@@ -1385,16 +1387,16 @@ func fuzzFrameDecodeTest(): Unit {
             println("FUZZ-FDEC FAIL seed=${seed}: ${problem}")
         }
     }
-    // every terminal class of scenario C occurs across the fixed 150-seed
-    // set with wide margins (deterministic given the seed set; verified
-    // 22/75/50/3) - guards future edits of the derivation chain
+    // every terminal class of scenario C occurs across the fixed 300-seed
+    // set with wide margins (deterministic given the seed set) - guards
+    // future edits of the derivation chain
     println("fuzz frame decode stats: complete ${stats[0]} / error ${stats[1]} / exhausted ${stats[2]} / outfull ${stats[3]} / replays ${stats[4]}")
     @Assert(stats[0] > 0)
     @Assert(stats[1] > 0)
     @Assert(stats[2] > 0)
     @Assert(stats[3] > 0)
-    @Assert(stats[4] == 150)
-    @Assert(stats[0] + stats[1] + stats[2] + stats[3] == 150)
+    @Assert(stats[4] == 300)
+    @Assert(stats[0] + stats[1] + stats[2] + stats[3] == 300)
     @Assert(failures == 0)
-    println("fuzz frame decode: 150 seeds x (random split w/ capacity ladder + concat w/ skippable + corruption) x2 determinism, 0 exceptions, 0 failures")
+    println("fuzz frame decode: 300 seeds x (random split w/ capacity ladder + concat w/ skippable + corruption) x2 determinism, 0 exceptions, 0 failures")
 }
