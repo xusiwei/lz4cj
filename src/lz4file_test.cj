@@ -506,3 +506,177 @@ func lz4fileWriteCloseStickyErrTest(): Unit {
     @Assert(bytes.size == 7)
     removeIfExists(path)
 }
+
+/*-************************************
+*  Upstream probe parity (scripts/lz4file_probe.c @ 0774d055)
+**************************************/
+/* Measured by scripts/lz4file_probe (RDG(200000,.50,42), 3 odd chunks
+   100000+65537+34463):
+   w def: size=114579 xxh=5c8321a4    r def: got=200000 xxh=4111c4e8
+   w p0:  size=114579 xxh=5c8321a4    r p0:  got=200000 xxh=4111c4e8
+   w 4mb: size=114568 xxh=8f4993e7    r 4mb: got=200000 xxh=4111c4e8
+   w 1mb: size=92979  xxh=df9a9613    r 1mb: got=200000 xxh=4111c4e8
+   w bi9: size=92377  xxh=ba63afc7    r bi9: got=200000 xxh=4111c4e8
+   e short: -23  e magic: -13  e badbs: 0 (C writeOpen SUCCEEDS: unsigned
+     blockSize==0 check misses (size_t)-2; Cangjie deviation #5 asserts
+     -maxBlockSize_invalid, see lz4fileWriteBadBlockSizeTest)
+   e trunc: got=65536 xxh=ad1600b3
+   e skipopen: 0
+   e skipread: (size_t)(-13) - C printed got=18446744073709551603 because
+     its unsigned read loop (c > 0) accumulates the error code as a byte
+     count; the read itself returns frameType_unknown
+   input: xxh=4111c4e8 */
+let P_DEF_SIZE: Int64 = 114579
+let P_DEF_XXH: UInt32 = 0x5C8321A4u32
+let P_P0_SIZE: Int64 = 114579
+let P_P0_XXH: UInt32 = 0x5C8321A4u32
+let P_4MB_SIZE: Int64 = 114568
+let P_4MB_XXH: UInt32 = 0x8F4993E7u32
+let P_1MB_SIZE: Int64 = 92979
+let P_1MB_XXH: UInt32 = 0xDF9A9613u32
+let P_BI9_SIZE: Int64 = 92377
+let P_BI9_XXH: UInt32 = 0xBA63AFC7u32
+let P_INPUT_XXH: UInt32 = 0x4111C4E8u32
+let P_TRUNC_XXH: UInt32 = 0xAD1600B3u32
+
+/* RDG(200000,.50,42) same-source as probe; C probe 3-odd-chunk write
+   (100000+65537+34463). Returns (file size, XXH32(file bytes)). */
+func lz4fileProbeWrite(tag: String, prefs: Option<LZ4F_preferences_t>): (Int64, UInt32) {
+    let n: Int64 = 200000
+    let input = lz4fileRDG(n, 42u32)
+    let path = lz4fileTempPath("probe_${tag}.lz4")
+    let fp = File(path, OpenMode.Write)
+    let (code, h) = LZ4F_writeOpen(fp, prefs)
+    @Assert(code == LZ4F_OK_NoError)
+    match (h) {
+        case Some(w) =>
+            @Assert(LZ4F_write(w, input, size: 100000) == 100000)
+            @Assert(LZ4F_write(w, input[100000..165537].toArray(), size: 65537) == 65537)
+            @Assert(LZ4F_write(w, input[165537..200000].toArray(), size: 34463) == 34463)
+            @Assert(!LZ4F_isError(LZ4F_writeClose(w)))   // close tail count > 0 (Task 3 ruling)
+        case None => @Assert(false)
+    }
+    fp.close()
+    let bytes = File.readFrom(path)
+    removeIfExists(path)
+    return (bytes.size, XXH32(bytes, bytes.size, 0u32))
+}
+
+@Test
+func lz4fileProbeParityTest(): Unit {
+    // pinned from scripts/lz4file_probe output (upstream 0774d055)
+    let defs = lz4fileProbeWrite("def", Option<LZ4F_preferences_t>.None)
+    @Assert(defs[0] == P_DEF_SIZE)
+    @Assert(defs[1] == P_DEF_XXH)
+    let p0 = LZ4F_preferences_t()
+    let v0 = lz4fileProbeWrite("p0", Some(p0))
+    @Assert(v0[0] == P_P0_SIZE)
+    @Assert(v0[1] == P_P0_XXH)
+    var p1 = LZ4F_preferences_t()
+    p1.frameInfo.blockSizeID = LZ4F_max4MB
+    p1.frameInfo.contentChecksumFlag = LZ4F_contentChecksumEnabled
+    let v1 = lz4fileProbeWrite("4mb", Some(p1))
+    @Assert(v1[0] == P_4MB_SIZE)
+    @Assert(v1[1] == P_4MB_XXH)
+    var p2 = LZ4F_preferences_t()
+    p2.frameInfo.blockSizeID = LZ4F_max1MB
+    p2.frameInfo.blockChecksumFlag = LZ4F_blockChecksumEnabled
+    p2.compressionLevel = 3
+    let v2 = lz4fileProbeWrite("1mb", Some(p2))
+    @Assert(v2[0] == P_1MB_SIZE)
+    @Assert(v2[1] == P_1MB_XXH)
+    var p3 = LZ4F_preferences_t()
+    p3.frameInfo.blockSizeID = LZ4F_max256KB
+    p3.frameInfo.blockMode = LZ4F_blockIndependent
+    p3.compressionLevel = 9
+    let v3 = lz4fileProbeWrite("bi9", Some(p3))
+    @Assert(v3[0] == P_BI9_SIZE)
+    @Assert(v3[1] == P_BI9_XXH)
+    // read-back content hash == input hash for each variant ("r *: xxh=4111c4e8")
+    @Assert(XXH32(lz4fileRDG(200000, 42u32), 200000, 0u32) == P_INPUT_XXH)
+}
+
+@Test
+func lz4fileProbeTruncParityTest(): Unit {
+    // truncated at 65549B: partial read = 65536, digest pinned from probe
+    let n: Int64 = 200000
+    let input = lz4fileRDG(n, 42u32)
+    let defs = lz4fileProbeWrite("truncsrc", Option<LZ4F_preferences_t>.None)
+    @Assert(defs[0] == P_P0_SIZE)   // same as p0 variant (def == p0)
+    // rebuild file, truncate, partial-read
+    let path = lz4fileTempPath("probe_trunc.lz4")
+    let prefs = LZ4F_preferences_t()
+    let fp = File(path, OpenMode.Write)
+    let (code, h) = LZ4F_writeOpen(fp, Some(prefs))
+    @Assert(code == LZ4F_OK_NoError)
+    match (h) {
+        case Some(w) =>
+            @Assert(LZ4F_write(w, input, size: 100000) == 100000)
+            @Assert(LZ4F_write(w, input[100000..165537].toArray(), size: 65537) == 65537)
+            @Assert(LZ4F_write(w, input[165537..200000].toArray(), size: 34463) == 34463)
+            @Assert(!LZ4F_isError(LZ4F_writeClose(w)))
+        case None => @Assert(false)
+    }
+    fp.close()
+    let full = File.readFrom(path)
+    let cut: Int64 = 7 + 4 + 65536 + 2
+    lz4fileWriteBytes(path, full[0..cut].toArray())
+    let rp = File(path, OpenMode.Read)
+    let (rcode, rh) = LZ4F_readOpen(rp)
+    @Assert(rcode == LZ4F_OK_NoError)
+    let buf = Array<UInt8>(n, {_ => 0u8})
+    var got: Int64 = -1
+    match (rh) {
+        case Some(t) => got = LZ4F_read(t, buf, size: n)
+        case None => @Assert(false)
+    }
+    @Assert(got == 65536)                            // "e trunc: got=65536"
+    @Assert(XXH32(buf, 65536, 0u32) == P_TRUNC_XXH)  // "e trunc: xxh=ad1600b3"
+    rp.close()
+    removeIfExists(path)
+}
+
+@Test
+func lz4fileProbeSkipParityTest(): Unit {
+    // skippable(8B, size 4) prefix + p0 frame written AT offset 8 (probe
+    // construction): readOpen OK, but the 4B skip payload swallows the
+    // frame's first 4 magic bytes; after the dctx recycles, the next
+    // "header" (FLG/BD/HC/BS0) fails the magic check -> frameType_unknown.
+    let n: Int64 = 200000
+    let input = lz4fileRDG(n, 42u32)
+    let path = lz4fileTempPath("probe_skip.lz4")
+    let prefs = LZ4F_preferences_t()
+    let fp = File(path, OpenMode.Write)
+    let (code, h) = LZ4F_writeOpen(fp, Some(prefs))
+    @Assert(code == LZ4F_OK_NoError)
+    match (h) {
+        case Some(w) =>
+            @Assert(LZ4F_write(w, input, size: 100000) == 100000)
+            @Assert(LZ4F_write(w, input[100000..165537].toArray(), size: 65537) == 65537)
+            @Assert(LZ4F_write(w, input[165537..200000].toArray(), size: 34463) == 34463)
+            @Assert(!LZ4F_isError(LZ4F_writeClose(w)))
+        case None => @Assert(false)
+    }
+    fp.close()
+    let frame = File.readFrom(path)
+    let all = Array<UInt8>(8 + frame.size, {_ => 0u8})
+    all[0] = 0x50u8; all[1] = 0x2Au8; all[2] = 0x4Du8; all[3] = 0x18u8
+    all[4] = 4u8                                     // skip content size LE
+    var i: Int64 = 0
+    while (i < frame.size) { all[8 + i] = frame[i]; i += 1 }
+    lz4fileWriteBytes(path, all)
+    let rp = File(path, OpenMode.Read)
+    let (rcode, rh) = LZ4F_readOpen(rp)
+    @Assert(rcode == LZ4F_OK_NoError)               // "e skipopen: 0"
+    let out = Array<UInt8>(n, {_ => 0u8})
+    var rret: Int64 = 0
+    match (rh) {
+        case Some(t) => rret = LZ4F_read(t, out, size: n)
+        case None => @Assert(false)
+    }
+    // "e skipread: got=18446744073709551603" = (size_t)(-13): C's unsigned
+    // read loop logs the error code as a huge got; the port pins it as -13.
+    @Assert(rret == -LZ4F_ERROR_frameType_unknown)
+    rp.close()
+    removeIfExists(path)
+}
