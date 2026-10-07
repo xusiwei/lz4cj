@@ -347,7 +347,7 @@ func lz4fileWriteRoundtrip(name: String, input: Array<UInt8>, n: Int64,
                 off += len
                 ci += 1
             }
-            @Assert(LZ4F_writeClose(w) == LZ4F_OK_NoError)
+            @Assert(!LZ4F_isError(LZ4F_writeClose(w)))   // tail count varies per variant
         case None => @Assert(false)
     }
     fp.close()
@@ -461,7 +461,8 @@ func lz4fileWriteEmptyInputTest(): Unit {
     match (h) {
         case Some(w) =>
             @Assert(LZ4F_write(w, Array<UInt8>(0, {_ => 0u8}), size: 0) == 0)
-            @Assert(LZ4F_writeClose(w) == LZ4F_OK_NoError)
+            // C probe @0774d055: close=4 (endmark byte count, isError=0)
+            @Assert(LZ4F_writeClose(w) == 4)
         case None => @Assert(false)
     }
     fp.close()

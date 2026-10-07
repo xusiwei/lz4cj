@@ -252,11 +252,9 @@ public func LZ4F_write(lz4fWrite: LZ4_writeFile_t, buf: Array<UInt8>,
 
 /* LZ4F_writeClose(lz4file.c L338-362):errCode==OK 才 compressEnd + 写
     尾(错误透传保留原码;io 失败 → io_write);freeWriteFileResources →
-    GC;返回 ret。errCode 粘滞时跳过 End 返回 OK(C 怪癖,测试白盒钉)。
-    偏离 #6:C 成功路径 ret 沿袭 compressEnd 返回值(字节数 ≥4,非
-    LZ4F_OK_NoError;lz4file.h 仅约定 LZ4F_errorCode_t 契约);本端口按
-    头文件契约与测试钉值归一为 OK_NoError(TDD 检出 brief 内测试与
-    实现互斥,以测试为准)。 */
+    GC;返回 ret。成功返回 compressEnd 尾块字节数(≥4,与 C L347-361
+    一致;头文件未文档化返回值,以代码为准 —— fdt row2 同裁定,探针钉
+    22741/空输入 4);errCode 粘滞路径跳过 End 返回 OK(C 同,测试白盒钉)。 */
 public func LZ4F_writeClose(lz4fWrite: LZ4_writeFile_t): Int64 {
     var ret: Int64 = LZ4F_OK_NoError
 
@@ -265,10 +263,8 @@ public func LZ4F_writeClose(lz4fWrite: LZ4_writeFile_t): Int64 {
             lz4fWrite.dstBuf, 0, lz4fWrite.dstBufMaxSize,
             Option<LZ4F_compressOptions_t>.None)          /* L347-349 */
         if (!LZ4F_isError(ret)) {
-            let endSize = ret
-            ret = LZ4F_OK_NoError                         /* 偏离 #6:归一 */
             try {
-                lz4fWrite.fp.write(lz4fWrite.dstBuf[0..endSize])   /* L354 */
+                lz4fWrite.fp.write(lz4fWrite.dstBuf[0..ret])   /* L354 */
             } catch (e: Exception) {
                 ret = -LZ4F_ERROR_io_write                /* L355 */
             }
