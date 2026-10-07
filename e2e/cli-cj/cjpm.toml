@@ -1,0 +1,10 @@
+[package]
+  cjc-version = "1.0.5"
+  name = "lz4cli_cj"
+  description = "lz4cj e2e CLI (Cangjie side, path-depends on the lz4cj core)"
+  version = "0.1.0"
+  output-type = "executable"
+  compile-option = "-Woff unused"
+
+[dependencies]
+  lz4 = { path = "../.." }

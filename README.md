@@ -15,6 +15,10 @@ scripts/build_and_test.sh both # 双工具链构建 + 全量测试 + fuzz 基准
 
 测试分两段执行:`cjpm test`(单元/钉值/golden 用例,151 个)与 `cjpm bench`(fuzz 种子扫描 5 个,`@Test @Bench` 顶层组合标注,`fuzz_test.cj` —— 长跑型种子扫描不占测试门槛,由 bench 框架多次执行并产出计时表)。单独运行:`cjpm test` / `cjpm bench`,bench 可加 `--filter fuzzDecompressBench` 等过滤单个基准。
 
+## 端到端交叉验证(e2e)
+
+[e2e/](e2e/README.md) 内含两个契约一致的命令行文件压缩/解压工具(`-c/-d -i/-o`):`cli-c`(上游 lz4 C 库,CMake 跨平台)与 `cli-cj`(本仓颉实现,独立 cjpm executable 模块 path 依赖仓库根)。`e2e/run_e2e.sh` 生成用例并跑全矩阵:C/仓颉压缩输出**逐字节一致**、四方向压缩-解压往返、损坏/截断/尾随字节错误注入双工具拒绝,双工具链各跑一遍。
+
 ## 使用(下游依赖)
 
 下游工程以本地 path 依赖引入,`cjpm.toml`:
