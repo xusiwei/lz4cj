@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- corpus Windows 再生打通:`scripts/gen_golden.sh` 路径无关化 —— 上游 lz4 源码位置取 `LZ4CJ_UPSTREAM`(缺省 `~/lz4`),C 编译器取 `CC`(缺省 cc→gcc→clang 回退);MinGW/MSYS 下自动 `-D__USE_MINGW_ANSI_STDIO=1`(msvcrt printf 不认 `%zu`)与生成后 CR 清理(stdout 文本模式),README 再生工作流一节同步。Windows 10 + Git Bash + MinGW gcc 11.2 实跑:上游 0774d055(GitHub 直连被重置,经 gh-proxy 代理克隆)+ 生成器编译运行 → 门检全过(512 行/23 注释/各 mode 行数/5MB 预算);双工具链 `cjpm test` 由 119+32ERROR/0 升至 **150 过/1 ERROR/0 失败**(31 个 corpus 用例转绿,块/HC/frame golden 在 Windows 上逐字节验证通过)。残留:LTS 1 ERROR `lz4fSkippableTest` 报 `IndexOutOfBoundsException: length 8, index 7` —— 与 fuzzFrameDecode 同形状同根因(cjc -O2 windows-x64 误编译:堆读尺寸 `sizes[si]` + `Array<UInt8>(8+size)` 连续常量下标写 `sf[0..7]`,`sf[7]` 伪越界;该用例此前死在缺 corpus 的文件读取,未触达此行),误编译第二受害点,**仅 1.0.5 命中**(1.2.0 代码生成不同,该用例通过 → STS 151/151 全绿);另注:带 corpus 的全量套件在该 Windows 机上两次遭遇既有非确定性活锁,重跑即过(refer report/windows_test_findings.md)
+- fuzz 迁移至 `cjpm bench` 执行:`src/fuzz_test.cj` 五个驱动由 `@Test` 改为 `@Test @Bench` 顶层组合标注(仓颉宏规则:顶层 @Bench 必须与 @Test 连用),函数更名 `fuzzDecompressTest/fuzzContinueTest/fuzzHcTest/fuzzFrameTest/fuzzFrameDecodeTest` → 对应 `*Bench` 后缀;种子循环与断言零改动。双工具链实证(LTS 1.0.5 / STS 1.2.0):`cjpm test` 不执行 bench 用例(总数 156→151,`@Assert` 在 bench 内判败正常),`cjpm bench` 逐基准 6 预热 + 10 批测量并输出计时表(fuzzDecompressBench Median LTS 173.7ms / STS 168.0ms);`scripts/build_and_test.sh` 每工具链追跑 `cjpm bench`,README 同步。动机:长跑种子扫描不占单元门槛;Windows x64 另获隔离红利 —— cjc -O2 误编译(refer report/windows_test_findings.md)导致 test 门槛 0 失败(LTS 119 过 + 32 缺 corpus ERROR / STS 120 + 31),误编译面挪至 bench 段呈现。注:该工具链缺陷在 Windows 上另有非确定性活锁(约每 1-2 次全量运行出现一次,`--timeout-each` 不可拦截),bench 多次重复执行会放大其命中概率,Windows 本机 bench 段可能需重跑;Linux 不受影响
+
 ## 0.9.0 (M8)
 
 - 发布里程碑:cjpm.toml `version` 1.0.0→0.9.0(与 CHANGELOG 序列对齐)、`repository` 订正为 atomgit.com/xusiwei1236/lz4cj;`compile-option` 追加 `-Woff unused -Woff parser`(重复标志形式;逗号合并 cjc 拒绝,实证)—— 23 条 lib 构建警告清零,归类裁定:10 unused function(XXH64 全族 6 + XXH32_createState/freeState + RDG_genBuffer + LZ4_writeLE64 = 设计明定的备用/internal/测试支撑库成员)、5 unused variable(free 族 API 在 GC 语义下参数不用,逐字签名所迫)、7 parser(多行表达式行首二元运算符排版风格);库源码零改动

@@ -22,6 +22,7 @@ report
 tmp
 scripts/datagen_ref
 scripts/gen_golden
+scripts/gen_golden.exe
 scripts/dest_probe
 scripts/hc_probe
 scripts/hc_dest_probe
@@ -34,3 +35,9 @@ scripts/large_probe
 scripts/bench_probe
 scripts/gc_stale_repro_lt
 scripts/gc_stale_repro_st
+# Windows toolchain probes (compiled)
+scripts/arr_probe_lt
+scripts/arr_probe_st
+scripts/oob_repro_lt
+scripts/oob_repro_st
+.zcodeignore

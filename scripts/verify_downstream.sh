@@ -3,15 +3,22 @@
 # M8 验收(设计 §10):双制品可被下游 cjpm 依赖引用成功。
 # 机制:临时下游 executable 工程,path 依赖引用本仓库,跑 scripts/downstream_smoke.cj
 # 冒烟(块/HC/frame 三路往返 + 钉值);每工具链各建各跑各清理。
+# SDK 路径经 scripts/cjenv.sh 解析:优先 LZ4CJ_SDK_105 / LZ4CJ_SDK_120
+# 环境变量,回退 ~/sdk/cangjie-<ver>,与平台无关。
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/scripts/cjenv.sh"
 MODE="${1:-both}"
 EXPECT="DOWNSTREAM_SMOKE_OK c=517 hc=517 fc=532"
 
 run_one() {
-    local tag="$1" setup="$2" tmp out
+    local tag="$1" setup="$2" tmp out dep_path
     tmp="$(mktemp -d /tmp/lz4_ds_smoke.XXXXXX)"
     mkdir -p "$tmp/src"
+    # cjpm.exe reads cjpm.toml natively: emit a Windows-style path (E:/...)
+    # when running under MSYS/Git Bash, since /e/... is meaningless to it.
+    dep_path="$ROOT"
+    command -v cygpath >/dev/null 2>&1 && dep_path="$(cygpath -m "$ROOT")"
     cat > "$tmp/cjpm.toml" <<EOF
 [package]
   cjc-version = "1.0.5"
@@ -21,7 +28,7 @@ run_one() {
   output-type = "executable"
 
 [dependencies]
-  lz4 = { path = "$ROOT" }
+  lz4 = { path = "$dep_path" }
 EOF
     cp "$ROOT/scripts/downstream_smoke.cj" "$tmp/src/main.cj"
     echo "=== [$tag] downstream dependency smoke ==="
@@ -42,9 +49,9 @@ EOF
 }
 
 case "$MODE" in
-    lt)   run_one lt "$HOME/sdk/cangjie-1.0.5/envsetup.sh" ;;
-    st)   run_one st "$HOME/sdk/cangjie-1.2.0/envsetup.sh" ;;
-    both) run_one lt "$HOME/sdk/cangjie-1.0.5/envsetup.sh"
-          run_one st "$HOME/sdk/cangjie-1.2.0/envsetup.sh" ;;
+    lt)   run_one lt "$(cjenv_setup 1.0.5)" ;;
+    st)   run_one st "$(cjenv_setup 1.2.0)" ;;
+    both) run_one lt "$(cjenv_setup 1.0.5)"
+          run_one st "$(cjenv_setup 1.2.0)" ;;
     *)    echo "usage: $0 [lt|st|both]"; exit 1 ;;
 esac

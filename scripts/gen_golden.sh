@@ -5,18 +5,43 @@
 # reference: corpus/block_golden_ref.txt
 # (one line per case, see scripts/gen_golden.c header for the line format)
 # plus corpus/block/<idx>.lz4 artifacts for outputs <= 65536 bytes.
+# Path-independent: upstream lz4 C sources are located via $LZ4CJ_UPSTREAM
+# (must be the dev-0774d055 checkout, see CHANGELOG M3), default ~/lz4;
+# C compiler via $CC, default cc then gcc then clang.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+UPSTREAM="${LZ4CJ_UPSTREAM:-$HOME/lz4}"
+CC="${CC:-$(command -v cc || command -v gcc || command -v clang || true)}"
+[ -n "$CC" ] || { echo "[error] no C compiler found (set CC=...)" >&2; exit 1; }
+[ -f "$UPSTREAM/lib/lz4.c" ] || {
+    echo "[error] upstream lz4 sources not found at $UPSTREAM" >&2
+    echo "[error] set LZ4CJ_UPSTREAM=<lz4 checkout> or clone upstream:" >&2
+    echo "[error]   git clone https://github.com/lz4/lz4 \$HOME/lz4 && git -C \$HOME/lz4 checkout 0774d055" >&2
+    exit 1
+}
 
-cc -O2 -I"$HOME/lz4/lib" -I"$HOME/lz4/tests" -I"$HOME/lz4/programs" \
-   "$ROOT/scripts/gen_golden.c" "$HOME/lz4/tests/datagen.c" "$HOME/lz4/lib/lz4.c" \
-   "$HOME/lz4/lib/lz4hc.c" "$HOME/lz4/lib/lz4frame.c" "$HOME/lz4/lib/xxhash.c" \
+# MinGW/MSYS: route printf through MinGW's C99 stdio (msvcrt chokes on
+# %zu and would also CR-translate text-mode stdout).
+EXTRA_CFLAGS=""
+case "${OSTYPE:-}/$(uname -s 2>/dev/null)" in
+    msys/*|MINGW*|*MSYS*|*MINGW*) EXTRA_CFLAGS="-D__USE_MINGW_ANSI_STDIO=1" ;;
+esac
+
+"$CC" -O2 $EXTRA_CFLAGS -I"$UPSTREAM/lib" -I"$UPSTREAM/tests" -I"$UPSTREAM/programs" \
+   "$ROOT/scripts/gen_golden.c" "$UPSTREAM/tests/datagen.c" "$UPSTREAM/lib/lz4.c" \
+   "$UPSTREAM/lib/lz4hc.c" "$UPSTREAM/lib/lz4frame.c" "$UPSTREAM/lib/xxhash.c" \
    -o "$ROOT/scripts/gen_golden"
 
 mkdir -p "$ROOT/corpus/block"
 rm -f "$ROOT"/corpus/block/*.lz4
 cd "$ROOT"
 scripts/gen_golden | tee corpus/block_golden_ref.txt
+# MinGW text-mode stdout may emit CRLF; strip a trailing CR per line (no-op
+# on Linux where the generator emits pure LF).
+if grep -q $'\r' corpus/block_golden_ref.txt; then
+    sed -i 's/\r$//' corpus/block_golden_ref.txt
+    echo "[fix] stripped CR from block_golden_ref.txt (MinGW stdout)"
+fi
 
 # sanity: 64 inputs x 4 modes = 256 rows + 8 tight rows + 16 dict rows
 #         + 8 stream rows + 10 ring rows + 2 setdict rows

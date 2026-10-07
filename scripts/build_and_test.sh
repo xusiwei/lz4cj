@@ -1,22 +1,26 @@
 #!/usr/bin/env bash
 # Usage: scripts/build_and_test.sh [lt|st|both]  (default: both)
+# SDK locations are resolved path-independently via scripts/cjenv.sh:
+# honor LZ4CJ_SDK_105 / LZ4CJ_SDK_120 env vars first, then fall back to
+# ~/sdk/cangjie-<ver>.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/scripts/cjenv.sh"
 MODE="${1:-both}"
 mkdir -p "$ROOT/report"
 
 run() {
     local tag="$1" setup="$2"
-    echo "=== [$tag] cjpm build + test ==="
+    echo "=== [$tag] cjpm build + test + bench ==="
     local log; log="$ROOT/report/${tag}_$(date +%Y%m%d_%H%M%S).log"
-    ( bash -c "source '$setup' && cd '$ROOT' && cjpm clean && cjpm build && cjpm test" ) 2>&1 | tee "$log"
+    ( bash -c "source '$setup' && cd '$ROOT' && cjpm clean && cjpm build && cjpm test && cjpm bench" ) 2>&1 | tee "$log"
     echo "[$tag] log -> $log"
 }
 
 case "$MODE" in
-    lt)   run lt "$HOME/sdk/cangjie-1.0.5/envsetup.sh" ;;
-    st)   run st "$HOME/sdk/cangjie-1.2.0/envsetup.sh" ;;
-    both) run lt "$HOME/sdk/cangjie-1.0.5/envsetup.sh"
-          run st "$HOME/sdk/cangjie-1.2.0/envsetup.sh" ;;
+    lt)   run lt "$(cjenv_setup 1.0.5)" ;;
+    st)   run st "$(cjenv_setup 1.2.0)" ;;
+    both) run lt "$(cjenv_setup 1.0.5)"
+          run st "$(cjenv_setup 1.2.0)" ;;
     *)    echo "usage: $0 [lt|st|both]"; exit 1 ;;
 esac

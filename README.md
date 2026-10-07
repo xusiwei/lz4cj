@@ -4,14 +4,16 @@
 
 ## 构建
 
-需要 Cangjie LTS-1.0.5 或 STS-1.2.0 SDK(安装至 `~/sdk`,或按 `scripts/setup_env.sh` 内注释手动放置 tarball):
+需要 Cangjie LTS-1.0.5 或 STS-1.2.0 SDK。脚本按 `scripts/cjenv.sh` 的规则定位 SDK(与平台无关):优先环境变量 `LZ4CJ_SDK_105` / `LZ4CJ_SDK_120`(指向含 `envsetup.sh` 或 `cangjie/envsetup.sh` 的 SDK 根目录,Windows 反斜杠路径亦可),回退 `~/sdk/cangjie-<ver>`(可用 `scripts/setup_env.sh` 在 Linux 上一键安装):
 
 ```bash
 scripts/setup_env.sh           # 一次性:安装并自检两套 SDK
-scripts/build_and_test.sh both # 双工具链构建 + 全量测试
+scripts/build_and_test.sh both # 双工具链构建 + 全量测试 + fuzz 基准
 ```
 
 `build_and_test.sh` 也接受 `lt`(LTS-1.0.5)/ `st`(STS-1.2.0)单工具链参数,缺省 `both`。
+
+测试分两段执行:`cjpm test`(单元/钉值/golden 用例,151 个)与 `cjpm bench`(fuzz 种子扫描 5 个,`@Test @Bench` 顶层组合标注,`fuzz_test.cj` —— 长跑型种子扫描不占测试门槛,由 bench 框架多次执行并产出计时表)。单独运行:`cjpm test` / `cjpm bench`,bench 可加 `--filter fuzzDecompressBench` 等过滤单个基准。
 
 ## 使用(下游依赖)
 
@@ -55,14 +57,17 @@ main() {
 golden 语料(`corpus/`,清单 + artifacts,~5.4MB)**不入 git**(仓库策略,`git check-ignore corpus` 可证);克隆后本地再生:
 
 ```bash
-scripts/gen_golden.sh   # 需要 cc 与 ~/lz4 检出 0774d055(编译上游 C 源生成)
+scripts/gen_golden.sh   # 编译上游 C 源生成;Linux/macOS 与 Windows(Git Bash + MinGW gcc)均可
 ```
 
-脚本自带门检(总行 512 / 注释 23 / 各 mode 行数 / corpus 体积)。测试套件内嵌常量摘要断言(尺寸 + XXH32/64)**自足**——语料缺失时仍完整验证;artifact 存在时才做逐字节比对(全有或全无)。上游工作副本需保持检出基线 commit:
+脚本路径无关:上游 lz4 源码位置取 `LZ4CJ_UPSTREAM`(缺省 `~/lz4`),C 编译器取 `CC`(缺省 cc→gcc→clang 自动回退);Windows/MinGW 下自动加 `-D__USE_MINGW_ANSI_STDIO=1`(msvcrt printf 不支持 `%zu`)并在生成后清理 stdout 文本模式引入的 CR。上游源码获取与检出基线 commit(Golden 与上游逐字节一致性的锚点,不可换用其他版本):
 
 ```bash
+git clone https://github.com/lz4/lz4 ~/lz4   # 网络受限时可用 GitHub 代理前缀
 git -C ~/lz4 checkout 0774d055
 ```
+
+脚本自带门检(总行 512 / 注释 23 / 各 mode 行数 / corpus 体积)。测试套件内嵌常量摘要断言(尺寸 + XXH32/64)**自足**——语料缺失时仍完整验证;artifact 存在时才做逐字节比对(全有或全无)。
 
 ## 性能基线(M7)
 
