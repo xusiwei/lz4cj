@@ -93,3 +93,48 @@ public func LZ4F_readClose(lz4fRead: LZ4_readFile_t): Int64 {
     let _ = LZ4F_freeDecompressionContext(lz4fRead.dctxPtr)
     return LZ4F_OK_NoError
 }
+
+/* LZ4F_read(lz4file.c L154-196):解压至 buf[0..size)。循环:src 余量
+    尽 → fread(srcBufMaxSize)(0 → ferror 即 io_read / EOF break);
+    LZ4F_decompress 错误透传;srcBufNext/outPtr/totalBytesRead 推进。
+    C 的 (void*)buf + size 对 → buf + 隐含 idx 0(C 的 outPtr 恒自 buf
+    起,buf==NULL 检查 N/A)。返回 totalBytesRead(部分读允许)或负码。 */
+public func LZ4F_read(lz4fRead: LZ4_readFile_t, buf: Array<UInt8>,
+        size!: Int64): Int64 {
+    var outPtr: Int64 = 0
+    var totalBytesRead: Int64 = 0
+
+    while (totalBytesRead < size) {
+        var srcBytes = lz4fRead.srcBufSize - lz4fRead.srcBufNext      /* L163 */
+        let dstBytes = size - totalBytesRead                           /* L164 */
+
+        if (srcBytes == 0) {
+            let bytesRead: Int64 = try {
+                lz4fRead.fp.read(lz4fRead.srcBuf)
+            } catch (e: Exception) {
+                return -LZ4F_ERROR_io_read                 /* L169-171 ferror */
+            }
+            if (bytesRead == 0) {
+                break                                      /* L172 EOF */
+            }
+            lz4fRead.srcBufSize = bytesRead                /* L175 */
+            srcBytes = bytesRead
+            lz4fRead.srcBufNext = 0                        /* L177 */
+        }
+
+        let (decStatus, srcConsumed, dstConsumed) = LZ4F_decompress(
+            lz4fRead.dctxPtr,
+            buf, outPtr, dstBytes,
+            lz4fRead.srcBuf, lz4fRead.srcBufNext, srcBytes,
+            Option<LZ4F_decompressOptions_t>.None)
+        if (LZ4F_isError(decStatus)) {
+            return decStatus                               /* L186-188 */
+        }
+
+        lz4fRead.srcBufNext += srcConsumed                 /* L190 */
+        totalBytesRead += dstConsumed                      /* L191 */
+        outPtr += dstConsumed                              /* L192 */
+    }
+
+    return totalBytesRead
+}

@@ -160,3 +160,160 @@ func lz4fileReadOpenSkippablePrefixTest(): Unit {
     fp.close()
     removeIfExists(path)
 }
+
+/*-************************************
+*  LZ4F_read (lz4file.c L154-196)
+**************************************/
+
+func lz4fileReadAll(path: String, n: Int64, chunk: Int64): Array<UInt8> {
+    let fp = File(path, OpenMode.Read)
+    let (code, h) = LZ4F_readOpen(fp)
+    @Assert(code == LZ4F_OK_NoError)
+    let out = Array<UInt8>(n, {_ => 0u8})
+    match (h) {
+        case Some(t) =>
+            var got: Int64 = 0
+            while (got < n) {
+                let want = if (n - got < chunk) { n - got } else { chunk }
+                // C callers advance buf + got (fileCompress.c L107); this port's
+                // LZ4F_read writes at buf[0..], so stage per-call and copy to out.
+                let piece = Array<UInt8>(want, {_ => 0u8})
+                let r = LZ4F_read(t, piece, size: want)
+                if (r <= 0) { break }
+                var i: Int64 = 0
+                while (i < r) { out[got + i] = piece[i]; i += 1 }
+                got += r
+            }
+            @Assert(got == n)
+            @Assert(LZ4F_readClose(t) == LZ4F_OK_NoError)
+        case None => @Assert(false)
+    }
+    fp.close()
+    return out
+}
+
+@Test
+func lz4fileReadWholeTest(): Unit {
+    // single full read: 300000B input (RDG .50) crosses 64KB blocks
+    let n: Int64 = 300000
+    let input = lz4fileRDG(n, 3u32)
+    let frame = lz4fileMakeFrame(input, n, Some(LZ4F_preferences_t()))
+    let path = lz4fileTempPath("read_whole.frm")
+    lz4fileWriteBytes(path, frame)
+    let out = lz4fileReadAll(path, n, n)
+    @Assert(out == input)
+    removeIfExists(path)
+}
+
+@Test
+func lz4fileReadChunkedTest(): Unit {
+    // 997-byte chunk pattern (odd to incommensurate with block/header sizes)
+    let n: Int64 = 200000
+    let input = lz4fileRDG(n, 4u32)
+    var prefs = LZ4F_preferences_t()
+    prefs.frameInfo.blockSizeID = LZ4F_max256KB
+    prefs.frameInfo.contentChecksumFlag = LZ4F_contentChecksumEnabled
+    let frame = lz4fileMakeFrame(input, n, Some(prefs))
+    let path = lz4fileTempPath("read_997.frm")
+    lz4fileWriteBytes(path, frame)
+    let out = lz4fileReadAll(path, n, 997)
+    @Assert(out == input)
+    removeIfExists(path)
+}
+
+@Test
+func lz4fileReadByteAtATimeTest(): Unit {
+    // 1-byte reads: exercises loop with dstBytes=1 (decompress clamps)
+    let n: Int64 = 4096
+    let input = lz4fileRDG(n, 5u32)
+    let frame = lz4fileMakeFrame(input, n, Some(LZ4F_preferences_t()))
+    let path = lz4fileTempPath("read_1b.frm")
+    lz4fileWriteBytes(path, frame)
+    let out = lz4fileReadAll(path, n, 1)
+    @Assert(out == input)
+    removeIfExists(path)
+}
+
+@Test
+func lz4fileRead4MBBlocksTest(): Unit {
+    // >4MB input with max4MB blocks + blockChecksum (large geometry)
+    let n: Int64 = 5000000
+    let input = lz4fileRDG(n, 6u32)
+    var prefs = LZ4F_preferences_t()
+    prefs.frameInfo.blockSizeID = LZ4F_max4MB
+    prefs.frameInfo.blockChecksumFlag = LZ4F_blockChecksumEnabled
+    let frame = lz4fileMakeFrame(input, n, Some(prefs))
+    let path = lz4fileTempPath("read_4mb.frm")
+    lz4fileWriteBytes(path, frame)
+    let out = lz4fileReadAll(path, n, 1 << 20)
+    @Assert(out == input)
+    removeIfExists(path)
+}
+
+@Test
+func lz4fileReadEmptyFrameTest(): Unit {
+    // empty frame: read returns 0 at once (loop breaks on first EOF)
+    let frame = lz4fileMakeFrame(Array<UInt8>(0, {_ => 0u8}), 0,
+        Some(LZ4F_preferences_t()))
+    let path = lz4fileTempPath("read_empty.frm")
+    lz4fileWriteBytes(path, frame)
+    let fp = File(path, OpenMode.Read)
+    let (code, h) = LZ4F_readOpen(fp)
+    @Assert(code == LZ4F_OK_NoError)
+    let buf = Array<UInt8>(16, {_ => 0u8})
+    match (h) {
+        case Some(t) =>
+            @Assert(LZ4F_read(t, buf, size: 16) == 0)
+            @Assert(LZ4F_readClose(t) == LZ4F_OK_NoError)
+        case None => @Assert(false)
+    }
+    fp.close()
+    removeIfExists(path)
+}
+
+@Test
+func lz4fileReadZeroSizeTest(): Unit {
+    // size=0: while loop never runs -> 0 (C L162)
+    let n: Int64 = 100
+    let input = lz4fileRDG(n, 7u32)
+    let frame = lz4fileMakeFrame(input, n, Some(LZ4F_preferences_t()))
+    let path = lz4fileTempPath("read_zero.frm")
+    lz4fileWriteBytes(path, frame)
+    let fp = File(path, OpenMode.Read)
+    let (code, h) = LZ4F_readOpen(fp)
+    @Assert(code == LZ4F_OK_NoError)
+    let buf = Array<UInt8>(16, {_ => 0u8})
+    match (h) {
+        case Some(t) =>
+            @Assert(LZ4F_read(t, buf, size: 0) == 0)
+            @Assert(LZ4F_readClose(t) == LZ4F_OK_NoError)
+        case None => @Assert(false)
+    }
+    fp.close()
+    removeIfExists(path)
+}
+
+@Test
+func lz4fileReadEofPartialTest(): Unit {
+    // truncated mid-frame: fread hits EOF -> break -> partial count, no error
+    let n: Int64 = 200000
+    let input = lz4fileRDG(n, 8u32)
+    let frame = lz4fileMakeFrame(input, n, Some(LZ4F_preferences_t()))
+    let cut: Int64 = 7 + 4 + 65536 + 2
+    let path = lz4fileTempPath("read_trunc.frm")
+    lz4fileWriteBytes(path, frame[0..cut].toArray())
+    let fp = File(path, OpenMode.Read)
+    let (code, h) = LZ4F_readOpen(fp)
+    @Assert(code == LZ4F_OK_NoError)
+    let buf = Array<UInt8>(n, {_ => 0u8})
+    var partial: Int64 = -1
+    match (h) {
+        case Some(t) => partial = LZ4F_read(t, buf, size: n)
+        case None => @Assert(false)
+    }
+    // C semantics: 65536 bytes decoded, then EOF break; no error sign
+    @Assert(partial == 65536)
+    @Assert(buf[0..65536] == input[0..65536])
+    fp.close()
+    removeIfExists(path)
+}
