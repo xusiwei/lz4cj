@@ -435,8 +435,9 @@ func lz4fileWriteManySmallWritesTest(): Unit {
 
 @Test
 func lz4fileWriteBadBlockSizeTest(): Unit {
-    // invalid blockSizeID=2: C gets allocation_failed via unsigned wrap
-    // (probe-pinned); Cangjie early-exits maxBlockSize_invalid (deviation #5)
+    // invalid blockSizeID=2: C @0774d055 unexpectedly succeeds (probe
+    // e badbs: 0, invalid BD=0x20 header 04 22 4d 18 40 20 ad); Cangjie
+    // early-exits -maxBlockSize_invalid, stricter than upstream (deviation #5)
     let path = lz4fileTempPath("w_badbs.frm")
     let fp = File(path, OpenMode.Write)
     var prefs = LZ4F_preferences_t()
