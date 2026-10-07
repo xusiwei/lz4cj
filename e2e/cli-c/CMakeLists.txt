@@ -25,11 +25,12 @@ if(NOT EXISTS "${LZ4_PATH}/lib/lz4.c")
 endif()
 
 add_executable(lz4cli
-    lz4cli.c
-    "${LZ4_PATH}/lib/lz4.c"
-    "${LZ4_PATH}/lib/lz4hc.c"
-    "${LZ4_PATH}/lib/lz4frame.c"
-    "${LZ4_PATH}/lib/xxhash.c")
+  lz4cli.c
+  "${LZ4_PATH}/lib/lz4.c"
+  "${LZ4_PATH}/lib/lz4hc.c"
+  "${LZ4_PATH}/lib/lz4frame.c"
+  "${LZ4_PATH}/lib/lz4file.c"
+  "${LZ4_PATH}/lib/xxhash.c")
 target_include_directories(lz4cli PRIVATE "${LZ4_PATH}/lib")
 # MSVC: silence the upstream C sources' secure-CRT warnings
 if(MSVC)

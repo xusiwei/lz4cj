@@ -19,10 +19,27 @@ e2e/
 
 ```
 lz4cli / lz4cli-cj  -c|-d  -i <输入>  -o <输出>
-  -c  压缩(LZ4F_compressFrame,默认 preferences)
-  -d  解压(流式 LZ4F_decompress,输出缓冲按需倍增)
+  -c  压缩(lz4file:writeOpen/write/writeClose,默认 preferences 等价)
+  -d  解压(流式解压:C 侧输出缓冲按需倍增;仓颉侧固定窗口滚动写盘)
 退出码:0 成功;1 运行错误(I/O、损坏/截断帧、帧后尾随字节);2 用法错误
 ```
+
+压缩两侧均走 lz4file 写路径,并显式复刻 `LZ4F_compressFrame(NULL)` 的
+prefs 自动改写(lz4frame.c L443-453:默认 blockSizeID=max64KB;输入 ≤ 单块
+时 blockMode=blockIndependent)。原因:compressFrame(整块稳定源,prefix
+模式)与 lz4file 分块写(stableSrc=0,extDict 模式)在跨块匹配上会合法地
+选出不同匹配——上游 C 两条路径本身不逐字节一致(137MB 实测分歧于
+134,286 字节处);两 twin 同走 lz4file 路径后字节一致性由构造保证。
+
+仓颉侧解压不直接用 `LZ4F_read`:lz4file 读侧无法区分「干净收帧」与
+「截断」(两者都返回短读),而本契约要求拒绝截断帧;故用窗口化
+`LZ4F_decompress` 循环(即 LZ4F_read 的内部结构 + 帧完成/尾随检测信号)。
+
+内存模型:仓颉侧恒定占用,与文件大小无关(压缩喂入 4MB 窗 + lz4file
+64KB 块缓冲;解压 256KB/1MB 双窗),实测 137MB 输入压缩峰值 ~170MB /
+解压 ~53MB 工作集(默认 256MiB 运行时堆下运行,活集仅几 MB,其余为可
+回收的 GC 堆增长)。旧版全量缓冲布局(readFrom + 4× 预估)在 ~137MB 输入
+上必触仓颉运行时默认堆上限而 OOM。
 
 ## 运行
 
