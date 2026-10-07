@@ -23,7 +23,7 @@
 | `lib/lz4hc.c` + `lz4hc.h` | 2255 | 高压缩模式(链表/二叉树/最优解析) | 移植(非弃用 API 全量) |
 | `lib/lz4frame.c` + `lz4frame.h` | 2167 | LZ4 Frame 格式(v1.0 规格) | 移植(非弃用、非多线程 API 全量) |
 | `lib/xxhash.c` + `xxhash.h` | 1030 | 校验和依赖 | **按上游结构实现 XXH32 与 XXH64 两套接口**(frame 实际只使用 XXH32;XXH64 一并实现备用,不采用泛型合并,理由见 5.6) |
-| `lib/lz4file.c` + `lz4file.h` | 362 | 文件级便捷 API | 不移植(可后续增补) |
+| `lib/lz4file.c` + `lz4file.h` | 362 | 文件级便捷 API | 移植(M9 增补,原"不移植可后续增补"裁定回填;`FILE*` → `std.fs.File` 映射与偏离登记见 §4.5) |
 | `programs/`(CLI)、XXH64/XXH3 | — | 命令行工具、其余哈希算法 | 不移植 |
 
 ### 2.2 非目标
@@ -169,6 +169,14 @@ C 中"用户提供裸缓冲当状态"的 API(`LZ4_compress_fast_extState(void* s
 - 字典:`LZ4F_createCDict`、`LZ4F_freeCDict`
 - 解压:`LZ4F_createDecompressionContext`、`LZ4F_freeDecompressionContext`、`LZ4F_resetDecompressionContext`、`LZ4F_headerSize`、`LZ4F_getFrameInfo`、`LZ4F_decompress`、`LZ4F_decompress_usingDict`、`LZ4F_getBlockSize`。注记(M6-T1 订正):上游 0774d055 lz4frame.h 无 `LZ4F_isSkippedFrame` 与 `LZ4F_decompress_usingCDict`,原清单误记,订正移除;skippable 判定经 frameInfo.frameType==`LZ4F_skippableFrame` 表达;`LZ4F_getBlockSize` 已随 M5 落地
 
+**lz4file(`lz4file.h` 全量,M9 增补,原 §4.6 裁剪项回填)**:
+
+- 类型:`LZ4_readFile_t`、`LZ4_writeFile_t`(不透明句柄类,internal 构造,仅经 open 工厂创建)
+- 读:`LZ4F_readOpen(fp: File): (Int64, Option<LZ4_readFile_t>)`、`LZ4F_read(t, buf, size!: Int64): Int64`(`size` 为具名必传参数)、`LZ4F_readClose(t): Int64`
+- 写:`LZ4F_writeOpen(fp, prefsPtr: Option<LZ4F_preferences_t>): (Int64, Option<LZ4_writeFile_t>)`、`LZ4F_write(t, buf, size!: Int64): Int64`(具名)、`LZ4F_writeClose(t): Int64`
+- 语义注记:`LZ4F_writeClose` 成功返回 compressEnd 尾块字节数(≥4,与 C L338-362 一致;头文件未文档化返回值,以代码为准;sticky errCode 路径跳过 End 返回 OK)
+- 注记(映射与偏离登记):`FILE*` → `std.fs.File`(调用方持有文件生命周期,C 的 readClose/writeClose 不 fclose,仓颉同);OUT 句柄参数 → `(errorCode, Option<句柄>)` 元组。偏离登记 6 条:① `parameter_null` 路径 N/A(非空引用);② `allocation_failed` 路径 N/A(GC);③ `ferror`/`fwrite` 计数检测 → `FSException` 捕获转 `-LZ4F_ERROR_io_read`/`-io_write`(`File.write` 返 Unit,短写-成功情形无表示);④ `freeAndNull*`/malloc/free → GC + 返回 `None` 句柄;⑤ 无效 blockSizeID 的 writeOpen:**C 0774d055 实测意外成功**(`getBlockSize(2)=(size_t)-2` 绕过 `==0` 守卫,compressBound 回绕得小容量,写出 BD=0x20 无效帧头;探针 `e badbs: 0`,文件 `04 22 4d 18 40 20 ad`);仓颉以 `blockSize <= 0` 早退得 `-LZ4F_ERROR_maxBlockSize_invalid`,拒绝依赖 size_t 回绕的非法配置,严于上游;⑥ C readOpen 的 `blockSize == 0` 检查为防御死代码,仓颉保留同位 `<= 0` 防御;C writeOpen L288 出参误释放笔误不复制
+
 **xxhash(`xxhash.h` 子集,`internal` 可见性)**:`XXH32`、`XXH32_createState`、`XXH32_freeState`、`XXH32_reset`、`XXH32_update`、`XXH32_digest`(frame 所需);`XXH64` 同族接口一并实现(结构与上游逐函数对应,见 5.6),暂不对外发布,未来如需暴露为独立改动。XXH3/XXH128 不在范围。
 
 **语义偏离登记:`XXH32_freeState` / `XXH64_freeState`**。C 版为 `XXH_free(ptr)` 释放堆内存;仓颉由 GC 管理生命周期,故实现为**归零复原**——所有字段(含 mem 缓冲)置回构造初值,返回 0。与 `reset` 的区别:`reset(state, seed)` 是复用入口(按 seed 初始化 v1-v4,不清 mem);`freeState` 是"释放"语义的仓颉等价物(状态不可再直接使用,须先 reset)。上游 `lz4frame.c` 内嵌 state 按值使用、从不调用 create/freeState,故此偏离无兼容性影响。
@@ -179,7 +187,6 @@ C 中"用户提供裸缓冲当状态"的 API(`LZ4_compress_fast_extState(void* s
 |---|---|
 | `LZ4_compress`、`LZ4_compress_limitedOutput`、`LZ4_compress_withState`、`LZ4_compress_continue`、`LZ4_uncompress`、`LZ4_uncompress_unknownOutputSize`、`LZ4_create`、`LZ4_sizeofStreamState`、`LZ4_resetStreamState`、`LZ4_slideInputBuffer` 等全部 `LZ4_DEPRECATED` 项 | 上游已标记弃用,新库不应暴露 |
 | `LZ4_decompress_fast`、`LZ4_decompress_fast_usingDict` | 语义上"不校验输入边界、不要求已知压缩长度",在仓颉安全模型下无忠实等价物;且无法仅凭 `originalSize` 安全别名到 `LZ4_decompress_safe`。不提供,README 注明用 `LZ4_decompress_safe` |
-| `lz4file.h` 全部 | 范围裁剪,基于 `LZ4F_*` 可直接实现,后续版本可增补 |
 | `XXH64`、`XXH3`、`XXH128` | `lz4frame.c` 未使用 |
 | `LZ4F_customMem` 自定义分配器族(`LZ4F_customMem`、`LZ4F_defaultCMem` 等)及 `LZ4F_createCompressionContext_advanced` / `LZ4F_createCDict_advanced`(M5-T1 订正补记) | 仓颉由 GC 管理内存,无自定义 malloc/free 契约可履行 |
 | `LZ4F_cctx_size` / `LZ4F_dctx_size`(M5-T1 订正补记) | C 布局信息性 API(暴露结构体字节数供栈/堆预分配);仓颉状态由类承载,布局尺寸无意义 |
@@ -385,8 +392,9 @@ C 侧 `LZ4_compress_generic` 是一个多态宏展开的状态机(字典模式 �
 | M6 frame 解压 | dctx 全 API、续传、getFrameInfo、skippable 解析 | L2 往返 + L3 双向 + L4;双绿 |
 | M7 收尾测试 | golden 全矩阵、fuzz 加压、bench | 全部测试双绿,golden ≥ 200 用例(达成:manifest 489 数据行 + 运行时探针行;>256KB 矩阵经 scripts/large_probe.c 运行时钉值承载,不入库)✅ |
 | M8 发布 | README/CHANGELOG、发布分支、(可选)中心仓 | 双制品可被下游 cjpm 依赖引用成功 ✅ 达成(verify_downstream 双 PASS;中心仓按裁定暂不接入,留待需求) |
+| M9 lz4file | lz4file.h 全量(原 §4.6 裁剪项回填):读 `LZ4F_readOpen`/`read`/`readClose` + 写 `LZ4F_writeOpen`/`write`/`writeClose` + `LZ4_readFile_t`/`LZ4_writeFile_t` 句柄类;`FILE*` → `std.fs.File` 映射与偏离登记 6 条(§4.5);上游探针钉值 + 字节级 parity 测试;文档(README/design/progress)与 0.10.0 版本定稿;下游冒烟扩容 lz4file 路径 | 写侧与上游 0774d055 字节级一致(探针 scripts/lz4file_probe.c 钉值 def/p0 114579/5c8321a4、4mb 114568/8f4993e7、1mb 92979/df9a9613、bi9 92377/ba63afc7,读回 == 输入;parity 测试断言尺寸+digest 全等)✅ 达成:cjpm test 174/174 双绿(+23 lz4file 用例)+ bench 5/5 + lib 零警告 + verify_downstream both PASS(含 lf=532 钉值);提交区间 90614c7..HEAD(收尾本次提交) |
 
-依赖顺序:M1 → M2 → M3 → M4,frame(M5、M6)依赖 M2–M4;M5 与 M6 之间解压侧可先行开发但验收需压缩侧就绪。
+依赖顺序:M1 → M2 → M3 → M4,frame(M5、M6)依赖 M2–M4;M5 与 M6 之间解压侧可先行开发但验收需压缩侧就绪;M9 lz4file 构筑于 frame 双侧(M5/M6)之上,属范围回填增补。
 
 ## 11. 风险与对策
 

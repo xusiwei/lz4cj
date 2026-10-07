@@ -7,9 +7,14 @@
        (same Begin + blockSize-chunked Update + End sequence).
    (2) read-back: each file re-read via LZ4F_readOpen/read(997-chunks)/
        readClose; prints size + XXH32(content).
-   (3) error pins: 10-byte file readOpen -> io_read; 0xDEADBEEF magic ->
-       propagated code; invalid writeOpen blockSizeID=2 -> upstream gets
-       allocation_failed (unsigned wrap; Cangjie deviation #5 -> -2).
+    (3) error pins: 10-byte file readOpen -> io_read; 0xDEADBEEF magic ->
+        propagated code; invalid writeOpen blockSizeID=2 -> upstream C
+        UNEXPECTEDLY SUCCEEDS (measured e badbs: 0): getBlockSize(2) =
+        (size_t)-2 wraps past the ==0 guard, compressBound wraps to a
+        small capacity, file gets an invalid BD=0x20 frame header
+        (04 22 4d 18 40 20 ad). Cangjie deviation #5: blockSize <= 0
+        early exit -> -LZ4F_ERROR_maxBlockSize_invalid (-2), rejecting
+        the size_t-wrap-dependent config, stricter than upstream.
    (4) truncated-frame partial read: keep first 65549 bytes of variant-0
        frame; read -> partial byte count (EOF break).
    (5) skippable-prefixed frame: 8B skippable header (size 4) + 4 filler

@@ -2,14 +2,15 @@
 # Usage: scripts/verify_downstream.sh [lt|st|both]  (default: both)
 # M8 验收(设计 §10):双制品可被下游 cjpm 依赖引用成功。
 # 机制:临时下游 executable 工程,path 依赖引用本仓库,跑 scripts/downstream_smoke.cj
-# 冒烟(块/HC/frame 三路往返 + 钉值);每工具链各建各跑各清理。
+# 冒烟(块/HC/frame 三路往返 + 钉值;M9 追加 lz4file 第四路文件往返 lf=532);
+# 每工具链各建各跑各清理。
 # SDK 路径经 scripts/cjenv.sh 解析:优先 LZ4CJ_SDK_105 / LZ4CJ_SDK_120
 # 环境变量,回退 ~/sdk/cangjie-<ver>,与平台无关。
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/scripts/cjenv.sh"
 MODE="${1:-both}"
-EXPECT="DOWNSTREAM_SMOKE_OK c=517 hc=517 fc=532"
+EXPECT="DOWNSTREAM_SMOKE_OK c=517 hc=517 fc=532 lf=532"
 
 run_one() {
     local tag="$1" setup="$2" tmp out dep_path
