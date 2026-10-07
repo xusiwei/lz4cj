@@ -522,9 +522,8 @@ func lz4fileWriteCloseStickyErrTest(): Unit {
      -maxBlockSize_invalid, see lz4fileWriteBadBlockSizeTest)
    e trunc: got=65536 xxh=ad1600b3
    e skipopen: 0
-   e skipread: (size_t)(-13) - C printed got=18446744073709551603 because
-     its unsigned read loop (c > 0) accumulates the error code as a byte
-     count; the read itself returns frameType_unknown
+   e skipread: got=200000 xxh=4111c4e8 (= input; well-formed prefix:
+     8B skip header + 4 filler bytes + frame at offset 12)
    input: xxh=4111c4e8 */
 let P_DEF_SIZE: Int64 = 114579
 let P_DEF_XXH: UInt32 = 0x5C8321A4u32
@@ -638,10 +637,9 @@ func lz4fileProbeTruncParityTest(): Unit {
 
 @Test
 func lz4fileProbeSkipParityTest(): Unit {
-    // skippable(8B, size 4) prefix + p0 frame written AT offset 8 (probe
-    // construction): readOpen OK, but the 4B skip payload swallows the
-    // frame's first 4 magic bytes; after the dctx recycles, the next
-    // "header" (FLG/BD/HC/BS0) fails the magic check -> frameType_unknown.
+    // skippable(8B, size 4) + 4 filler bytes + p0 frame at offset 12
+    // (well-formed): readOpen OK, dctx recycles past the skippable frame,
+    // full content read back ("e skipread: got=200000 xxh=4111c4e8").
     let n: Int64 = 200000
     let input = lz4fileRDG(n, 42u32)
     let path = lz4fileTempPath("probe_skip.lz4")
@@ -659,24 +657,22 @@ func lz4fileProbeSkipParityTest(): Unit {
     }
     fp.close()
     let frame = File.readFrom(path)
-    let all = Array<UInt8>(8 + frame.size, {_ => 0u8})
+    let all = Array<UInt8>(12 + frame.size, {_ => 0u8})
     all[0] = 0x50u8; all[1] = 0x2Au8; all[2] = 0x4Du8; all[3] = 0x18u8
     all[4] = 4u8                                     // skip content size LE
+    // all[5..12] stay zero: size LE continuation + 4B filler payload
     var i: Int64 = 0
-    while (i < frame.size) { all[8 + i] = frame[i]; i += 1 }
+    while (i < frame.size) { all[12 + i] = frame[i]; i += 1 }
     lz4fileWriteBytes(path, all)
     let rp = File(path, OpenMode.Read)
     let (rcode, rh) = LZ4F_readOpen(rp)
     @Assert(rcode == LZ4F_OK_NoError)               // "e skipopen: 0"
     let out = Array<UInt8>(n, {_ => 0u8})
-    var rret: Int64 = 0
     match (rh) {
-        case Some(t) => rret = LZ4F_read(t, out, size: n)
+        case Some(t) => @Assert(LZ4F_read(t, out, size: n) == n)
         case None => @Assert(false)
     }
-    // "e skipread: got=18446744073709551603" = (size_t)(-13): C's unsigned
-    // read loop logs the error code as a huge got; the port pins it as -13.
-    @Assert(rret == -LZ4F_ERROR_frameType_unknown)
+    @Assert(out == input)
     rp.close()
     removeIfExists(path)
 }

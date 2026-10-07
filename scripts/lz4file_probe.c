@@ -12,8 +12,9 @@
        allocation_failed (unsigned wrap; Cangjie deviation #5 -> -2).
    (4) truncated-frame partial read: keep first 65549 bytes of variant-0
        frame; read -> partial byte count (EOF break).
-   (5) skippable-prefixed frame: 8B skippable(size 4) + variant-0 frame;
-       readOpen OK, full content read back (dctx recycles to next frame).
+   (5) skippable-prefixed frame: 8B skippable header (size 4) + 4 filler
+       bytes + variant-0 frame at offset 12; readOpen OK, full content
+       read back (dctx recycles to next frame).
    Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs \
           scripts/lz4file_probe.c $HOME/lz4/lib/lz4frame.c $HOME/lz4/lib/lz4file.c \
           $HOME/lz4/lib/lz4.c $HOME/lz4/lib/lz4hc.c $HOME/lz4/lib/xxhash.c \
@@ -143,11 +144,11 @@ int main(void) {
       size_t fsz = fread(frame, 1, sizeof(frame), f);
       fclose(f);
       static unsigned char all[1 << 21];
-      unsigned char skip[8] = {0x50, 0x2A, 0x4D, 0x18, 4, 0, 0, 0};
-      memcpy(all, skip, 8);
-      memcpy(all + 8, frame, fsz);
+      unsigned char skip[12] = {0x50, 0x2A, 0x4D, 0x18, 4, 0, 0, 0, 0, 0, 0, 0};
+      memcpy(all, skip, 12);
+      memcpy(all + 12, frame, fsz);
       FILE* t = fopen("/tmp/lz4file_probe_skip.lz4", "wb");
-      wr(t, all, 8 + fsz); fclose(t);
+      wr(t, all, 12 + fsz); fclose(t);
       FILE* g = fopen("/tmp/lz4file_probe_skip.lz4", "rb");
       LZ4_readFile_t* rd = NULL;
       size_t r = LZ4F_readOpen(&rd, g);

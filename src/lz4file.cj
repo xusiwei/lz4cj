@@ -184,8 +184,11 @@ internal func lz4fWriteHeader(writeFile: LZ4_writeFile_t,
 }
 
 /* LZ4F_writeOpen(lz4file.c L253-301):prefs NULL → LZ4F_default(L262);
-    getBlockSize 非正 → maxBlockSize_invalid(偏离 #5:C 无符号回绕得
-    allocation_failed);dstBufMaxSize = compressBound(blockSize, prefs);
+    getBlockSize 非正 → maxBlockSize_invalid(偏离 #5:C 0774d055 实测意外
+    成功:getBlockSize(2)=(size_t)-2 绕过 ==0 守卫,compressBound 回绕得
+    小容量,写出 BD=0x20 无效帧头(探针 e badbs: 0,文件 04 22 4d 18 40
+    20 ad);仓颉以 maxBlockSize_invalid 早退,拒绝依赖 size_t 回绕的非法
+    配置,严于上游);dstBufMaxSize = compressBound(blockSize, prefs);
     createCompressionContext(GC 无失败)+ writeHeader。C L288 的
     freeAndNullWriteFile(lz4fWrite)(误取出参而非 &writeFile)不复制,
     统一 (err, None)。 */
