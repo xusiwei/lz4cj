@@ -2,9 +2,9 @@
 # e2e cross-validation of the lz4cj port against the upstream lz4 C library.
 #
 # Builds two CLI twins with identical contracts (-c/-d -i/-o, frame format):
-#   e2e/cli-c    - C, CMake, compiles the upstream lz4 sources in-tree
-#                  (baseline commit 0774d055, located like gen_golden.sh:
-#                  -DLZ4_PATH / $LZ4CJ_UPSTREAM / ~/lz4)
+#   e2e/cli-c    - C, CMake FetchContent integrates upstream lz4_static
+#                  (baseline commit 0774d055; optional local checkout via
+#                  $LZ4CJ_UPSTREAM / ~/lz4)
 #   e2e/cli-cj   - Cangjie executable module, path-depends on the repo root
 #                  (SDKs resolved via scripts/cjenv.sh: LZ4CJ_SDK_105/120
 #                  env vars, fallback ~/sdk/cangjie-<ver>)
@@ -21,7 +21,6 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 E2E="$ROOT/e2e"
-UPSTREAM="${LZ4CJ_UPSTREAM:-$HOME/lz4}"
 MODE="${1:-both}"
 . "$ROOT/scripts/cjenv.sh"
 
@@ -56,16 +55,31 @@ expect_same() { # expect_same <label> <a> <b>
 }
 
 # ---------- 1. build the C reference tool ----------
-note "building C tool (cmake, upstream=$UPSTREAM)"
-if [ ! -f "$UPSTREAM/lib/lz4.c" ]; then
-    echo "[error] upstream lz4 sources not found at $UPSTREAM (set LZ4CJ_UPSTREAM)" >&2
-    exit 1
+LZ4_SOURCE_ARGS=()
+if [ -n "${LZ4CJ_UPSTREAM:-}" ]; then
+    UPSTREAM="$LZ4CJ_UPSTREAM"
+elif [ -f "$HOME/lz4/lib/lz4.c" ]; then
+    UPSTREAM="$HOME/lz4"
+else
+    UPSTREAM=""
+fi
+if [ -n "$UPSTREAM" ]; then
+    if [ ! -f "$UPSTREAM/lib/lz4.c" ]; then
+        echo "[error] upstream lz4 sources not found at $UPSTREAM" >&2
+        exit 1
+    fi
+    LP="$UPSTREAM"
+    command -v cygpath >/dev/null 2>&1 && LP="$(cygpath -m "$UPSTREAM")"
+    LZ4_SOURCE_ARGS=(-DFETCHCONTENT_SOURCE_DIR_LZ4="$LP")
+    note "building C tool (FetchContent, local upstream=$UPSTREAM)"
+else
+    note "building C tool (FetchContent, pinned upstream commit)"
 fi
 GEN=()
 command -v ninja >/dev/null 2>&1 && GEN=(-G Ninja)
-LP="$UPSTREAM"
-command -v cygpath >/dev/null 2>&1 && LP="$(cygpath -m "$UPSTREAM")"
-cmake -S "$E2E/cli-c" -B "$E2E/cli-c/build" "${GEN[@]}" -DLZ4_PATH="$LP" >/dev/null \
+# Normalize a future-dated source timestamp before Ninja's regeneration check.
+touch "$E2E/cli-c/CMakeLists.txt" "$E2E/cli-c/cmake/lz4.cmake"
+cmake -S "$E2E/cli-c" -B "$E2E/cli-c/build" "${GEN[@]}" "${LZ4_SOURCE_ARGS[@]}" >/dev/null \
     || { echo "[error] cmake configure failed" >&2; exit 1; }
 cmake --build "$E2E/cli-c/build" >/dev/null \
     || { echo "[error] cmake build failed" >&2; exit 1; }

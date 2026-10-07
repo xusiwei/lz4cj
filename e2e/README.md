@@ -5,7 +5,7 @@
 
 ```
 e2e/
-├── cli-c/     C 参照工具:上游 lz4 C 源码基线 0774d055 就地编译(CMake 跨平台)
+├── cli-c/     C 参照工具:CMake FetchContent 集成上游 lz4 基线 0774d055
 ├── cli-cj/    仓颉工具:独立 cjpm executable 模块,path 依赖仓库根(../..)
 └── run_e2e.sh 总控:建双工具 → 生成用例 → 跑全矩阵 → 汇总
 ```
@@ -45,12 +45,16 @@ prefs 自动改写(lz4frame.c L443-453:默认 blockSizeID=max64KB;输入 ≤ 单
 
 ```bash
 export LZ4CJ_SDK_105=... LZ4CJ_SDK_120=...   # Windows/自定义 SDK 位置(可选)
-export LZ4CJ_UPSTREAM=~/lz4                  # 上游源码位置(缺省 ~/lz4,可选)
+export LZ4CJ_UPSTREAM=~/lz4                  # 可选:本地源码覆盖 FetchContent 下载
 e2e/run_e2e.sh            # [lt|st|both],缺省 both
 ```
 
-前置:cmake + ninja(或默认生成器)、上游 lz4 检出 0774d055(同
-`scripts/gen_golden.sh` 的定位规则)、SDK 经 `scripts/cjenv.sh` 解析。
+前置:cmake + ninja(或默认生成器)、SDK 经 `scripts/cjenv.sh` 解析。
+单独配置 CMake 时默认从 GitHub 获取固定的上游提交 `0774d055`；
+`run_e2e.sh` 优先使用 `LZ4CJ_UPSTREAM`，其次使用已存在的 `~/lz4`，
+否则由 FetchContent 下载。使用本地检出时，脚本通过
+`FETCHCONTENT_SOURCE_DIR_LZ4` 覆盖下载，可离线构建。手动配置 C 工具时也可直接传入
+`-DFETCHCONTENT_SOURCE_DIR_LZ4=<lz4 检出的绝对路径>`。
 
 ## 验证矩阵(每工具链 × 每用例)
 
