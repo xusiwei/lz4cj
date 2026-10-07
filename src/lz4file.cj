@@ -138,3 +138,143 @@ public func LZ4F_read(lz4fRead: LZ4_readFile_t, buf: Array<UInt8>,
 
     return totalBytesRead
 }
+
+/*-************************************
+*  Write file handle (lz4file.c L208-215)
+**************************************/
+/* C 堆分配 POD;仓颉类承载(GC 模型,§4.4 同 ruling)。构造仅经
+    LZ4F_writeOpen(internal init),对调用方不透明 = C 前置声明结构体。 */
+public class LZ4_writeFile_t {
+    internal var cctxPtr: LZ4F_cctx
+    internal var fp: File
+    internal var dstBuf: Array<UInt8>
+    internal var maxWriteSize: Int64
+    internal var dstBufMaxSize: Int64
+    internal var errCode: Int64
+
+    internal init(fp: File) {
+        this.fp = fp
+        this.cctxPtr = LZ4F_createCompressionContext(LZ4F_VERSION)
+        this.dstBuf = Array<UInt8>(0, {_ => 0u8})
+        this.maxWriteSize = 0
+        this.dstBufMaxSize = 0
+        this.errCode = LZ4F_OK_NoError
+    }
+}
+
+/* lz4fWriteHeader(lz4file.c L232-251):Begin 入 headerBuf[19] + 写文件。
+    fwrite 计数比较 → FSException 捕获(偏离 #3)。 */
+internal func lz4fWriteHeader(writeFile: LZ4_writeFile_t,
+        prefsPtr: Option<LZ4F_preferences_t>): Int64 {
+    let headerBuf = Array<UInt8>(LZ4F_HEADER_SIZE_MAX, {_ => 0u8})
+
+    let headerSize = LZ4F_compressBegin(writeFile.cctxPtr, headerBuf, 0,
+        LZ4F_HEADER_SIZE_MAX, prefsPtr)
+    if (LZ4F_isError(headerSize)) {
+        return headerSize                                 /* L241-243 */
+    }
+
+    try {
+        writeFile.fp.write(headerBuf[0..headerSize])      /* L246 */
+    } catch (e: Exception) {
+        return -LZ4F_ERROR_io_write
+    }
+
+    return LZ4F_OK_NoError
+}
+
+/* LZ4F_writeOpen(lz4file.c L253-301):prefs NULL → LZ4F_default(L262);
+    getBlockSize 非正 → maxBlockSize_invalid(偏离 #5:C 无符号回绕得
+    allocation_failed);dstBufMaxSize = compressBound(blockSize, prefs);
+    createCompressionContext(GC 无失败)+ writeHeader。C L288 的
+    freeAndNullWriteFile(lz4fWrite)(误取出参而非 &writeFile)不复制,
+    统一 (err, None)。 */
+public func LZ4F_writeOpen(fp: File,
+        prefsPtr: Option<LZ4F_preferences_t>): (Int64, Option<LZ4_writeFile_t>) {
+    let blockSizeID: Int32 = match (prefsPtr) {
+        case Some(p) => p.frameInfo.blockSizeID
+        case None => LZ4F_default                          /* L262 */
+    }
+    let blockSize = LZ4F_getBlockSize(blockSizeID)
+    if (blockSize <= 0) {
+        return (-LZ4F_ERROR_maxBlockSize_invalid, Option<LZ4_writeFile_t>.None)
+    }
+
+    let writeFile = LZ4_writeFile_t(fp)
+    writeFile.maxWriteSize = blockSize                    /* L275 */
+    writeFile.dstBufMaxSize = LZ4F_compressBound(blockSize, prefsPtr)   /* L278 */
+    writeFile.dstBuf = Array<UInt8>(writeFile.dstBufMaxSize, {_ => 0u8})
+
+    let writeStatus = lz4fWriteHeader(writeFile, prefsPtr)
+    if (LZ4F_isError(writeStatus)) {
+        return (writeStatus, Option<LZ4_writeFile_t>.None)
+    }
+
+    return (LZ4F_OK_NoError, Some(writeFile))
+}
+
+/* LZ4F_write(lz4file.c L303-336):按 maxWriteSize 分块 compressUpdate +
+    写文件;错误记 errCode 并返回(粘滞);buf==NULL 检查 N/A。 */
+public func LZ4F_write(lz4fWrite: LZ4_writeFile_t, buf: Array<UInt8>,
+        size!: Int64): Int64 {
+    var p: Int64 = 0
+    var remainingBytes = size
+
+    while (remainingBytes > 0) {
+        let chunkSize = if (remainingBytes > lz4fWrite.maxWriteSize) {
+            lz4fWrite.maxWriteSize
+        } else {
+            remainingBytes                                /* L313 */
+        }
+
+        let cSize = LZ4F_compressUpdate(lz4fWrite.cctxPtr,
+            lz4fWrite.dstBuf, 0, lz4fWrite.dstBufMaxSize,
+            buf, p, chunkSize,
+            Option<LZ4F_compressOptions_t>.None)          /* L316-319 */
+        if (LZ4F_isError(cSize)) {
+            lz4fWrite.errCode = cSize                     /* L321 */
+            return cSize
+        }
+
+        try {
+            lz4fWrite.fp.write(lz4fWrite.dstBuf[0..cSize])    /* L325 */
+        } catch (e: Exception) {
+            lz4fWrite.errCode = -LZ4F_ERROR_io_write      /* L326 */
+            return -LZ4F_ERROR_io_write
+        }
+
+        p += chunkSize                                    /* L331 */
+        remainingBytes -= chunkSize                       /* L332 */
+    }
+
+    return size                                           /* L335 */
+}
+
+/* LZ4F_writeClose(lz4file.c L338-362):errCode==OK 才 compressEnd + 写
+    尾(错误透传保留原码;io 失败 → io_write);freeWriteFileResources →
+    GC;返回 ret。errCode 粘滞时跳过 End 返回 OK(C 怪癖,测试白盒钉)。
+    偏离 #6:C 成功路径 ret 沿袭 compressEnd 返回值(字节数 ≥4,非
+    LZ4F_OK_NoError;lz4file.h 仅约定 LZ4F_errorCode_t 契约);本端口按
+    头文件契约与测试钉值归一为 OK_NoError(TDD 检出 brief 内测试与
+    实现互斥,以测试为准)。 */
+public func LZ4F_writeClose(lz4fWrite: LZ4_writeFile_t): Int64 {
+    var ret: Int64 = LZ4F_OK_NoError
+
+    if (lz4fWrite.errCode == LZ4F_OK_NoError) {
+        ret = LZ4F_compressEnd(lz4fWrite.cctxPtr,
+            lz4fWrite.dstBuf, 0, lz4fWrite.dstBufMaxSize,
+            Option<LZ4F_compressOptions_t>.None)          /* L347-349 */
+        if (!LZ4F_isError(ret)) {
+            let endSize = ret
+            ret = LZ4F_OK_NoError                         /* 偏离 #6:归一 */
+            try {
+                lz4fWrite.fp.write(lz4fWrite.dstBuf[0..endSize])   /* L354 */
+            } catch (e: Exception) {
+                ret = -LZ4F_ERROR_io_write                /* L355 */
+            }
+        }
+    }
+
+    let _ = LZ4F_freeCompressionContext(lz4fWrite.cctxPtr)    /* L360 */
+    return ret
+}

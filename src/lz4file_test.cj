@@ -317,3 +317,191 @@ func lz4fileReadEofPartialTest(): Unit {
     fp.close()
     removeIfExists(path)
 }
+
+/*-************************************
+*  write family (lz4file.c L208-362)
+**************************************/
+
+func lz4fileWriteRoundtrip(name: String, input: Array<UInt8>, n: Int64,
+        prefs: Option<LZ4F_preferences_t>,
+        chunks: Array<Int64>): Array<UInt8> {
+    let path = lz4fileTempPath(name)
+    let fp = File(path, OpenMode.Write)
+    let (code, h) = LZ4F_writeOpen(fp, prefs)
+    @Assert(code == LZ4F_OK_NoError)
+    match (h) {
+        case Some(w) =>
+            var off: Int64 = 0
+            var ci: Int64 = 0
+            while (off < n) {
+                let want = if (ci < chunks.size) { chunks[ci] } else { n - off }
+                let len = if (n - off < want) { n - off } else { want }
+                // C callers advance buf + off (probe: LZ4F_write(w, in + off, len));
+                // this port's LZ4F_write reads from buf[0..size], so stage per-call
+                // and copy from input (lz4fileReadAll staging precedent).
+                let piece = Array<UInt8>(len, {_ => 0u8})
+                var i: Int64 = 0
+                while (i < len) { piece[i] = input[off + i]; i += 1 }
+                let r = LZ4F_write(w, piece, size: len)
+                @Assert(r == len)
+                off += len
+                ci += 1
+            }
+            @Assert(LZ4F_writeClose(w) == LZ4F_OK_NoError)
+        case None => @Assert(false)
+    }
+    fp.close()
+    let bytes = File.readFrom(path)
+    removeIfExists(path)
+    return bytes
+}
+
+@Test
+func lz4fileWriteDefaultPrefsTest(): Unit {
+    // default prefs (None): file must equal compressFrame byte-for-byte
+    // (same Begin + per-block Update + End chunking as C lz4file)
+    let n: Int64 = 300000
+    let input = lz4fileRDG(n, 11u32)
+    let prefs = LZ4F_preferences_t()
+    let bytes = lz4fileWriteRoundtrip("w_def.frm", input, n, Some(prefs), [65536])
+    @Assert(bytes == lz4fileMakeFrame(input, n, Some(prefs)))
+}
+
+@Test
+func lz4fileWritePrefsVariantsTest(): Unit {
+    // variants cross-check vs upstream C lz4file write path (probe-pinned):
+    // v2/v3: file bytes == compressFrame(same prefs) as in C. v0/v1 differ
+    // from one-shot IN C ITSELF (v0: compressFrame's optimalBSID shrinks
+    // 4MB->1MB BD byte; v1: one-shot compresses from src with autoFlush=1 +
+    // forced blockIndependent, write path buffers + flushes from tmpBuff) -
+    // those two pinned to upstream file size + XXH32 instead.
+    let n: Int64 = 400000
+    let input = lz4fileRDG(n, 12u32)
+    var v0 = LZ4F_preferences_t()
+    v0.frameInfo.blockSizeID = LZ4F_max4MB
+    v0.frameInfo.contentChecksumFlag = LZ4F_contentChecksumEnabled
+    var v1 = LZ4F_preferences_t()
+    v1.frameInfo.blockSizeID = LZ4F_max1MB
+    v1.frameInfo.blockChecksumFlag = LZ4F_blockChecksumEnabled
+    v1.compressionLevel = 3
+    var v2 = LZ4F_preferences_t()
+    v2.frameInfo.blockSizeID = LZ4F_max256KB
+    v2.frameInfo.blockMode = LZ4F_blockIndependent
+    v2.compressionLevel = 9
+    var v3 = LZ4F_preferences_t()
+    v3.frameInfo.contentSize = UInt64(n)   // contentSize present
+    let variants = [v0, v1, v2, v3]
+    var i: Int64 = 0
+    while (i < 4) {
+        let bytes = lz4fileWriteRoundtrip("w_v${i}.frm", input, n,
+            Some(variants[i]), [1000])
+        if (i == 0) {
+            // C probe @0774d055: size=230809 xxh=ad520c82
+            @Assert(bytes.size == 230809)
+            @Assert(XXH32(bytes, bytes.size, 0u32) == 0xAD520C82u32)
+        } else if (i == 1) {
+            // C probe @0774d055: size=183829 xxh=d214bb3a
+            @Assert(bytes.size == 183829)
+            @Assert(XXH32(bytes, bytes.size, 0u32) == 0xD214BB3Au32)
+        } else {
+            @Assert(bytes == lz4fileMakeFrame(input, n, Some(variants[i])))
+        }
+        i += 1
+    }
+}
+
+@Test
+func lz4fileWriteNonePrefsTest(): Unit {
+    // prefsPtr=None == zeroed prefs (C L262: NULL -> LZ4F_default)
+    let n: Int64 = 100000
+    let input = lz4fileRDG(n, 13u32)
+    let viaNone = lz4fileWriteRoundtrip("w_none.frm", input, n,
+        Option<LZ4F_preferences_t>.None, [65536])
+    let viaZero = lz4fileWriteRoundtrip("w_zero.frm", input, n,
+        Some(LZ4F_preferences_t()), [65536])
+    @Assert(viaNone == viaZero)
+    @Assert(viaNone == lz4fileMakeFrame(input, n, Some(LZ4F_preferences_t())))
+}
+
+@Test
+func lz4fileWriteManySmallWritesTest(): Unit {
+    // autoFlush=0 buffering: many sub-block writes == one-shot frame bytes
+    let n: Int64 = 200001
+    let input = lz4fileRDG(n, 14u32)
+    let prefs = LZ4F_preferences_t()
+    let bytes = lz4fileWriteRoundtrip("w_small.frm", input, n, Some(prefs), [7, 1000, 33333])
+    @Assert(bytes == lz4fileMakeFrame(input, n, Some(prefs)))
+}
+
+@Test
+func lz4fileWriteBadBlockSizeTest(): Unit {
+    // invalid blockSizeID=2: C gets allocation_failed via unsigned wrap
+    // (probe-pinned); Cangjie early-exits maxBlockSize_invalid (deviation #5)
+    let path = lz4fileTempPath("w_badbs.frm")
+    let fp = File(path, OpenMode.Write)
+    var prefs = LZ4F_preferences_t()
+    prefs.frameInfo.blockSizeID = 2
+    let (code, h) = LZ4F_writeOpen(fp, Some(prefs))
+    @Assert(code == -LZ4F_ERROR_maxBlockSize_invalid)
+    match (h) {
+        case Some(_) => @Assert(false)
+        case None => @Assert(true)
+    }
+    fp.close()
+    removeIfExists(path)
+}
+
+@Test
+func lz4fileWriteEmptyInputTest(): Unit {
+    // zero-length write then close: file = header + endmark (11B default)
+    let path = lz4fileTempPath("w_empty.frm")
+    let fp = File(path, OpenMode.Write)
+    let (code, h) = LZ4F_writeOpen(fp, Option<LZ4F_preferences_t>.None)
+    @Assert(code == LZ4F_OK_NoError)
+    match (h) {
+        case Some(w) =>
+            @Assert(LZ4F_write(w, Array<UInt8>(0, {_ => 0u8}), size: 0) == 0)
+            @Assert(LZ4F_writeClose(w) == LZ4F_OK_NoError)
+        case None => @Assert(false)
+    }
+    fp.close()
+    let bytes = File.readFrom(path)
+    @Assert(bytes.size == 11)   // 7B header + 4B endmark
+    // roundtrip through read side
+    let rp = File(path, OpenMode.Read)
+    let (rcode, rh) = LZ4F_readOpen(rp)
+    @Assert(rcode == LZ4F_OK_NoError)
+    let buf = Array<UInt8>(4, {_ => 0u8})
+    match (rh) {
+        case Some(t) => @Assert(LZ4F_read(t, buf, size: 4) == 0)
+        case None => @Assert(false)
+    }
+    rp.close()
+    removeIfExists(path)
+}
+
+@Test
+func lz4fileWriteCloseStickyErrTest(): Unit {
+    // white-box: errCode != OK -> writeClose skips compressEnd, returns OK
+    // (C L346-357 quirk: no endmark written)
+    let path = lz4fileTempPath("w_sticky.frm")
+    let fp = File(path, OpenMode.Write)
+    let n: Int64 = 10
+    let (code, h) = LZ4F_writeOpen(fp, Option<LZ4F_preferences_t>.None)
+    @Assert(code == LZ4F_OK_NoError)
+    match (h) {
+        case Some(w) =>
+            let input = lz4fileRDG(n, 15u32)
+            @Assert(LZ4F_write(w, input, size: n) == n)
+            w.errCode = -LZ4F_ERROR_io_write        // simulate sticky error
+            @Assert(LZ4F_writeClose(w) == LZ4F_OK_NoError)
+        case None => @Assert(false)
+    }
+    fp.close()
+    let bytes = File.readFrom(path)
+    // file = header only (C probe @0774d055: 7 bytes): 10-byte write fully
+    // buffered (autoFlush=0, < maxWriteSize), errCode skips compressEnd ->
+    // no block, no endmark ever written
+    @Assert(bytes.size == 7)
+    removeIfExists(path)
+}
