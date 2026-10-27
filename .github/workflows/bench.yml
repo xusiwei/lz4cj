@@ -1,0 +1,67 @@
+# Nightly benchmark (not a regression gate by design, see README/CHANGELOG
+# M8 ruling): `cjpm bench` fuzz seed scans + benchAllTest throughput smoke
+# on both toolchains. Results land in the run summary and as artifacts.
+name: benchmark
+
+on:
+  schedule:
+    - cron: "0 18 * * *" # 18:00 UTC = 02:00 Beijing
+  workflow_dispatch:
+
+jobs:
+  bench:
+    name: bench / ${{ matrix.tc }}
+    strategy:
+      fail-fast: false
+      matrix:
+        tc: [lt, st]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      CHANNEL: ${{ matrix.tc == 'lt' && 'lts' || 'sts' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Cangjie SDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/cangjie-lts-*
+            ~/.local/cangjie-sts-*
+          key: cangjie-${{ runner.os }}-${{ matrix.tc }}-${{ matrix.tc == 'lt' && '1.0.5-bacada84' || '1.2.0-8c5fd944' }}
+
+      - name: Install Cangjie SDK (${{ env.CHANNEL }})
+        run: scripts/download_sdk.sh "$CHANNEL"
+
+      - name: cjpm bench (${{ matrix.tc }})
+        run: |
+          source scripts/setup_env.sh "$CHANNEL"
+          cjpm clean && cjpm build
+          cjpm bench 2>&1 | tee bench.log
+          cjpm test --filter benchAllTest 2>&1 | tee benchAllTest.log || true
+
+      - name: Write summary
+        if: always()
+        run: |
+          {
+            echo "## Benchmark (${{ matrix.tc }} / ${{ env.CHANNEL }})"
+            echo
+            echo "benchAllTest throughput (best-of-3, MB/s):"
+            echo '```'
+            grep -E "mp=|MB/s" benchAllTest.log bench.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload bench logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.tc }}
+          path: |
+            bench.log
+            benchAllTest.log
+          if-no-files-found: ignore
+          retention-days: 90

@@ -1,0 +1,76 @@
+# PR gate: 4 variants = {ubuntu-latest, windows-latest} x {lt=LTS 1.0.5, st=STS 1.2.0}
+# Per variant: SDK install (cached) -> golden corpus regen -> cjpm build/test
+# -> downstream smoke -> e2e cross-validation vs upstream C lz4.
+# macOS (macos-15/arm64 + mac-aarch64 SDK) is a planned follow-up: add an
+# os row once the runners are validated.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: ${{ matrix.tc }} / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        tc: [lt, st]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      # lt -> lts (1.0.5), st -> sts (1.2.0); mirrors download_sdk.sh's table
+      CHANNEL: ${{ matrix.tc == 'lt' && 'lts' || 'sts' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: C toolchain (Windows)
+        if: runner.os == 'Windows'
+        run: command -v gcc >/dev/null 2>&1 || choco install mingw -y --no-progress
+
+      - name: Cache Cangjie SDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/cangjie-lts-*
+            ~/.local/cangjie-sts-*
+          # invalidate on SDK bump: <version>-<sha256 first 8> from download_sdk.sh
+          key: cangjie-${{ runner.os }}-${{ matrix.tc }}-${{ matrix.tc == 'lt' && '1.0.5-bacada84' || '1.2.0-8c5fd944' }}
+
+      - name: Install Cangjie SDK (${{ env.CHANNEL }})
+        run: scripts/download_sdk.sh "$CHANNEL"
+
+      - name: Regenerate golden corpus (upstream 0774d055)
+        run: |
+          git clone https://github.com/lz4/lz4 ~/lz4
+          git -C ~/lz4 checkout 0774d055
+          scripts/gen_golden.sh
+
+      - name: Build + unit/golden tests (${{ matrix.tc }})
+        run: scripts/build_and_test.sh ${{ matrix.tc }} test-only
+
+      - name: Downstream dependency smoke (${{ matrix.tc }})
+        run: scripts/verify_downstream.sh ${{ matrix.tc }}
+
+      - name: e2e cross-validation vs upstream C (${{ matrix.tc }})
+        run: e2e/run_e2e.sh ${{ matrix.tc }}
+
+      - name: Upload logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.tc }}-${{ runner.os }}
+          path: |
+            report/
+            e2e/tmp/
+          if-no-files-found: ignore
+          retention-days: 14

@@ -13,6 +13,6 @@
   package-configuration = {}
   authors = ["lz4cj contributors"]
   license = ["BSD-2-Clause"]
-  repository = ["https://atomgit.com/xusiwei1236/lz4cj"]
+  repository = ["https://github.com/xusiwei/lz4cj"]
 
 [dependencies]

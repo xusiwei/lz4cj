@@ -34,8 +34,15 @@ bad() { FAIL=$((FAIL + 1)); echo "  [FAIL] $*"; }
 note() { echo "== $*"; }
 
 # run a tool with timeout; rc 124 = timed out
+# GNU coreutils `timeout` (macOS needs `gtimeout` from brew coreutils);
+# when neither exists, run without a guard.
+TO_CMD="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
 run_t() {
-    timeout "$TO" "$@" </dev/null
+    if [ -n "$TO_CMD" ]; then
+        "$TO_CMD" "$TO" "$@" </dev/null
+    else
+        "$@" </dev/null
+    fi
     return $?
 }
 

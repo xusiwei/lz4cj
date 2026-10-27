@@ -1,5 +1,7 @@
 # lz4cj
 
+[![CI](https://github.com/xusiwei/lz4cj/actions/workflows/ci.yml/badge.svg)](https://github.com/xusiwei/lz4cj/actions/workflows/ci.yml)
+
 [LZ4](https://github.com/lz4/lz4) 无损压缩库的 [Cangjie](https://cangjie-lang.org/) 移植版(纯仓颉实现,无 FFI/跨语言绑定)。
 
 本移植将上游 lz4(v1.10.0 发布线之上的官方修复版)的`lz4.c` / `lz4hc.c` / `lz4frame.c` / `lz4file.h` 非弃用 API 以 Cangjie 语言全部重新实现,
@@ -312,8 +314,9 @@ rf.close()
 
 构建脚本按 `scripts/cjenv.sh` 的规则定位 SDK(与平台无关):优先环境变量
 `LZ4CJ_SDK_105` / `LZ4CJ_SDK_120`(指向含 `envsetup.sh` 或 `cangjie/envsetup.sh` 的
-SDK 根目录,Windows 反斜杠路径亦可),回退 `~/sdk/cangjie-<ver>`(可用
-`scripts/setup_env.sh` 在 Linux 上一键安装)。
+SDK 根目录,Windows 反斜杠路径亦可),回退 `~/.local/cangjie-<lts|sts>-<ver>`
+(`scripts/download_sdk.sh` 安装的布局,链接切换由 `scripts/setup_env.sh` 负责),
+最后回退旧布局 `~/sdk/cangjie-<ver>`。
 
 > **注意**:不同版本工具链生成的编译中间文件二进制不兼容。切换工具链版本后,
 > 请先 `cjpm clean` 清理之前工具链的中间产物再重新构建。
@@ -321,16 +324,35 @@ SDK 根目录,Windows 反斜杠路径亦可),回退 `~/sdk/cangjie-<ver>`(可用
 ### 构建命令
 
 ```bash
-scripts/setup_env.sh           # 一次性:安装并自检两套 SDK(Linux)
-scripts/build_and_test.sh both # 双工具链构建 + 全量测试 + fuzz 基准
+scripts/download_sdk.sh          # 一次性:下载两套 SDK 到 ~/.local(Linux/macOS/Windows Git Bash)
+source scripts/setup_env.sh lts  # 切换 ~/.local/cangjie-sdk 链接到 LTS 并导出环境(或 sts)
+scripts/build_and_test.sh both   # 双工具链构建 + 全量测试 + fuzz 基准
 ```
 
-`build_and_test.sh` 也接受 `lt`(LTS-1.0.5)/ `st`(STS-1.2.0)单工具链参数,缺省 `both`。
+`download_sdk.sh` 内嵌 cangjie-lang.cn 官方直链与 sha256 校验,支持
+`lts` / `sts` / `both` 参数,已安装的渠道自动跳过(幂等)。
+`setup_env.sh` 通过 `~/.local/cangjie-sdk -> cangjie-<lts|sts>-<ver>` 链接实现版本切换
+(Windows 上为 junction),PATH 导入目录跨版本稳定;重复 source 自动清理旧工具链路径。
+`build_and_test.sh` 也接受 `lt`(LTS-1.0.5)/ `st`(STS-1.2.0)单工具链参数,缺省 `both`;
+第二参数 `test-only` 可跳过 `cjpm bench`(CI PR 门禁用,基准留给 nightly)。
 若已在环境中 source 过 SDK 的 `envsetup.sh`,也可直接 `cjpm build` / `cjpm test` / `cjpm bench`。
 
 `cjpm.toml` 中 `compile-option = "--int-overflow=wrapping ..."` 是正确性的硬性要求:
 LZ4 哈希函数依赖 32 位乘法回绕语义(如 `(seq * 2654435761) >> shift`),
 Cangjie 默认的溢出检查会在热点路径触发运行时异常,必须关闭。
+
+### CI(GitHub Actions)
+
+[.github/workflows/](.github/workflows/) 下两个流水线(仓库 push 到 GitHub 后生效):
+
+| 流水线 | 触发 | 内容 |
+| --- | --- | --- |
+| `ci.yml` | 每个 PR / push main | 四变体矩阵 {ubuntu, windows} × {lt, st}:SDK 安装(actions/cache 缓存 `~/.local`)→ golden 语料再生 → `cjpm build/test`(test-only)→ 下游依赖冒烟 → e2e 双工具交叉验证 |
+| `bench.yml` | 每晚 02:00(北京时间)/ 手动 | 双工具链 `cjpm bench` fuzz 种子扫描 + 吞吐冒烟,结果写入 run summary 与 artifacts(按设计定位为数量级监视,非回归门禁) |
+
+SDK 由 `scripts/download_sdk.sh` 从官网直链下载并校验 sha256 后经缓存复用;
+Windows 变体补装 MinGW gcc(与本地开发环境一致)。macOS(macos-15/arm64)为后续扩展项,
+`download_sdk.sh` 的 mac-aarch64 包条目与 `run_e2e.sh` 的 `gtimeout` 回退已预置。
 
 ### golden 语料再生
 
