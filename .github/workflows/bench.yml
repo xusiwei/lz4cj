@@ -25,6 +25,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # scripts committed from Windows lack the exec bit (core.filemode=false
+      # there); Linux runners refuse to exec them
+      - name: Ensure scripts are executable
+        run: chmod +x scripts/*.sh e2e/*.sh
+
       - name: Cache Cangjie SDK
         uses: actions/cache@v4
         with:

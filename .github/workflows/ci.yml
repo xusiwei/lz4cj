@@ -33,6 +33,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # scripts committed from Windows lack the exec bit (core.filemode=false
+      # there); Linux runners refuse to exec them. Harmless no-op on Windows.
+      - name: Ensure scripts are executable
+        run: chmod +x scripts/*.sh e2e/*.sh
+
       - name: C toolchain (Windows)
         if: runner.os == 'Windows'
         run: command -v gcc >/dev/null 2>&1 || choco install mingw -y --no-progress
