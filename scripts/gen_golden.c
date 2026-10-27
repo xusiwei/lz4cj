@@ -170,6 +170,11 @@
 /* expose the static-linking-only declarations used below
    (LZ4_compress_fast_extState_fastReset, LZ4_compress_destSize_extState) */
 #define LZ4_STATIC_LINKING_ONLY
+/* lz4hc.h gates its undocumented-stable block behind its own macro
+   (LZ4_favorDecompressionSpeed, LZ4_compress_HC_extStateHC_fastReset);
+   without it those two compile as implicit declarations - a warning on
+   GCC <= 13 but a hard error on GCC 14+ default C23 (CI Windows MinGW) */
+#define LZ4_HC_STATIC_LINKING_ONLY
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
