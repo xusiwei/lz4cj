@@ -2118,7 +2118,7 @@ func lz4fUsingDictDecodeTest(): Unit {
 *  M6 Task 3: 分片续传矩阵 + options + skippable/拼接 + fdmp golden
 **************************************/
 // 对应 golden 清单 mode=fdmp 14 行(corpus/block_golden_ref.txt 再生值嵌入,
-// manifest 仅出处;C harness scripts/gen_golden.c fdmp 节 @ 0774d055)。
+// manifest 仅出处;C harness probes/gen_golden.c fdmp 节 @ 0774d055)。
 // out= 三元组 = consumed:written:hint;错误契约恒 (code, 0, 0)。
 
 // 小工具:流式成帧(Begin + Update 整段 + End,raw prefs,无 compressFrame
@@ -3374,7 +3374,7 @@ func lz4fMultiBufferDecodeTest(): Unit {
 }
 
 /*-************************************
-*  M6 终审修复:前缀谓词分配同一性回归(探针 scripts/frame_decode_probe.c)
+*  M6 终审修复:前缀谓词分配同一性回归(探针 probes/frame_decode_probe.c)
 **************************************/
 // 终审 Critical 的反例几何:旧内容窗口谓词(数字邻接 + 尾 64KB 逐字节
 // 等值)在"不同分配而内容等值"时假阳性 → updateDict 在外来字典数组上
@@ -3559,7 +3559,7 @@ func lz4fDifferingSwitchControlTest(): Unit {
 /*-************************************
 *  M7 Task 1: ctx type swap on one cctx
 **************************************/
-// scripts/ctx_swap_probe.c @ 0774d055: one cctx, 8 alternating frames
+// probes/ctx_swap_probe.c @ 0774d055: one cctx, 8 alternating frames
 // (lv0/lv9 x4; swaps 3-8 = upstream lz4frame.c L743-751 in-place type
 // reinterpretation). lv0 frames 38688 / a2371855 / 54ad2015adcf2431
 // (== golden row 436 geometry), lv9 frames 32931 / 8f08e8b0 /

@@ -22,7 +22,7 @@
 // what the golden fastreset rows' off=/tt= fields pin instead.
 //
 // Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs \
-//   scripts/probe_fastreset_reuse.c $HOME/lz4/tests/datagen.c \
+//   probes/probe_fastreset_reuse.c $HOME/lz4/tests/datagen.c \
 //   $HOME/lz4/lib/lz4.c $HOME/lz4/lib/xxhash.c -o /tmp/probe_reuse */
 #include <stdio.h>
 #include <stdlib.h>

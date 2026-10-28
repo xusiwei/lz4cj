@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 目录布局:scripts/ 收敛为纯 .sh 工作流(编排层),15 个 C 侧钉值工具(`gen_golden.c` + 14 个 `*_probe.c`/`*_ref.c`)整体迁入顶层 `probes/`(链接上游 0774d055 编译的开发期取证工具,运行时不需要)并新增 `probes/README.md` 索引(探针 → 钉值内容 → 对应仓颉测试映射表 + 通用编译模式)。联动:`gen_golden.sh` 编译对象/二进制路径改 `probes/gen_golden.c`/`probes/gen_golden`(md5 验证再生语料逐字节不变);15 个 .c 头部构建行与 `src/*.cj` 注释里的 `scripts/<name>.c` 引用同步(50 处,`gen_golden.sh` 引用保留);.gitignore 12 条编译产物条目迁移;cjpm.toml exclude 增 `probes/**`;README 项目树更新。历史文档(docs/progress.md 等)旧路径不追溯,以 CHANGELOG 本条为映射
+
 - scripts 下四件 .cj 拆分为独立示例工程 `examples/<name>/`(各自 cjpm.toml,`output-type = executable`,按需 path 依赖仓库根)+ `examples/README.md` 索引:`downstream_smoke`(库消费示例,重构为 blockRoute/hcRoute/frameRoute/lz4fileRoute 四函数 + makeInput/sameBytes 复用,main 精简为串联调度;HC 路顺带补齐逐字节比对;钉值与验收输出行逐字保留)、`arr_probe`/`oob_repro`(误编译/伪越界探针:外围函数化,**被探测存储序列逐字保留** —— 代码形状即载荷;oob_repro 的 compile-option 钉 `-O2` 保持误编译配置)、`gc_stale_repro`(函数化 xorshift64/churnRound/probeRound,复读定级语义不变;`-Woff unused` 抑制原版固有的 unreachable 提示)。联动:`verify_downstream.sh` 拷贝路径改 examples/downstream_smoke/src/main.cj,临时工程包名 lz4_ds_smoke → downstream_smoke(与文件 package 声明一致);README 项目树/用法示例引用、docs/progress.md #47 活指针同步;.gitignore 清理六个已失效的探针二进制条目。LTS 实证:四例 cjpm run 输出与原版一致(DOWNSTREAM_SMOKE_OK c=517 hc=517 fc=532 lf=532 / sweep clean / store7 OK / rounds=16 transient=0 persistent=0),`verify_downstream.sh lt` PASS
 
 - CI Windows 变体暂缓:矩阵收敛为 Linux {lt, st}(ci.yml os 行移除 windows-latest)——首跑实证两项已文档化工具链缺陷使格子结构性红灯:cjc `-O2` windows-x64 误编译(lt 格子 `lz4fSkippableTest` 确定性 ERROR,`-O0` 可绕,本机已实验证实;`cjpm test -g` 无效,包级 compile-option 不被 CLI 覆盖)+ 运行时非确定性活锁(st 格子挂死 `lz4LargeFrameTest` 至 job 超时,本机 0.12s 用例/180s 打标样本与 findings 记录吻合)。Windows 专属步骤(条件式 MinGW 安装)保留,恢复 = 矩阵加回一行 + lt 格子 `-O0` 降级 + cjpm test 整进程 timeout 重试;README/工作流注释同步

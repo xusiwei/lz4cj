@@ -12,9 +12,9 @@
    fresh stream replays pass-1, then a 4-byte block at 262139 whose end
    lands 1 byte below dictEnd -> shrink computes dictSize=1 -> <4 discard
    arm (lz4.c L1749-50, expected c=5 all-literals, plain safe decode).
-   Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs scripts/probe_overlap.c \
+   Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs probes/probe_overlap.c \
           $HOME/lz4/tests/datagen.c $HOME/lz4/lib/lz4.c $HOME/lz4/lib/xxhash.c \
-          -o scripts/probe_overlap */
+          -o probes/probe_overlap */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

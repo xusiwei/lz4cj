@@ -1,6 +1,6 @@
 // M9 lz4file API tests: file-level convenience handles over LZ4F_*.
 // Upstream reference: lib/lz4file.c @ 0774d055. Pinned values originate from
-// scripts/lz4file_probe.c runs against upstream (Task 4).
+// probes/lz4file_probe.c runs against upstream (Task 4).
 
 package lz4
 
@@ -509,9 +509,9 @@ func lz4fileWriteCloseStickyErrTest(): Unit {
 }
 
 /*-************************************
-*  Upstream probe parity (scripts/lz4file_probe.c @ 0774d055)
+*  Upstream probe parity (probes/lz4file_probe.c @ 0774d055)
 **************************************/
-/* Measured by scripts/lz4file_probe (RDG(200000,.50,42), 3 odd chunks
+/* Measured by probes/lz4file_probe (RDG(200000,.50,42), 3 odd chunks
    100000+65537+34463):
    w def: size=114579 xxh=5c8321a4    r def: got=200000 xxh=4111c4e8
    w p0:  size=114579 xxh=5c8321a4    r p0:  got=200000 xxh=4111c4e8
@@ -564,7 +564,7 @@ func lz4fileProbeWrite(tag: String, prefs: Option<LZ4F_preferences_t>): (Int64, 
 
 @Test
 func lz4fileProbeParityTest(): Unit {
-    // pinned from scripts/lz4file_probe output (upstream 0774d055)
+    // pinned from probes/lz4file_probe output (upstream 0774d055)
     let defs = lz4fileProbeWrite("def", Option<LZ4F_preferences_t>.None)
     @Assert(defs[0] == P_DEF_SIZE)
     @Assert(defs[1] == P_DEF_XXH)

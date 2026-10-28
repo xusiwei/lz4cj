@@ -3,7 +3,7 @@
 # Port: Copyright (c) 2026, lz4cj contributors, BSD-2-Clause.
 # Usage: scripts/gen_golden.sh - generate M2 block-compression golden
 # reference: corpus/block_golden_ref.txt
-# (one line per case, see scripts/gen_golden.c header for the line format)
+# (one line per case, see probes/gen_golden.c header for the line format)
 # plus corpus/block/<idx>.lz4 artifacts for outputs <= 65536 bytes.
 # Path-independent: upstream lz4 C sources are located via $LZ4CJ_UPSTREAM
 # (must be the dev-0774d055 checkout, see CHANGELOG M3), default ~/lz4;
@@ -28,14 +28,14 @@ case "${OSTYPE:-}/$(uname -s 2>/dev/null)" in
 esac
 
 "$CC" -O2 $EXTRA_CFLAGS -I"$UPSTREAM/lib" -I"$UPSTREAM/tests" -I"$UPSTREAM/programs" \
-   "$ROOT/scripts/gen_golden.c" "$UPSTREAM/tests/datagen.c" "$UPSTREAM/lib/lz4.c" \
+   "$ROOT/probes/gen_golden.c" "$UPSTREAM/tests/datagen.c" "$UPSTREAM/lib/lz4.c" \
    "$UPSTREAM/lib/lz4hc.c" "$UPSTREAM/lib/lz4frame.c" "$UPSTREAM/lib/xxhash.c" \
-   -o "$ROOT/scripts/gen_golden"
+   -o "$ROOT/probes/gen_golden"
 
 mkdir -p "$ROOT/corpus/block"
 rm -f "$ROOT"/corpus/block/*.lz4
 cd "$ROOT"
-scripts/gen_golden | tee corpus/block_golden_ref.txt
+probes/gen_golden | tee corpus/block_golden_ref.txt
 # MinGW text-mode stdout may emit CRLF; strip a trailing CR per line (no-op
 # on Linux where the generator emits pure LF).
 if grep -q $'\r' corpus/block_golden_ref.txt; then

@@ -21,9 +21,9 @@
        bytes + variant-0 frame at offset 12; readOpen OK, full content
        read back (dctx recycles to next frame).
    Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs \
-          scripts/lz4file_probe.c $HOME/lz4/lib/lz4frame.c $HOME/lz4/lib/lz4file.c \
+          probes/lz4file_probe.c $HOME/lz4/lib/lz4frame.c $HOME/lz4/lib/lz4file.c \
           $HOME/lz4/lib/lz4.c $HOME/lz4/lib/lz4hc.c $HOME/lz4/lib/xxhash.c \
-          $HOME/lz4/tests/datagen.c -o scripts/lz4file_probe */
+          $HOME/lz4/tests/datagen.c -o probes/lz4file_probe */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

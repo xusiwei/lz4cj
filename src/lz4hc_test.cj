@@ -1029,7 +1029,7 @@ func lz4hcStateCompatTest(): Unit {
 /*-************************************
 *  M4 Task 2: _dest_overflow fillOutput regimes (C probe, upstream 0774d055)
 **************************************/
-// scripts/hc_dest_probe.c (temporary, values pinned): n=8192 = 4096 RDG
+// probes/hc_dest_probe.c (temporary, values pinned): n=8192 = 4096 RDG
 // noise bytes (mp=0.0 lp=0.0 seed=0) + 8-byte-period tail; lv=9 targets
 //   tg=4100: first-sequence literal check fails (encodeSequence L330) ->
 //            _dest_overflow skips (ll cost > maxLitPos) -> last-literals
@@ -1857,7 +1857,7 @@ func lz4hcDestContGoldenTest(): Unit {
     println("hcdestcont golden: ${checked}/2 rows, ${fileCompared} byte-exact artifacts")
 }
 
-// lz4hcStreamEdgeTest: pins against upstream 0774d055 per scripts/hc_probe.c
+// lz4hcStreamEdgeTest: pins against upstream 0774d055 per probes/hc_probe.c
 // (recompiled with the build command in the probe header; T5 fix-round
 // repair: the tight call has its own output buffer, decode checks are
 // healthy-outputs-only and report-only, no exit before all cases print).
@@ -2004,7 +2004,7 @@ func lz4hcStreamEdgeTest(): Unit {
 }
 
 // lz4hcDictCtxPrefixAliasTest: pins against upstream 0774d055 per
-// scripts/hc_probe.c case 5 (fix round 2, I5 residual). Geometry: streams
+// probes/hc_probe.c case 5 (fix round 2, I5 residual). Geometry: streams
 // w and d both loadDictHC the SAME buffer D; w compresses B1 from a
 // SEPARATE buffer (setExternalDict -> dictBuf=D, dictCtx=None); attach(d);
 // then a CONTIGUOUS continue of B1's buffer (srcIdx == prefixEndIdx ->
@@ -2082,7 +2082,7 @@ func lz4hcDictCtxPrefixAliasTest(): Unit {
 }
 
 // lz4hcMidDictCtxConsultTest: pins against upstream 0774d055 per
-// scripts/hc_probe.c cases 6-7 (M4 Task 6 coverage gate: the MID strategy's
+// probes/hc_probe.c cases 6-7 (M4 Task 6 coverage gate: the MID strategy's
 // dictCtx consult LZ4MID_searchExtDict and the dict-buffer-as-block
 // pbufSameAsSrc aliasing under the whole-state takeover were unexercised by
 // the golden suite). Probe stdout (upstream 0774d055):
@@ -2157,7 +2157,7 @@ func lz4hcMidDictCtxConsultTest(): Unit {
 /*-************************************
 *  M7 Task 2: hard-to-reach HC lines (targeted coverage)
 **************************************/
-/* 共享合成输入族:与 scripts/hc_search3_probe.c 的 buildSweep/buildReprice
+/* 共享合成输入族:与 probes/hc_search3_probe.c 的 buildSweep/buildReprice
    逐语句对应(UInt64 LCG + 整数模式运算,双实现可移植;钉值均出自该探针
    对上游 0774d055 的编译运行)。_Search3(_Search2/_Search3 lazy 分析)仅在
    nbAttempts > 128 时启用 —— 即 hashChain 仅 lv9(lv10-12 为 opt 策略)。 */

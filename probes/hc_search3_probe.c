@@ -10,9 +10,9 @@
    verbatim with src/lz4hc_test.cj (hcSweepBuild/hcRepriceBuild) except
    (e) which uses RDG_genBuffer.
    Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs \
-          scripts/hc_search3_probe.c $HOME/lz4/tests/datagen.c \
+          probes/hc_search3_probe.c $HOME/lz4/tests/datagen.c \
           $HOME/lz4/lib/lz4.c $HOME/lz4/lib/lz4hc.c $HOME/lz4/lib/xxhash.c \
-          -o scripts/hc_search3_probe */
+          -o probes/hc_search3_probe */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -3,9 +3,9 @@
    ratio table (fast-decompress 0.85x re-evaluation, ledger item). LZ4_decompress_fast
    is C-only and serves as the upstream baseline for the wildCopy loop.
    Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs \
-          scripts/bench_probe.c $HOME/lz4/tests/datagen.c \
+          probes/bench_probe.c $HOME/lz4/tests/datagen.c \
           $HOME/lz4/lib/lz4.c $HOME/lz4/lib/lz4hc.c $HOME/lz4/lib/lz4frame.c \
-          $HOME/lz4/lib/xxhash.c -o scripts/bench_probe */
+          $HOME/lz4/lib/xxhash.c -o probes/bench_probe */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -20,20 +20,21 @@ cjpm.lock
 log
 report
 tmp
-scripts/datagen_ref
-scripts/gen_golden
-scripts/gen_golden.exe
-scripts/dest_probe
-scripts/hc_probe
-scripts/hc_dest_probe
-scripts/probe_overlap
-scripts/ctx_swap_probe
+# C-side probes: compiled binaries (sources tracked under probes/)
+probes/datagen_ref
+probes/gen_golden
+probes/gen_golden.exe
+probes/dest_probe
+probes/hc_probe
+probes/hc_dest_probe
+probes/probe_overlap
+probes/ctx_swap_probe
 # M5 corpus policy (2026-10-01): binaries not tracked, regenerate via scripts/gen_golden.sh
 corpus/
-scripts/hc_search3_probe
-scripts/large_probe
-scripts/bench_probe
-scripts/lz4file_probe
+probes/hc_search3_probe
+probes/large_probe
+probes/bench_probe
+probes/lz4file_probe
 .zcodeignore
 # local-only submission artifacts (2026-10-08): docx stays out of git, md is the source of truth
 docs/lz4cj_submission_report.docx

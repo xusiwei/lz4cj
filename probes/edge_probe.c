@@ -9,8 +9,8 @@
    65536; attach-empty dictCtx nil, off=65536, output == plain continue;
    destext state clean after delegation and fill).
    Build: cc -O2 -DLZ4_STATIC_LINKING_ONLY -I$HOME/lz4/lib -I$HOME/lz4/tests \
-          -I$HOME/lz4/programs scripts/edge_probe.c $HOME/lz4/tests/datagen.c \
-          $HOME/lz4/lib/lz4.c $HOME/lz4/lib/xxhash.c -o scripts/edge_probe
+          -I$HOME/lz4/programs probes/edge_probe.c $HOME/lz4/tests/datagen.c \
+          $HOME/lz4/lib/lz4.c $HOME/lz4/lib/xxhash.c -o probes/edge_probe
    (LZ4_compress_destSize_extState is declared in lz4.h's
    LZ4_STATIC_LINKING_ONLY section, hence the -D.) */
 #include <stdio.h>

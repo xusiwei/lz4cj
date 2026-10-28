@@ -164,9 +164,9 @@
 //   value), bm= 0=linked 1=independent; row 1 passes NULL prefs
 //
 // Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs \
-//          scripts/gen_golden.c $HOME/lz4/tests/datagen.c $HOME/lz4/lib/lz4.c \
+//          probes/gen_golden.c $HOME/lz4/tests/datagen.c $HOME/lz4/lib/lz4.c \
 //          $HOME/lz4/lib/lz4hc.c $HOME/lz4/lib/lz4frame.c \
-//          $HOME/lz4/lib/xxhash.c -o scripts/gen_golden
+//          $HOME/lz4/lib/xxhash.c -o probes/gen_golden
 /* expose the static-linking-only declarations used below
    (LZ4_compress_fast_extState_fastReset, LZ4_compress_destSize_extState) */
 #define LZ4_STATIC_LINKING_ONLY

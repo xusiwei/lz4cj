@@ -4,7 +4,7 @@
 // See LICENSE for full text.
 // M7 Task 4: >256KB runtime matrix (design 8.2 final row) - runtime datagen
 // roundtrip + C-pinned hash comparison; NOT persisted (no corpus artifacts).
-// All pins from scripts/large_probe.c against upstream 0774d055.
+// All pins from probes/large_probe.c against upstream 0774d055.
 
 package lz4
 

@@ -24,9 +24,9 @@
    Buffer construction must match the Cangjie tests byte-for-byte (RDG via
    upstream tests/datagen.c). Expected values: see the pinned constants in
    the three tests above.
-   Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs scripts/frame_decode_probe.c \
+   Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs probes/frame_decode_probe.c \
           $HOME/lz4/lib/lz4frame.c $HOME/lz4/lib/lz4.c $HOME/lz4/lib/lz4hc.c \
-          $HOME/lz4/lib/xxhash.c $HOME/lz4/tests/datagen.c -o scripts/frame_decode_probe */
+          $HOME/lz4/lib/xxhash.c $HOME/lz4/tests/datagen.c -o probes/frame_decode_probe */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

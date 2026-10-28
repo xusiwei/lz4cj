@@ -9,8 +9,8 @@
 // Buffer construction must match destProbeBuffer() in src/lz4_test.cj
 // byte-for-byte. Emits Cangjie tuple rows (kind, n, target, size, consumed,
 // xxh32, xxh64) and a stderr case count (expect 125).
-// Build: cc -O2 -I$HOME/lz4/lib scripts/dest_probe.c $HOME/lz4/lib/lz4.c \
-//        $HOME/lz4/lib/xxhash.c -o scripts/dest_probe
+// Build: cc -O2 -I$HOME/lz4/lib probes/dest_probe.c $HOME/lz4/lib/lz4.c \
+//        $HOME/lz4/lib/xxhash.c -o probes/dest_probe
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>

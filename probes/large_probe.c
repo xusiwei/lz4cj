@@ -9,9 +9,9 @@
      L_C = RDG(327680, 0.00, 0.0, 6464)   (incompressible)
      L_D = RDG(1048576, 1.00, 0.0, 7575)  (ultra-compressible)
    Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs \
-          scripts/large_probe.c $HOME/lz4/tests/datagen.c \
+          probes/large_probe.c $HOME/lz4/tests/datagen.c \
           $HOME/lz4/lib/lz4.c $HOME/lz4/lib/lz4hc.c $HOME/lz4/lib/lz4frame.c \
-          $HOME/lz4/lib/xxhash.c -o scripts/large_probe */
+          $HOME/lz4/lib/xxhash.c -o probes/large_probe */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

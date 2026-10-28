@@ -13,8 +13,8 @@
 // caps 13/12 -> -2 (last-run margin), s8 cap 14 -> -6 (match restriction);
 // partial targets clamp mid-match (6 -> "xyGHxy", 4 -> "xyGH"); v3 -> 48
 // ("GHGHGHGH" + 'a'..'n'), cap 31 -> negative.
-// Build: cc -O2 -I$HOME/lz4/lib scripts/span_probe.c $HOME/lz4/lib/lz4.c \
-//        $HOME/lz4/lib/xxhash.c -o scripts/span_probe
+// Build: cc -O2 -I$HOME/lz4/lib probes/span_probe.c $HOME/lz4/lib/lz4.c \
+//        $HOME/lz4/lib/xxhash.c -o probes/span_probe
 #include <stdio.h>
 #include <string.h>
 #include "lz4.h"

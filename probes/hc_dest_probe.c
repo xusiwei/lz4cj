@@ -10,9 +10,9 @@
      tg=4200: sequence fits within the oend hack -> full consumption, bytes
               equal regular lv=9 LZ4_compress_HC output (creg pinned too)
    Build: cc -O2 -DLZ4_STATIC_LINKING_ONLY -I$HOME/lz4/lib -I$HOME/lz4/tests \
-          -I$HOME/lz4/programs scripts/hc_dest_probe.c $HOME/lz4/tests/datagen.c \
+          -I$HOME/lz4/programs probes/hc_dest_probe.c $HOME/lz4/tests/datagen.c \
           $HOME/lz4/lib/lz4.c $HOME/lz4/lib/lz4hc.c $HOME/lz4/lib/xxhash.c \
-          -o scripts/hc_dest_probe */
+          -o probes/hc_dest_probe */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

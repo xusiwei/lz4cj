@@ -442,14 +442,16 @@ lz4cj/
 │   ├── large_test.cj          # >256KB 运行时矩阵(large_probe 钉值)
 │   ├── fuzz_test.cj           # fuzz 种子扫描(@Test @Bench)
 │   └── bench_test.cj          # 性能冒烟(@Bench)
-├── scripts/
+├── scripts/                   # 仅 .sh 工作流脚本(编排层)
 │   ├── download_sdk.sh        # SDK 下载安装(官网直链 + sha256,~/.local 布局)
 │   ├── setup_env.sh           # SDK 链接切换器(~/.local/cangjie-sdk,lts/sts)
 │   ├── build_and_test.sh      # 双工具链构建 + 测试总控
 │   ├── cjenv.sh               # SDK 定位规则
 │   ├── verify_downstream.sh   # 下游 path 依赖验收(跑 examples/downstream_smoke)
-│   ├── gen_golden.sh/.c       # golden 语料再生(编译上游 C 源)
-│   └── *_probe.c              # C 侧行为探针(钉值事实来源)
+│   └── gen_golden.sh          # golden 语料再生总控(编排 probes/gen_golden.c)
+├── probes/                    # C 侧钉值工具(链接上游 0774d055 编译,见 probes/README.md)
+│   ├── gen_golden.c           # golden 生成器(CI 每次运行)
+│   └── *_probe.c / *_ref.c    # 行为探针 14 个(钉值事实来源 → 仓颉测试常量)
 ├── examples/                  # 独立 cjpm 可执行工程(每个自带 cjpm.toml,见 examples/README.md)
 │   ├── downstream_smoke/      # 库消费示例:四路往返 + 钉值(verify_downstream 引用)
 │   ├── arr_probe/             # cjc windows 数组越界检查异常探针

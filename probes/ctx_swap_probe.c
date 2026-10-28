@@ -14,9 +14,9 @@
    linked / bs=4 / raw / af=0. Each reused frame is compared against
    a fresh-cctx same-prefs frame byte-for-byte (state reuse output
    equivalence). Prints size + XXH32 + XXH64 per frame + fresh memcmp.
-   Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs scripts/ctx_swap_probe.c \
+   Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs probes/ctx_swap_probe.c \
           $HOME/lz4/lib/lz4frame.c $HOME/lz4/lib/lz4.c $HOME/lz4/lib/lz4hc.c \
-          $HOME/lz4/lib/xxhash.c $HOME/lz4/tests/datagen.c -o scripts/ctx_swap_probe */
+          $HOME/lz4/lib/xxhash.c $HOME/lz4/tests/datagen.c -o probes/ctx_swap_probe */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

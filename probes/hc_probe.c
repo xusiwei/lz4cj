@@ -16,8 +16,8 @@
      lz4hcMidDictCtxConsultTest; dict-buffer-as-block pbufSameAsSrc
      aliasing under the whole-state takeover — same test).
    Build: cc -O2 -I$HOME/lz4/lib -I$HOME/lz4/tests -I$HOME/lz4/programs \
-          scripts/hc_probe.c $HOME/lz4/tests/datagen.c $HOME/lz4/lib/lz4.c \
-          $HOME/lz4/lib/lz4hc.c $HOME/lz4/lib/xxhash.c -o scripts/hc_probe
+          probes/hc_probe.c $HOME/lz4/tests/datagen.c $HOME/lz4/lib/lz4.c \
+          $HOME/lz4/lib/lz4hc.c $HOME/lz4/lib/xxhash.c -o probes/hc_probe
    (LZ4_setCompressionLevel is declared LZ4LIB_STATIC_API under
    LZ4_STATIC_LINKING_ONLY (lz4hc.h ~L363); the lz4hc.h header always
    #define's LZ4_STATIC_LINKING_ONLY when the macro is not yet defined, so

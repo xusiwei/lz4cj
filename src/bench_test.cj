@@ -5,7 +5,7 @@
 // M7 Task 5: throughput rough-measure (design 6.3: NOT a regression gate,
 // used to spot order-of-magnitude regressions and the fast-decompress
 // literal-dense 0.85x re-evaluation, ledger item). C counterpart:
-// scripts/bench_probe.c (same inputs/ops, best-of-3 MB/s).
+// probes/bench_probe.c (same inputs/ops, best-of-3 MB/s).
 
 package lz4
 
@@ -82,5 +82,5 @@ func benchAllTest(): Unit {
     println("frame bs4 mp=0.50 c=${fc}")
     println("  frame compress           ${mFc} MB/s")
     println("  frame decompress         ${mFd} MB/s")
-    println("bench: done (LTS -O2; C counterpart scripts/bench_probe.c)")
+    println("bench: done (LTS -O2; C counterpart probes/bench_probe.c)")
 }
