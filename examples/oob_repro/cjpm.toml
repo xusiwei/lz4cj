@@ -1,0 +1,9 @@
+[package]
+  cjc-version = "1.0.5"
+  name = "oob_repro"
+  description = "standalone repro attempt for the cangjie windows-x64 wrong-bounds-check miscompilation"
+  version = "0.1.0"
+  output-type = "executable"
+  compile-option = "-O2"
+
+[dependencies]

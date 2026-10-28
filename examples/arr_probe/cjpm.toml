@@ -1,0 +1,8 @@
+[package]
+  cjc-version = "1.0.5"
+  name = "arr_probe"
+  description = "cangjie windows-x64 array bounds-check anomaly probe (fuzzFrameDecode sf[7])"
+  version = "0.1.0"
+  output-type = "executable"
+
+[dependencies]

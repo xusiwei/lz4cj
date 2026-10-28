@@ -33,13 +33,6 @@ corpus/
 scripts/hc_search3_probe
 scripts/large_probe
 scripts/bench_probe
-scripts/gc_stale_repro_lt
-scripts/gc_stale_repro_st
-# Windows toolchain probes (compiled)
-scripts/arr_probe_lt
-scripts/arr_probe_st
-scripts/oob_repro_lt
-scripts/oob_repro_st
 scripts/lz4file_probe
 .zcodeignore
 # local-only submission artifacts (2026-10-08): docx stays out of git, md is the source of truth

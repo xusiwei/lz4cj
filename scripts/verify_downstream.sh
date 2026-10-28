@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Usage: scripts/verify_downstream.sh [lt|st|both]  (default: both)
 # M8 验收(设计 §10):双制品可被下游 cjpm 依赖引用成功。
-# 机制:临时下游 executable 工程,path 依赖引用本仓库,跑 scripts/downstream_smoke.cj
+# 机制:临时下游 executable 工程,path 依赖引用本仓库,跑 examples/downstream_smoke
 # 冒烟(块/HC/frame 三路往返 + 钉值;M9 追加 lz4file 第四路文件往返 lf=532);
 # 每工具链各建各跑各清理。
 # SDK 路径经 scripts/cjenv.sh 解析:优先 LZ4CJ_SDK_105 / LZ4CJ_SDK_120
@@ -23,7 +23,7 @@ run_one() {
     cat > "$tmp/cjpm.toml" <<EOF
 [package]
   cjc-version = "1.0.5"
-  name = "lz4_ds_smoke"
+  name = "downstream_smoke"
   description = "lz4cj downstream dependency smoke (generated)"
   version = "0.1.0"
   output-type = "executable"
@@ -31,7 +31,7 @@ run_one() {
 [dependencies]
   lz4 = { path = "$dep_path" }
 EOF
-    cp "$ROOT/scripts/downstream_smoke.cj" "$tmp/src/main.cj"
+    cp "$ROOT/examples/downstream_smoke/src/main.cj" "$tmp/src/main.cj"
     echo "=== [$tag] downstream dependency smoke ==="
     if ! out="$(bash -c "source '$setup' && cd '$tmp' && cjpm run" 2>&1)"; then
         printf '%s\n' "$out"

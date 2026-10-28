@@ -46,7 +46,7 @@
 - [x] ~~lz4frame_decode.cj 可达未覆盖行~~(M7-T3:容量保全 8 行 = bs4 三满块累计 196608 恰满 maxBufferSize + 新缓冲终块直解(插桩钉值 dsz=196608/dst=30000/max=196608);copySize 钳制 = af-flush 双小块 + 容量 b1+7;顺带 join 族 3 子钳制(423/426/465)多缓冲变体;>1GB 截尾 2 行 = 本机内存裁定(3GB 总/~1GB 可用,C 同构保留);残 10 行防御类)
 - [x] ~~M5 fuzzFrameCase LCG 连续奇偶锁定残余~~(M7-T5:nibble 位抽取 + ss/rawCoin 奇模数,M6 范式对齐)
 - [x] ~~cjcov 覆盖快照漂移~~(M7-T6 调查关闭:同 commit 背靠背双跑 hit/total/未覆盖集全同 = 会话内完全确定;跨会话/跨构建总行数漂移(字节相同文件 627→632)= gcov 行归因的构建期差异,与覆盖行为无关;里程碑门禁沿用同会话口径即可)
-- [x] ~~GC 陈旧读现象调查~~(M7-T6 关闭:最小复现程序 scripts/gc_stale_repro.cj(16MB×2 数组 + 交错索引比较 + 分配压)双工具链 10 轮(LTS×9/STS×1)零 transient/persistent 观测 = 未复现;现象不再现,缓解注释保留,如复发以该程序为起点)
+- [x] ~~GC 陈旧读现象调查~~(M7-T6 关闭:最小复现程序(现 examples/gc_stale_repro/,原 scripts/gc_stale_repro.cj)(16MB×2 数组 + 交错索引比较 + 分配压)双工具链 10 轮(LTS×9/STS×1)零 transient/persistent 观测 = 未复现;现象不再现,缓解注释保留,如复发以该程序为起点)
 - [ ] virgin-attach(dictCtx 前缀为空)→ noDictCtx 回退(lz4hc.cj L1988-1992):上游该路径 NULL 解引用为 UB/崩溃,仓颉防御性回退不复刻,输出无对照基准 —— 裁定登记(CHANGELOG 0.5.0 已归类)
 - [x] ~~RDG_genBuffer 等 unused 警告~~(M8 裁定:-Woff unused/parser 抑制 + 归类登记,库源码零改动;见 CHANGELOG 0.9.0)
 - [x] ~~fast 解压路径 0.85x 复评~~(M7-T5:bench_probe/benchAllTest 同机同轮 best-of-3,0.85x 不可复现 —— 实测全面比值 0.02-0.6x(字面密集 safe 解压 0.024x),与同轮 perf-smoke 交叉一致;判定差距结构性(安全层/GC/调用开销 vs C 裸内存+SIMD),M7 不做单点微调,基线表入 CHANGELOG,整体评估留 M8 按 §2.2 条款)

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- scripts 下四件 .cj 拆分为独立示例工程 `examples/<name>/`(各自 cjpm.toml,`output-type = executable`,按需 path 依赖仓库根)+ `examples/README.md` 索引:`downstream_smoke`(库消费示例,重构为 blockRoute/hcRoute/frameRoute/lz4fileRoute 四函数 + makeInput/sameBytes 复用,main 精简为串联调度;HC 路顺带补齐逐字节比对;钉值与验收输出行逐字保留)、`arr_probe`/`oob_repro`(误编译/伪越界探针:外围函数化,**被探测存储序列逐字保留** —— 代码形状即载荷;oob_repro 的 compile-option 钉 `-O2` 保持误编译配置)、`gc_stale_repro`(函数化 xorshift64/churnRound/probeRound,复读定级语义不变;`-Woff unused` 抑制原版固有的 unreachable 提示)。联动:`verify_downstream.sh` 拷贝路径改 examples/downstream_smoke/src/main.cj,临时工程包名 lz4_ds_smoke → downstream_smoke(与文件 package 声明一致);README 项目树/用法示例引用、docs/progress.md #47 活指针同步;.gitignore 清理六个已失效的探针二进制条目。LTS 实证:四例 cjpm run 输出与原版一致(DOWNSTREAM_SMOKE_OK c=517 hc=517 fc=532 lf=532 / sweep clean / store7 OK / rounds=16 transient=0 persistent=0),`verify_downstream.sh lt` PASS
+
 - CI Windows 变体暂缓:矩阵收敛为 Linux {lt, st}(ci.yml os 行移除 windows-latest)——首跑实证两项已文档化工具链缺陷使格子结构性红灯:cjc `-O2` windows-x64 误编译(lt 格子 `lz4fSkippableTest` 确定性 ERROR,`-O0` 可绕,本机已实验证实;`cjpm test -g` 无效,包级 compile-option 不被 CLI 覆盖)+ 运行时非确定性活锁(st 格子挂死 `lz4LargeFrameTest` 至 job 超时,本机 0.12s 用例/180s 打标样本与 findings 记录吻合)。Windows 专属步骤(条件式 MinGW 安装)保留,恢复 = 矩阵加回一行 + lt 格子 `-O0` 降级 + cjpm test 整进程 timeout 重试;README/工作流注释同步
 
 - CI Linux 修复:两个 workflow 在 checkout 后加 `chmod +x scripts/*.sh e2e/*.sh` 步骤 —— Windows 提交的脚本无执行位(`core.filemode=false`,新增文件一律 100644),Linux runner 直接 exec 报 `Permission denied`(`download_sdk.sh` 本次命中,`run_e2e.sh` 同病);chmod 步骤对后续从 Windows 新增的脚本亦免疫,Windows 变体上为无害空操作

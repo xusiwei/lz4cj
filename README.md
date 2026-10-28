@@ -242,7 +242,7 @@ lz4file(上游 `lz4file.h`,0774d055)承载差异如下:
 ```
 
 库为单包 `lz4`(模块 `lz4cj` 下唯一包),下游源文件 `import lz4.*`,且下游自身需有
-`package <下游包名>` 声明。最小往返示例(block 段,同 `scripts/downstream_smoke.cj`):
+`package <下游包名>` 声明。最小往返示例(block 段,同 [examples/downstream_smoke](examples/downstream_smoke/)):
 
 ```cangjie
 package lz4_ds_smoke
@@ -443,13 +443,18 @@ lz4cj/
 │   ├── fuzz_test.cj           # fuzz 种子扫描(@Test @Bench)
 │   └── bench_test.cj          # 性能冒烟(@Bench)
 ├── scripts/
+│   ├── download_sdk.sh        # SDK 下载安装(官网直链 + sha256,~/.local 布局)
+│   ├── setup_env.sh           # SDK 链接切换器(~/.local/cangjie-sdk,lts/sts)
 │   ├── build_and_test.sh      # 双工具链构建 + 测试总控
 │   ├── cjenv.sh               # SDK 定位规则
-│   ├── setup_env.sh           # Linux 一键安装两套 SDK
-│   ├── verify_downstream.sh   # 下游 path 依赖验收
+│   ├── verify_downstream.sh   # 下游 path 依赖验收(跑 examples/downstream_smoke)
 │   ├── gen_golden.sh/.c       # golden 语料再生(编译上游 C 源)
-│   ├── downstream_smoke.cj    # 下游最小往返示例
-│   └── *_probe.c/.cj          # C 侧行为探针(钉值事实来源)
+│   └── *_probe.c              # C 侧行为探针(钉值事实来源)
+├── examples/                  # 独立 cjpm 可执行工程(每个自带 cjpm.toml,见 examples/README.md)
+│   ├── downstream_smoke/      # 库消费示例:四路往返 + 钉值(verify_downstream 引用)
+│   ├── arr_probe/             # cjc windows 数组越界检查异常探针
+│   ├── oob_repro/             # cjc windows 伪越界误编译复现尝试(形状文档)
+│   └── gc_stale_repro/        # GC 陈旧读复现程序(M7-T6,零观测关闭)
 ├── e2e/                       # 端到端交叉验证(cli-c + cli-cj + run_e2e.sh)
 ├── corpus/                    # golden 语料(不入 git,scripts/gen_golden.sh 再生)
 └── report/                    # 构建/测试日志(生成产物)

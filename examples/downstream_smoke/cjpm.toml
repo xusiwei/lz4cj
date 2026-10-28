@@ -1,0 +1,9 @@
+[package]
+  cjc-version = "1.0.5"
+  name = "downstream_smoke"
+  description = "lz4cj downstream-consumption example: 4-way roundtrip + pinned sizes"
+  version = "0.1.0"
+  output-type = "executable"
+
+[dependencies]
+  lz4 = { path = "../.." }

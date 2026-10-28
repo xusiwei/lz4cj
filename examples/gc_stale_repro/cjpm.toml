@@ -1,0 +1,9 @@
+[package]
+  cjc-version = "1.0.5"
+  name = "gc_stale_repro"
+  description = "GC stale-read reproduction probe (M7-T6 #47: two patterned 16MB arrays + interleaved compare + alloc churn)"
+  version = "0.1.0"
+  output-type = "executable"
+  compile-option = "-Woff unused"   # keep-alive 恒真条件的 unreachable 提示(原版固有)
+
+[dependencies]
