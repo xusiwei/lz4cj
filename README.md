@@ -347,11 +347,13 @@ Cangjie 默认的溢出检查会在热点路径触发运行时异常,必须关�
 
 | 流水线 | 触发 | 内容 |
 | --- | --- | --- |
-| `ci.yml` | 每个 PR / push main | 四变体矩阵 {ubuntu, windows} × {lt, st}:SDK 安装(actions/cache 缓存 `~/.local`)→ golden 语料再生 → `cjpm build/test`(test-only)→ 下游依赖冒烟 → e2e 双工具交叉验证 |
+| `ci.yml` | 每个 PR / push main | Linux 双变体矩阵 {lt, st}:SDK 安装(actions/cache 缓存 `~/.local`)→ golden 语料再生 → `cjpm build/test`(test-only)→ 下游依赖冒烟 → e2e 双工具交叉验证 |
 | `bench.yml` | 每晚 02:00(北京时间)/ 手动 | 双工具链 `cjpm bench` fuzz 种子扫描 + 吞吐冒烟,结果写入 run summary 与 artifacts(按设计定位为数量级监视,非回归门禁) |
 
-SDK 由 `scripts/download_sdk.sh` 从官网直链下载并校验 sha256 后经缓存复用;
-Windows 变体补装 MinGW gcc(与本地开发环境一致)。macOS(macos-15/arm64)为后续扩展项,
+SDK 由 `scripts/download_sdk.sh` 从官网直链下载并校验 sha256 后经缓存复用。
+**Windows 变体暂缓**(2026-10-28):cjc `-O2` windows-x64 误编译与运行时非确定性活锁
+两项工具链缺陷使格子结构性红灯(详见 [report/windows_test_findings.md](report/),重跑即过/`-O0` 可绕),
+待上游修复后加回 `windows-latest` 矩阵行。macOS(macos-15/arm64)为后续扩展项,
 `download_sdk.sh` 的 mac-aarch64 包条目与 `run_e2e.sh` 的 `gtimeout` 回退已预置。
 
 ### golden 语料再生

@@ -1,8 +1,12 @@
-# PR gate: 4 variants = {ubuntu-latest, windows-latest} x {lt=LTS 1.0.5, st=STS 1.2.0}
-# Per variant: SDK install (cached) -> golden corpus regen -> cjpm build/test
-# -> downstream smoke -> e2e cross-validation vs upstream C lz4.
-# macOS (macos-15/arm64 + mac-aarch64 SDK) is a planned follow-up: add an
-# os row once the runners are validated.
+# PR gate: {lt=LTS 1.0.5, st=STS 1.2.0} on Linux.
+# Windows temporarily REMOVED (2026-10-28): two documented Cangjie
+# windows-x64 toolchain defects make the cells structurally red -
+# cjc -O2 miscompilation (lz4fSkippableTest, report/windows_test_findings.md)
+# and a non-deterministic runtime livelock (hangs the suite ~every other
+# full run; rerun passes). Re-add 'windows-latest' to the os matrix once a
+# fixed toolchain ships, together with: choco mingw step (kept below),
+# -O0 downgrade for the lt cell, and timeout+retry around cjpm test.
+# macOS (macos-15/arm64 + mac-aarch64 SDK) is a planned follow-up.
 name: CI
 
 on:
@@ -20,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest]
         tc: [lt, st]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60

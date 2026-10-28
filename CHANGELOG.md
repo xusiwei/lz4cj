@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- CI Windows 变体暂缓:矩阵收敛为 Linux {lt, st}(ci.yml os 行移除 windows-latest)——首跑实证两项已文档化工具链缺陷使格子结构性红灯:cjc `-O2` windows-x64 误编译(lt 格子 `lz4fSkippableTest` 确定性 ERROR,`-O0` 可绕,本机已实验证实;`cjpm test -g` 无效,包级 compile-option 不被 CLI 覆盖)+ 运行时非确定性活锁(st 格子挂死 `lz4LargeFrameTest` 至 job 超时,本机 0.12s 用例/180s 打标样本与 findings 记录吻合)。Windows 专属步骤(条件式 MinGW 安装)保留,恢复 = 矩阵加回一行 + lt 格子 `-O0` 降级 + cjpm test 整进程 timeout 重试;README/工作流注释同步
+
 - CI Linux 修复:两个 workflow 在 checkout 后加 `chmod +x scripts/*.sh e2e/*.sh` 步骤 —— Windows 提交的脚本无执行位(`core.filemode=false`,新增文件一律 100644),Linux runner 直接 exec 报 `Permission denied`(`download_sdk.sh` 本次命中,`run_e2e.sh` 同病);chmod 步骤对后续从 Windows 新增的脚本亦免疫,Windows 变体上为无害空操作
 
 - CI Windows 修复:`scripts/gen_golden.c` 补 `#define LZ4_HC_STATIC_LINKING_ONLY` —— `lz4hc.h` 的 undocumented-stable 区块(`LZ4_favorDecompressionSpeed` / `LZ4_compress_HC_extStateHC_fastReset`)由独立保护宏门禁,与 `LZ4_STATIC_LINKING_ONLY` 不是同一个;此前两调用点为隐式声明,GCC ≤ 13(gnu17 默认)仅警告故本机 MinGW 11.2 一直"正常",CI Windows 变体 choco mingw 为 GCC 14+(C23 默认)下隐式声明为硬错误,gen_golden 编译中止。本机 `-Werror=implicit-function-declaration` 复现同错 + 修复后严格编译干净;完整语料再生 `block_golden_ref.txt` MD5 逐字节一致(434 artifacts),零行为变化
