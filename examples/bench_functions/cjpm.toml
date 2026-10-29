@@ -1,0 +1,9 @@
+[package]
+  cjc-version = "1.0.5"
+  name = "bench_functions"
+  description = "lz4cj example: compression call-stack family with timing (from upstream bench_functions.c)"
+  version = "0.1.0"
+  output-type = "executable"
+
+[dependencies]
+  lz4 = { path = "../.." }

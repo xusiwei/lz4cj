@@ -1,0 +1,9 @@
+[package]
+  cjc-version = "1.0.5"
+  name = "file_compress"
+  description = "lz4cj example: compressed files via the lz4file API (from upstream fileCompress.c)"
+  version = "0.1.0"
+  output-type = "executable"
+
+[dependencies]
+  lz4 = { path = "../.." }

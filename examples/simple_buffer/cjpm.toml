@@ -1,0 +1,9 @@
+[package]
+  cjc-version = "1.0.5"
+  name = "simple_buffer"
+  description = "lz4cj example: in-memory block compress/decompress roundtrip (from upstream simple_buffer.c)"
+  version = "0.1.0"
+  output-type = "executable"
+
+[dependencies]
+  lz4 = { path = "../.." }

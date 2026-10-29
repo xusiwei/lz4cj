@@ -1,0 +1,9 @@
+[package]
+  cjc-version = "1.0.5"
+  name = "streaming_hc_ring_buffer"
+  description = "lz4cj example: HC streaming with a ring buffer (from upstream streamingHC_ringBuffer.c)"
+  version = "0.1.0"
+  output-type = "executable"
+
+[dependencies]
+  lz4 = { path = "../.." }

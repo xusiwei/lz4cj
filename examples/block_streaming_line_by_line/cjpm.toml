@@ -1,0 +1,9 @@
+[package]
+  cjc-version = "1.0.5"
+  name = "block_streaming_line_by_line"
+  description = "lz4cj example: per-record streaming compression with length prefixes (from upstream blockStreaming_lineByLine.c)"
+  version = "0.1.0"
+  output-type = "executable"
+
+[dependencies]
+  lz4 = { path = "../.." }

@@ -1,0 +1,9 @@
+[package]
+  cjc-version = "1.0.5"
+  name = "frame_compress"
+  description = "lz4cj example: streaming frame file compression with bounded memory (from upstream frameCompress.c)"
+  version = "0.1.0"
+  output-type = "executable"
+
+[dependencies]
+  lz4 = { path = "../.." }
