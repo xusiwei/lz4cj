@@ -1,6 +1,6 @@
 # lz4cj
 
-[![CI](https://github.com/xusiwei/lz4cj/actions/workflows/ci.yml/badge.svg)](https://github.com/xusiwei/lz4cj/actions/workflows/ci.yml)
+[![test](https://github.com/xusiwei/lz4cj/actions/workflows/ci.yml/badge.svg)](https://github.com/xusiwei/lz4cj/actions/workflows/ci.yml)
 
 [LZ4](https://github.com/lz4/lz4) 无损压缩库的 [Cangjie](https://cangjie-lang.org/) 移植版(纯仓颉实现,无 FFI/跨语言绑定)。
 

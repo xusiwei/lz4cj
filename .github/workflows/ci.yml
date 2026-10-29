@@ -7,7 +7,7 @@
 # fixed toolchain ships, together with: choco mingw step (kept below),
 # -O0 downgrade for the lt cell, and timeout+retry around cjpm test.
 # macOS (macos-15/arm64 + mac-aarch64 SDK) is a planned follow-up.
-name: CI
+name: test
 
 on:
   pull_request:
