@@ -474,9 +474,13 @@ LICENSE 文件含双重版权声明:本移植(lz4cj contributors, 2026)与上游
 ## 链接
 
 - 上游 C 实现(Yann Collet / lz4 组织):<https://github.com/lz4/lz4>
-- 本移植仓库:<https://atomgit.com/xusiwei1236/lz4cj>
+- 本移植仓库:<https://github.com/xusiwei/lz4cj>
+- 格式规范(上游基线 0774d055 原文 + 中文译本):
+  [块格式](docs/lz4_Block_format.md) · [块格式(中文)](docs/lz4_Block_format_zh.md) ·
+  [帧格式](docs/lz4_Frame_format.md) · [帧格式(中文)](docs/lz4_Frame_format_zh.md)
 - 设计文档:[docs/design.md](docs/design.md) · 移植进度:[docs/progress.md](docs/progress.md)
 - 端到端交叉验证:[e2e/README.md](e2e/README.md)
+- 示例工程:[examples/README.md](examples/README.md)
 - 变更记录:[CHANGELOG.md](CHANGELOG.md)
 - 演示视频:[Bilibili 视频合集](https://space.bilibili.com/121420235/lists/9271654)
 - LZ4 其他语言移植列表见 [LZ4 Homepage](http://www.lz4.org)

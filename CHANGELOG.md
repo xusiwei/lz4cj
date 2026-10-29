@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 格式规范文档入库:`docs/lz4_Block_format.md` 与 `docs/lz4_Frame_format.md` 自上游基线 0774d055 的 `doc/` 原文照录(非网络下载,保证与移植基线逐字一致;块格式修订版 2022-07-31 / 帧格式 v1.6.4 2023-12-28),并新增全文中文译本 `docs/lz4_Block_format_zh.md` / `docs/lz4_Frame_format_zh.md` —— 帧格式文档自带的许可条款明确允许翻译(须保留版权与许可声明、标注实质性改动),译本头部保留英文原声明 + 译本说明(未做实质性更改、字段名保留英文、以英文原版为准);README 链接节补充四个文档入口并订正本仓库地址为 github.com/xusiwei/lz4cj
+
 - 目录布局:scripts/ 收敛为纯 .sh 工作流(编排层),15 个 C 侧钉值工具(`gen_golden.c` + 14 个 `*_probe.c`/`*_ref.c`)整体迁入顶层 `probes/`(链接上游 0774d055 编译的开发期取证工具,运行时不需要)并新增 `probes/README.md` 索引(探针 → 钉值内容 → 对应仓颉测试映射表 + 通用编译模式)。联动:`gen_golden.sh` 编译对象/二进制路径改 `probes/gen_golden.c`/`probes/gen_golden`(md5 验证再生语料逐字节不变);15 个 .c 头部构建行与 `src/*.cj` 注释里的 `scripts/<name>.c` 引用同步(50 处,`gen_golden.sh` 引用保留);.gitignore 12 条编译产物条目迁移;cjpm.toml exclude 增 `probes/**`;README 项目树更新。历史文档(docs/progress.md 等)旧路径不追溯,以 CHANGELOG 本条为映射
 
 - scripts 下四件 .cj 拆分为独立示例工程 `examples/<name>/`(各自 cjpm.toml,`output-type = executable`,按需 path 依赖仓库根)+ `examples/README.md` 索引:`downstream_smoke`(库消费示例,重构为 blockRoute/hcRoute/frameRoute/lz4fileRoute 四函数 + makeInput/sameBytes 复用,main 精简为串联调度;HC 路顺带补齐逐字节比对;钉值与验收输出行逐字保留)、`arr_probe`/`oob_repro`(误编译/伪越界探针:外围函数化,**被探测存储序列逐字保留** —— 代码形状即载荷;oob_repro 的 compile-option 钉 `-O2` 保持误编译配置)、`gc_stale_repro`(函数化 xorshift64/churnRound/probeRound,复读定级语义不变;`-Woff unused` 抑制原版固有的 unreachable 提示)。联动:`verify_downstream.sh` 拷贝路径改 examples/downstream_smoke/src/main.cj,临时工程包名 lz4_ds_smoke → downstream_smoke(与文件 package 声明一致);README 项目树/用法示例引用、docs/progress.md #47 活指针同步;.gitignore 清理六个已失效的探针二进制条目。LTS 实证:四例 cjpm run 输出与原版一致(DOWNSTREAM_SMOKE_OK c=517 hc=517 fc=532 lf=532 / sweep clean / store7 OK / rounds=16 transient=0 persistent=0),`verify_downstream.sh lt` PASS
