@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- CI 新增 macOS 变体:ci.yml 矩阵扩为 {ubuntu-latest, macos-15(arm64)} × {lt, st} —— 此前预置的 mac-aarch64 SDK 包条目(LTS/STS 双版本 URL+sha256)、`shasum -a 256` 校验回退与 `run_e2e.sh` 的 gtimeout 回退直接生效;新增条件步骤确保 brew coreutils(gtimeout,防 e2e 无超时守卫)。macOS 侧 cc=Apple clang 走 gen_golden.sh 默认回退链,MinGW 特判不触发。README CI 一节同步(Linux+macOS 双变体;Windows 仍暂缓)
+
 - examples 重构为完整的上游示例移植集:新增 10 个独立 cjpm 工程(一例一工程,path 依赖仓库根),对齐上游 lz4 `examples/` 全部演示程序 —— print_version(版本 hello world)/ simple_buffer(块往返)/ bench_functions(调用栈族 default/fast/extState 同输出 + 计时)/ block_streaming_double_buffer(双缓冲续压续解)/ block_streaming_line_by_line(逐记录 u16 前缀 + 字典收益对照)/ block_streaming_ring_buffer(环形缓冲 + saveDict)/ streaming_hc_ring_buffer(HC 流式 + saveDictHC)/ dictionary_random_access(字典预载逐块独立压缩 + 跳转表容器 + usingDict 按块随机解压)/ frame_compress(文件→文件 Begin/Update/End + hint 驱动解压循环)/ file_compress(lz4file 像普通文件 + 标准帧魔数校验)。**许可策略**:上游 examples 整体 GPL-2(仅两文件头自署 BSD-2),全部采用概念重实现(对同名 API 仓颉重构,代码文本独立),文件头注明出处与差异;语言适配实录——lambda 捕获可变变量不可作值传递(计时改返回值)、结构体 let 成员不可变(需 var)、零长 Array 需初始化子、无 append(预分配+游标)、流式 API 全带 srcIdx/dstIdx(替代 C 指针算术)、`*_continue` 压缩侧 dst 恒从 0 写、解压 hint 驱动循环的游标必须活过整个循环。examples/README.md 重构为两节(用法示例索引 + 验收冒烟与工具链探针),downstream_smoke 与 3 个探针保留原位。实证:10 例全部 LTS 1.0.5 + STS 1.2.0 双工具链 `cjpm run` 通过(逐字节往返/钉值/随机访问 4 区间全 OK;frame 1MB→6316B,file 1MB→529081B 50.4%,字典块 1023B→130B)
 
 - 格式规范文档入库:`docs/lz4_Block_format.md` 与 `docs/lz4_Frame_format.md` 自上游基线 0774d055 的 `doc/` 原文照录(非网络下载,保证与移植基线逐字一致;块格式修订版 2022-07-31 / 帧格式 v1.6.4 2023-12-28),并新增全文中文译本 `docs/lz4_Block_format_zh.md` / `docs/lz4_Frame_format_zh.md` —— 帧格式文档自带的许可条款明确允许翻译(须保留版权与许可声明、标注实质性改动),译本头部保留英文原声明 + 译本说明(未做实质性更改、字段名保留英文、以英文原版为准);README 链接节补充四个文档入口并订正本仓库地址为 github.com/xusiwei/lz4cj

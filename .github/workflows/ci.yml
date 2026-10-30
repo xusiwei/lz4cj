@@ -1,4 +1,8 @@
-# PR gate: {lt=LTS 1.0.5, st=STS 1.2.0} on Linux.
+# PR gate: {lt=LTS 1.0.5, st=STS 1.2.0} on Linux + macOS (arm64).
+# macOS label is PINNED to macos-15: macos-latest (macOS 26 / Xcode 26.x
+# images) ships a libSystem.tbd that the Cangjie SDK's bundled ld64.lld
+# rejects ("incompatible with arm64" -> undefined libc symbols at link);
+# macos-15 builds and runs the full suite. Re-evaluate on SDK updates.
 # Windows temporarily REMOVED (2026-10-28): two documented Cangjie
 # windows-x64 toolchain defects make the cells structurally red -
 # cjc -O2 miscompilation (lz4fSkippableTest, report/windows_test_findings.md)
@@ -6,13 +10,12 @@
 # full run; rerun passes). Re-add 'windows-latest' to the os matrix once a
 # fixed toolchain ships, together with: choco mingw step (kept below),
 # -O0 downgrade for the lt cell, and timeout+retry around cjpm test.
-# macOS (macos-15/arm64 + mac-aarch64 SDK) is a planned follow-up.
 name: test
 
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, dev]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -24,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, macos-15]
         tc: [lt, st]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -46,6 +49,12 @@ jobs:
         if: runner.os == 'Windows'
         run: command -v gcc >/dev/null 2>&1 || choco install mingw -y --no-progress
 
+      # GNU timeout is missing on stock macOS; run_e2e.sh falls back to
+      # gtimeout (brew coreutils) or runs unguarded - ensure coreutils.
+      - name: GNU coreutils (macOS)
+        if: runner.os == 'macOS'
+        run: command -v gtimeout >/dev/null 2>&1 || brew install coreutils
+
       - name: Cache Cangjie SDK
         uses: actions/cache@v4
         with:
@@ -66,6 +75,49 @@ jobs:
 
       - name: Build + unit/golden tests (${{ matrix.tc }})
         run: scripts/build_and_test.sh ${{ matrix.tc }} test-only
+
+      # Distill failure causes into annotations: ::error:: lines are
+      # readable via the public check-run annotations API, unlike raw job
+      # logs (which need sign-in), so red cells can be diagnosed remotely.
+      # Grep failing case names / exceptions first (they sit earlier in
+      # the log than the summary), then the tail as fallback.
+      - name: Failure diagnostics
+        if: failure()
+        run: |
+          ESC=$(printf '\033')
+          for f in report/*.log; do
+            [ -f "$f" ] || continue
+            clean=$(mktemp)
+            sed -e "s/${ESC}\[[0-9;?]*[A-Za-z]//g" "$f" > "$clean"
+            grep -B15 -A2 "FAILED.*CASE\|FAILED:" "$clean" | head -60 \
+              | sed "s|^|::error::[$(basename "$f")] |" || true
+            rm -f "$clean"
+          done
+
+      # Rerun just the failing case and surface its full output (assert
+      # locations, expected/actual) as annotations.
+      - name: Failure detail (rerun failing case)
+        if: failure()
+        run: |
+          VER=$([ "${{ matrix.tc }}" = lt ] && echo 1.0.5 || echo 1.2.0)
+          CASE=$(grep -aho "FAILED.*CASE: [A-Za-z0-9_]*" report/*.log 2>/dev/null \
+            | head -1 | sed 's/.*CASE: //')
+          if [ -n "$CASE" ]; then
+            . scripts/cjenv.sh
+            S="$(cjenv_setup "$VER")" || true
+            if [ -n "${S:-}" ]; then
+              bash -c "source '$S' && cjpm test --no-color --filter $CASE" 2>&1 | tail -60 \
+                | sed "s|^|::error::[rerun $CASE] |" || true
+            fi
+          fi
+          # corpus fingerprint: is the regenerated corpus itself different
+          # on this platform? (win/linux manifest md5: df43d7b826ec...)
+          if [ -f corpus/block_golden_ref.txt ]; then
+            MD5=$(md5sum corpus/block_golden_ref.txt 2>/dev/null | cut -d' ' -f1 \
+              || md5 -q corpus/block_golden_ref.txt)
+            echo "::error::[corpus] manifest md5=$MD5 (win/linux: df43d7b826ec53347ee7d0e9cb97fa52)"
+            echo "::error::[corpus] artifacts=$(ls corpus/block 2>/dev/null | wc -l | tr -d ' ') bytes=$(cat corpus/block/*.lz4 2>/dev/null | wc -c | tr -d ' ')"
+          fi
 
       - name: Downstream dependency smoke (${{ matrix.tc }})
         run: scripts/verify_downstream.sh ${{ matrix.tc }}
